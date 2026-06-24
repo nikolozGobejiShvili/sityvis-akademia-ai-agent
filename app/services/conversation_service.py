@@ -440,6 +440,102 @@ def _planner_final_validate(conversation, plan, response: str) -> str:
         return response
 
 
+def _handle_subscription_request(conversation) -> str:
+    """#6 — subscription consent step: confirm with the KNOWN name + MASKED phone
+    (no adult-age ask, no full-phone leak), and mark confirm-pending so the next
+    affirmation saves. Never raises."""
+    from app.reasoning import response_policy as _rp
+    from app.reasoning import selected_state as _ss
+    lead = getattr(conversation, "lead", None)
+    name = (getattr(lead, "name", "") or "").strip() if lead else ""
+    phone = (getattr(lead, "phone", "") or "").strip() if lead else ""
+    masked = _ss._mask(phone) if phone else ""
+    try:
+        conversation.adult_subscription_status = "confirm_pending"
+    except Exception:  # pragma: no cover — defensive
+        pass
+    try:
+        from app.reasoning import conversation_trace as _t
+        _t.set(route="subscription_request", answered_by="response_policy.subscription_confirm")
+    except Exception:
+        pass
+    return _rp.subscription_confirm(name, masked)
+
+
+def _handle_subscription_save(conversation) -> str:
+    """#6 — the user confirmed → save via the existing subscription service
+    (events Sheets tab). Honest on failure; never fakes a save; resets the
+    pending marker."""
+    from app.reasoning import response_policy as _rp
+    lead = getattr(conversation, "lead", None)
+    name = (getattr(lead, "name", "") or "").strip() if lead else ""
+    phone = (getattr(lead, "phone", "") or "").strip() if lead else ""
+    saved = False
+    try:
+        from app.services import adult_subscription_service
+        result = adult_subscription_service.subscribe(
+            platform=getattr(conversation, "platform", "") or "messenger",
+            sender_id=getattr(conversation, "sender_id", "") or "",
+            name=name or None,
+            phone=phone or None,
+        )
+        saved = bool(result.get("success"))
+    except Exception:  # pragma: no cover — subscription save must never crash a reply
+        logger.exception("[subscription] save raised")
+        saved = False
+    try:
+        conversation.adult_subscription_status = "subscribed" if saved else "asked"
+    except Exception:
+        pass
+    try:
+        from app.reasoning import conversation_trace as _t
+        _t.set(route="subscription_save",
+               answered_by="adult_subscription_service.subscribe",
+               note=("saved" if saved else "save_failed"))
+    except Exception:
+        pass
+    return _rp.subscription_saved() if saved else _rp.subscription_failed()
+
+
+def _apply_response_policy(conversation, plan, message_text: str, response: str) -> str:
+    """Consultant-quality response composition (Stage 3). Reasoning-driven by the
+    planner intent + selected_state; refines the FINAL answer:
+
+      * eligible child age → replace a generic/awkward qualification with the
+        brand pain-point discovery (sales_agent_prompt STEP 4);
+      * consultation CTA → the MANAGER explains the details, not the AI;
+      * concise/human → drop a redundant second „მადლობა".
+
+    Pure render; never raises (returns the original response on any error)."""
+    try:
+        if not response:
+            return response
+        from app.reasoning import response_policy as _rp
+        intent = getattr(plan, "user_current_intent", "")
+        lead = getattr(conversation, "lead", None)
+
+        # #3 — eligible child age → pain-point discovery (replace the LLM's
+        # awkward qualification). Only when the captured child age is in-band.
+        if intent == "camp_age_eligibility" and lead is not None:
+            child_age = (getattr(lead, "child_age", "") or "").strip()
+            if child_age.isdigit():
+                try:
+                    from app.services import admin_config_service
+                    age_min, age_max = admin_config_service.get_camp_age_bounds()
+                except Exception:
+                    age_min, age_max = 9, 17
+                if age_min <= int(child_age) <= age_max:
+                    response = _rp.eligible_age_reply(child_age)
+
+        # #4 — consultation CTA: the manager explains the details, not the AI.
+        response = _rp.fix_consultation_cta(response)
+        # #11 — drop a redundant second „მადლობა".
+        response = _rp.collapse_repeated_thanks(response)
+        return response or ""
+    except Exception:  # pragma: no cover — composer must never break a reply
+        return response
+
+
 class SafeFormatter(Formatter):
     def get_value(self, key: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         if isinstance(key, str):
@@ -690,7 +786,28 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
                 if persist and route_segment in {"PARENT", "ADULT"}:
                     conversation.segment = route_segment
 
-    if route_segment == "UNCLEAR":
+    _planner_intent = (
+        getattr(plan, "user_current_intent", "") if plan is not None else ""
+    )
+    _deterministic = bool(plan is not None and _planner_authoritative())
+
+    # Greeting after a closed/declined context → neutral re-orientation menu
+    # (no stale camp/age continuation). Short-circuits BEFORE any flow handler.
+    if _deterministic and _planner_intent == "greeting_after_decline":
+        from app.reasoning import response_policy as _rp
+        conversation.segment = "UNCLEAR"        # re-classify fresh next turn
+        response = _rp.neutral_menu(settings.COMPANY_NAME)
+        _trace.set(route="greeting_after_decline", segment="UNCLEAR",
+                   answered_by="response_policy.neutral_menu")
+    elif _deterministic and _planner_intent == "subscription_request":
+        # #6 — subscription consent → confirm with KNOWN name + MASKED phone
+        # (never ask the adult age, never expose the full phone). Sets the
+        # confirm-pending marker so the next „კი" saves.
+        response = _handle_subscription_request(conversation)
+    elif _deterministic and _planner_intent == "subscription_save":
+        # #6 — the user confirmed → save via the existing subscription service.
+        response = _handle_subscription_save(conversation)
+    elif route_segment == "UNCLEAR":
         # Identity-question short-circuit: when the user asks "ბოტი
         # ხარ?" / "AI ხარ?" while still in the unclear-segment menu,
         # answer briefly with the brand identity instead of just
@@ -724,6 +841,13 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
     else:
         _trace.set(route="unclear_routing", segment=route_segment)
         response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
+
+    # Response composer policy (Stage 3) — consultant-quality refinement of the
+    # FINAL answer based on the planner intent + selected_state (eligible-age
+    # pain-point discovery, consultation-CTA wording, concise/no-double-thanks).
+    # Reasoning-driven, gated on AUTHORITATIVE mode; fail-closed.
+    if plan is not None and _planner_authoritative():
+        response = _apply_response_policy(conversation, plan, message_text, response)
 
     # Class 6 — central final validator (last safety layer). Enforces the
     # planner's forbidden-response patterns on the FINAL answer regardless of

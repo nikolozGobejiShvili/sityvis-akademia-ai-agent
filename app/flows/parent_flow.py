@@ -2566,6 +2566,36 @@ _SUNDAY_SCHOOL_DEFER_INTENTS: frozenset[str] = frozenset({
 })
 
 
+def _ss_capture_contact(lead, text: str) -> tuple[str, str]:
+    """Capture name/phone from a Sunday-School turn onto the lead (in-memory
+    only; NO Sheets/Calendar). Never overwrites a set phone; only accepts a
+    valid Georgian person name. Returns the parsed (name, phone) candidates."""
+    try:
+        cand_name, cand_phone = _parse_name_phone(text)
+    except Exception:
+        cand_name, cand_phone = ("", "")
+    if cand_phone and not (lead.phone or "").strip():
+        lead.phone = cand_phone
+    name_known = bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
+    if (
+        cand_name and not name_known
+        and is_valid_person_name(cand_name)
+        and bool(re.search(r"[ა-ჰ]", cand_name))
+    ):
+        lead.name = cand_name
+    return cand_name, cand_phone
+
+
+def _sunday_school_consent_given(text_low: str) -> bool:
+    """True when a mid-collection turn is an explicit CONSENT to pass the
+    contact to the manager (#5) — a bare affirmation or a „pass it on / call me"
+    phrase. A provided phone is treated as consent by the caller separately."""
+    toks = set(re.findall(r"[ა-ჰa-z]+", text_low or ""))
+    if toks & {"კი", "დიახ", "კარგი", "ჰო", "ok", "yes"}:
+        return True
+    return any(m in (text_low or "") for m in ("გადაეც", "გადასც", "დამიკავშირ", "დამირეკ"))
+
+
 def _render_sunday_school_status_only() -> str:
     """The Sunday-School status (availability + details) WITHOUT the contact-ask
     tail — used when the contact is already known (Class 1: never re-ask)."""
@@ -2655,56 +2685,54 @@ def _maybe_handle_sunday_school(
     ):
         return None
 
-    # Class 1 — known contact: when name + phone are ALREADY on record, dispatch
-    # the handoff with the stored contact and NEVER re-ask for them. On a genuine
-    # first touch (intent, not yet collecting) lead with the status; on a
-    # mid-collection retry just return the dispatch result (the user already saw
-    # the status).
-    name_known_pre = bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
-    phone_known_pre = bool((lead.phone or "").strip())
-    if name_known_pre and phone_known_pre and not phones:
-        result = _sunday_school_dispatch(conversation, lead, text)
-        if not in_collection:
-            status = _render_sunday_school_status_only()
-            return f"{status} {result}".strip()
-        return result
+    # ── CONSENT-FIRST flow (#5) — only under the AUTHORITATIVE planner (live) ─
+    # No auto-handoff: answer the status and OFFER to pass the contact; dispatch
+    # ONLY after explicit consent. The legacy collect-then-dispatch flow below
+    # is preserved for planner-off so the existing Sunday-School suite is
+    # unaffected.
+    if _planner_authoritative():
+        from app.reasoning import response_policy as _rp
+        if not in_collection and not phones:
+            contact_known = (
+                bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
+                and bool((lead.phone or "").strip())
+            )
+            return _rp.sunday_school_info_with_consent(
+                _render_sunday_school_status_only(), contact_known=contact_known,
+            )
+        if _message_has_overlong_number(text):
+            return _SUNDAY_SCHOOL_INVALID_PHONE
+        cand_name, cand_phone = _ss_capture_contact(lead, text)
+        have_phone = bool((lead.phone or "").strip())
+        have_name = bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
+        consent = bool(phones) or _sunday_school_consent_given(text_low)
+        if not consent:
+            return _rp.sunday_school_info_with_consent(
+                _render_sunday_school_status_only(),
+                contact_known=(have_phone and have_name),
+            )
+        if have_phone and have_name:
+            return _sunday_school_dispatch(conversation, lead, text)
+        if have_phone and not have_name:
+            return _SUNDAY_SCHOOL_ASK_NAME
+        if have_name and not have_phone:
+            return _SUNDAY_SCHOOL_ASK_PHONE
+        return _SUNDAY_SCHOOL_OFFER_TAIL
 
-    # First touch (pure intent, no contact yet) → answer + ask name+phone.
-    # Do NOT parse a name here: „საკვირაო სკოლა მაინტერესებს" must never be
-    # mis-read as a name.
+    # ── Legacy flow (planner OFF) — original collect-then-dispatch ───────────
     if not in_collection and not phones:
         return _render_sunday_school_answer()
-
     if _message_has_overlong_number(text):
         return _SUNDAY_SCHOOL_INVALID_PHONE
-
-    # Capture contact (in-memory only — NO Sheets/Calendar here).
-    try:
-        cand_name, cand_phone = _parse_name_phone(text)
-    except Exception:
-        cand_name, cand_phone = ("", "")
-    if cand_phone and not (lead.phone or "").strip():
-        lead.phone = cand_phone
-    name_known = bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
-    if (
-        cand_name and not name_known
-        and is_valid_person_name(cand_name)
-        and bool(re.search(r"[ა-ჰ]", cand_name))
-    ):
-        lead.name = cand_name
-        name_known = True
-
+    _ss_capture_contact(lead, text)
     have_phone = bool((lead.phone or "").strip())
-    have_name = name_known
-
+    have_name = bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
     if have_phone and have_name:
         return _sunday_school_dispatch(conversation, lead, text)
-
     if have_phone and not have_name:
         return _SUNDAY_SCHOOL_ASK_NAME
     if have_name and not have_phone:
         return _SUNDAY_SCHOOL_ASK_PHONE
-    # In collection but neither a usable name nor a phone this turn → re-offer.
     return _render_sunday_school_answer()
 
 
@@ -2773,6 +2801,9 @@ _CAMP_REGISTRATION_LINK_MARKERS: tuple[str, ...] = (
     "რეგისტრაცი",   # რეგისტრაცია / რეგისტრაციის / სარეგისტრაციო
     "დარეგისტრ",    # დარეგისტრირდე / დარეგისტრირება
     "დავრეგისტრ",   # დავრეგისტრირდე
+    "რეგისტირ",     # live typo: „დარეგისტირება" (extra „ი" before „რ")
+    "დარეგისტირ",
+    "დავრეგისტირ",
     "ჩაწერა",       # ჩაწერა (enroll) — NOT bare „ჩაწერ" so the past
                     # participle „ჩაწერილი" („already enrolled") never matches
     "ჩავწერ",       # ჩავწერო ბავშვი
@@ -3416,6 +3447,20 @@ def _planner_pre_answer(conversation, message: str, plan) -> str | None:
             # Bare „რეგისტრაცია მინდა" in an active camp context → the configured
             # registration link, never an age question (Class 5 #2).
             return _render_camp_registration_answer()
+        if intent == "camp_info":
+            # General camp interest → open the dialogue with a short value intro
+            # and ask the child age (sales_agent_prompt STEP 1). NO price / link /
+            # manager phone. Only when the child age is still unknown — a known-
+            # child follow-up defers to the engine.
+            lead = _ensure_lead(conversation)
+            if not (getattr(lead, "child_age", "") or "").strip():
+                from app.reasoning import response_policy as _rp
+                return _rp.camp_info_opener()
+        elif intent == "camp_price":
+            # Explicit price intent → value-framed price from config (no link /
+            # manager phone attached unless separately asked).
+            from app.reasoning import response_policy as _rp
+            return _rp.camp_price_answer()
         if intent == "state_recall":
             return _build_state_recall_reply(conversation)
         if intent in ("decline", "adult_event_decline"):

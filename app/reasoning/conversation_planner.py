@@ -80,7 +80,18 @@ _ADULT_SELF_AGE_MARKERS = ("ჩემი ასაკი", "ჩემი ას�
 _CHILD_AGE_ATTRIBUTION_MARKERS = ("შვილის ასაკი", "ბავშვის ასაკი")
 
 # ── Registration intent markers (used only as a planner-side fallback) ────────
-_REGISTRATION_STEMS = ("რეგისტრ", "სარეგისტრაც", "დარეგისტრ", "დავრეგისტრ")
+# „დარეგისტირ"/„რეგისტირ" cover the common live typo „დარეგისტირება" (an extra
+# „ი" before the „რ") so a misspelled camp-registration request still resolves.
+_REGISTRATION_STEMS = (
+    "რეგისტრ", "სარეგისტრაც", "დარეგისტრ", "დავრეგისტრ",
+    "რეგისტირ", "დარეგისტირ", "დავრეგისტირ",
+)
+
+# ── Greeting-only markers (for greeting-after-decline re-orientation) ─────────
+_GREETING_ONLY = frozenset({
+    "გამარჯობა", "გამარჯობათ", "სალამი", "სალამ", "ჰაი", "ჰელო",
+    "hello", "hi", "hey", "დილამშვიდობისა", "საღამომშვიდობისა",
+})
 
 # ── Name/phone-update statement markers (NOT questions) ───────────────────────
 _NAME_UPDATE = ("მქვია", "სახელია", "მერქმევა", "დამიძახე")
@@ -228,6 +239,49 @@ def _plan(message: str, conversation) -> TurnPlan:
             plan.forbidden_response_patterns.append(F_NO_ADULT_AGE_AS_CHILD)
         plan.state_to_ignore = [S_PENDING_BOOKING]
         plan.reason = "adult age self-correction (adult_age writeback, child_age preserved)"
+        return plan
+
+    # ── 0c. Greeting after a CLOSED/declined context → neutral re-orientation ─
+    # A bare greeting that arrives AFTER the user declined / closed the previous
+    # context must NOT resume the stale camp/age flow. Answer with a neutral menu.
+    if _is_greeting_only(low) and _context_was_closed(conversation):
+        plan.user_current_intent = "greeting_after_decline"
+        plan.active_topic = "none"
+        plan.answer_policy = "neutral_menu"
+        plan.should_answer_directly = True
+        plan.state_to_ignore = [S_PENDING_BOOKING, S_ADULT_TARGET]
+        if child_age:
+            plan.forbidden_response_patterns.append(F_NO_REASK_CHILD_AGE)
+        plan.reason = "greeting after closed/declined context — neutral menu"
+        return plan
+
+    # ── 0d-pre. Subscription SAVE confirmation („კი" after the confirm step) ──
+    sub_status = (getattr(conversation, "adult_subscription_status", "") or "").strip()
+    if sub_status == "confirm_pending" and _is_affirmation_like(gw):
+        plan.user_current_intent = "subscription_save"
+        plan.active_topic = "adult_event"
+        plan.answer_policy = "subscription_save"
+        plan.should_not_call_tools = True
+        plan.state_to_use = [s for s in (S_NAME if name else None, S_PHONE if phone else None) if s]
+        plan.reason = "subscription save confirmation"
+        return plan
+
+    # ── 0d. Subscription consent after an updates/subscription offer ──────────
+    # When the previous bot turn offered future-event updates/subscription and
+    # the user affirms („კი მინდა"), this is a subscription_request — NOT an
+    # adult-event eligibility match (do NOT ask the adult age). Use the known
+    # name/phone; the subscription path asks confirmation, then saves.
+    if _subscription_offer_pending(conversation) and _is_affirmation_like(gw):
+        plan.user_current_intent = "subscription_request"
+        plan.active_topic = "adult_event"
+        plan.answer_policy = "subscription_confirm"
+        plan.should_call_tools = True
+        plan.state_to_use = [s for s in (S_NAME if name else None, S_PHONE if phone else None) if s]
+        plan.state_to_ignore = [S_PENDING_BOOKING]
+        plan.forbidden_response_patterns += [
+            F_NO_ADULT_AGE_AS_CHILD, F_NO_NAMED_EVENT_LOOKUP,
+        ]
+        plan.reason = "subscription consent after an updates offer"
         return plan
 
     # ── 1. Tone request (only when there is no real business question) ────────
@@ -608,6 +662,49 @@ def _recent_camp_context(conversation) -> bool:
     registration — so a bare „რეგისტრაცია მინდა" resolves to camp registration."""
     last = _last_assistant_content(conversation).lower()
     return any(s in last for s in ("ბანაკ", "საზაფხულო", "რეგისტრაცი", "ჩაწერ"))
+
+
+def _is_greeting_only(low: str) -> bool:
+    """True when the message is a bare greeting (no other business content)."""
+    cleaned = (low or "").strip().strip("!.,?:;")
+    return cleaned in _GREETING_ONLY
+
+
+def _context_was_closed(conversation) -> bool:
+    """True when the user previously declined / closed the context (so a bare
+    greeting should re-orient, not resume the stale flow). Reads the persisted
+    follow-up markers set on the prior decline turn."""
+    if conversation is None:
+        return False
+    blocked = (getattr(conversation, "followup_blocked_reason", "") or "").strip()
+    stopped = (getattr(conversation, "stopped_after", "") or "").strip()
+    return (
+        blocked in ("declined", "asked_no_more_messages")
+        or stopped in ("decline", "will_think")
+    )
+
+
+def _is_affirmation_like(gw) -> bool:
+    """A bare affirmation („კი" / „დიახ" / „კი მინდა") per the gateway."""
+    return bool(getattr(gw, "is_affirmation", False)) or (
+        getattr(gw, "intent", "") == "affirm"
+    )
+
+
+def _subscription_offer_pending(conversation) -> bool:
+    """True when the previous assistant turn offered future-event updates /
+    subscription (so the user's „კი" is subscription consent). Uses the recorded
+    `adult_subscription_status == 'asked'` marker first, then a content scan of
+    the last assistant turn for the subscription-offer concept."""
+    if conversation is None:
+        return False
+    status = (getattr(conversation, "adult_subscription_status", "") or "").strip()
+    if status == "asked":
+        return True
+    last = _last_assistant_content(conversation).lower()
+    has_notify = any(s in last for s in ("შეგატყობ", "შემატყობ", "სიაში დაგიმატ", "სიაში ჩაგწერ", "დაგიმატოთ სიაში"))
+    has_future = any(s in last for s in ("ახალი ღონისძიებ", "მომავალ ღონისძიებ", "ახალ ღონისძიებ"))
+    return has_notify or (has_future and "?" in _last_assistant_content(conversation))
 
 
 def _has_camp_concern(low: str) -> bool:

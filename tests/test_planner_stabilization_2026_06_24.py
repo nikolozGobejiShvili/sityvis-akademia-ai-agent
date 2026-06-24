@@ -156,14 +156,15 @@ def test_manager_phone_overrides_sunday_school_pending(live):
 
 
 def test_sunday_school_known_contact_not_reasked(live):
-    """Class 1 / test #2 — a Sunday-School inquiry with a KNOWN contact does not
-    re-ask name/phone."""
+    """Class 1 / Stage-3 #5 — a Sunday-School inquiry with a KNOWN contact does
+    not re-ask name/phone, and OFFERS consent (no auto-handoff)."""
     _conv("u_ss", child_age="7", name="ჯონი", phone="595999733")
     resp = _send("u_ss", "მადლობა და კიდევ მაინტერესებს საკვირაო სკოლა როდის ემატება?")
     assert "მომწერეთ თქვენი სახელი" not in resp
     assert "9-ნიშნა ნომერი" not in resp
-    # the handoff dispatched with the stored contact
-    assert "გადავეცი მენეჯერს" in resp
+    # consent-first (#5): offer to pass the contact, do NOT auto-dispatch
+    assert "გადავეცი მენეჯერს" not in resp
+    assert ("მენეჯერს გადავცემ" in resp) or ("დაგიკავშირდებათ" in resp)
 
 
 # ───────────────────────── Class 2: topic-routing authority ───────────────────

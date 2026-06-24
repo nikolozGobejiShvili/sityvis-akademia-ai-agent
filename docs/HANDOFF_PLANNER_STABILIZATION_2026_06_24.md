@@ -106,6 +106,32 @@ deterministic named-event interceptor could still answer „ამ სახე�
 * Tests: `tests/test_adult_generic_discovery_2026_06_24.py` (generic → no
   „ვერ მოვძებნე"; named lookup still resolves; planner-off regression).
 
+## Stage 3 — consultant-quality conversation policy (2026-06-24)
+Refines answer/CTA/composition so the agent behaves like a thoughtful consultant
+(source of truth: `docs/source/sales_agent_prompt.md` + the audience analysis).
+Reasoning-driven (planner intent + selected_state + composer + validator), gated
+on the AUTHORITATIVE planner; NO giant-prompt rules, NO per-phrase handlers.
+New module `app/reasoning/response_policy.py` (config-driven composers — every
+fact comes from `admin_config_service`).
+
+* #1/#2 camp_info opens with a value intro + the child-age question (no price /
+  link / manager phone); explicit price → value-framed price from config.
+* #3 eligible child age → pain-point discovery (screen time / communication /
+  interests / confidence), not generic qualification.
+* #4 consultation CTA → the MANAGER explains the details (wording fix).
+* #5 Sunday-School info → answer status + OFFER consent; dispatch ONLY after
+  explicit consent (no auto-handoff, no needless „მადლობა"). Legacy collect-then-
+  dispatch flow kept for planner-off so the existing SS suite is unaffected.
+* #6 subscription consent → `subscription_request`/`subscription_save`: no
+  adult-age ask, uses known name + MASKED phone, confirms, then saves via the
+  existing `adult_subscription_service`.
+* #7 manager phone shown in full (558 67 47 33); user phone always masked.
+* #8 camp registration (incl. the „დარეგისტირება" typo) → link first, no forced
+  consultation / no age question.
+* #9 greeting after a closed/declined context → neutral menu (no stale camp/age).
+* #11 concise: drop a redundant second „მადლობა".
+* Tests: `tests/test_conversation_policy_2026_06_24.py` (16). Suite 3031/0/28.
+
 ## Remaining risks / NOT-GREEN items
 * The adult-event turns are answered by the REAL adult LLM engine live — its
   prose quality is not asserted offline (only the route + selected_state +
