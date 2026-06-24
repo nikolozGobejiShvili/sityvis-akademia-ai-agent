@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(uvicorn:*)",
+      "Bash(pytest:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Read(*)",
+      "Edit(app/**)",
+      "Edit(data/**)",
+      "Edit(tests/**)",
+      "Edit(.env)",
+      "Edit(CLAUDE.md)",
+      "Edit(requirements.txt)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Edit(credentials.json)",
+      "Edit(.env.example)"
+    ],
+    "ask": [
+      "Bash(git:*)",
+      "Edit(Procfile)"
+    ]
+  }
+}

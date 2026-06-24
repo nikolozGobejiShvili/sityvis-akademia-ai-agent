@@ -1,0 +1,36 @@
+email_subject: "ახალი ლიდი — {segment} — {platform}"
+# NOTE: The email body is built programmatically in
+# `app/services/notification_service.py::_manager_email_body` so the
+# company-name genitive can be inflected correctly (e.g.
+# "სიტყვის აკადემიის", NOT "სიტყვის აკადემიაის") and the deeper-concern
+# line can be omitted when empty / duplicate. The fields below are kept
+# for back-compat with any external loader that still resolves them.
+email_body: |
+  ახალი ლიდი {company_name_genitive} AI Agent-იდან
+
+  პლატფორმა: {platform}
+  სეგმენტი: {segment}
+  სტატუსი: {status}
+
+  {segment_details}
+
+  მოკლე რეზიუმე:
+  {summary}
+whatsapp_body: |
+  {company_name} — ახალი ლიდი
+  პლატფ: {platform} | {segment}
+  {short_details}
+  სტატუსი: {status}
+sms_body: "ახალი ლიდი: {segment} | {platform} | {status}"
+details_parent: |-
+  ბავშვის ასაკი: {child_age}
+  ინტერესი / გამოწვევა: {challenge}
+  სასურველი ცვლილება: {desired_change}
+  კონსულტაცია: {booking_text}
+details_adult: |-
+  ღონისძიება: {event_interest}
+  ბილეთი: {booking_text}
+short_parent: "ასაკი: {child_age} | ინტერესი / გამოწვევა: {challenge}"
+short_adult: "ღონისძიება: {event_interest}"
+booking_text_yes: დაჯავშნილია
+booking_text_no: ჯერ არ არის დაჯავშნული

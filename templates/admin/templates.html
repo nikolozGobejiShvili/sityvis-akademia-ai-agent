@@ -1,0 +1,20 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<h2>Message templates</h2>
+<p class="status-line">
+  Templates use <code>{placeholder}</code> syntax. Missing placeholders
+  render as empty strings — they will not crash the DM pipeline.
+</p>
+
+{% for template_id, body in templates.items() %}
+  <div class="card" style="margin-bottom:20px">
+    <h3 style="margin-top:0">{{ template_id }}</h3>
+    <form method="post" action="/admin/templates/{{ template_id }}">
+      <textarea name="body" style="min-height:160px; font-family:monospace">{{ body }}</textarea>
+      <p style="margin-top:12px">
+        <button type="submit" class="button">Save</button>
+      </p>
+    </form>
+  </div>
+{% endfor %}
+{% endblock %}

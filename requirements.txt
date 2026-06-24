@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-dotenv
+openai
+httpx
+gspread
+google-auth
+google-api-python-client
+apscheduler
+twilio
+pyairtable
+pyyaml
+redis
+tzdata
+python-multipart

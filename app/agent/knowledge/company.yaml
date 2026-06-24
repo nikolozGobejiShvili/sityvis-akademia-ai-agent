@@ -1,0 +1,6 @@
+# Company-level facts (cross-product, not camp-specific).
+# Authoritative source. Settings.COMPANY_NAME default reads from here.
+
+company:
+  name: "სიტყვის აკადემია"
+  phone: "558 67 47 33"

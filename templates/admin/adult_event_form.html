@@ -1,0 +1,98 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ "ახალი" if is_new else "რედაქტირება" }} — Adult Event{% endblock %}
+{% block content %}
+<h2>{{ "ახალი ღონისძიება" if is_new else "ღონისძიების რედაქტირება" }}</h2>
+
+{% if errors %}
+<div style="background:#ffebee;border:1px solid #ef9a9a;padding:12px;margin:12px 0;border-radius:4px;">
+  <strong>შეცდომები:</strong>
+  <ul>
+    {% for err in errors %}<li>{{ err }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<form method="post" action="{% if is_new %}/admin/programs/adult_events/events/new{% else %}/admin/programs/adult_events/events/{{ event.id }}{% endif %}">
+  <p>
+    <label>ID (optional, auto-derived if empty):<br>
+      <input type="text" name="id" value="{{ event.id }}" {% if not is_new %}readonly{% endif %} style="width:100%;">
+    </label>
+  </p>
+  <p>
+    <label>დასახელება (title) <strong style="color:#d32f2f;">*</strong>:<br>
+      <input type="text" name="title" value="{{ event.title }}" required style="width:100%;">
+    </label>
+  </p>
+  <p>
+    <label>სტატუსი:<br>
+      <select name="status">
+        <option value="active" {% if event.status == "active" %}selected{% endif %}>active</option>
+        <option value="inactive" {% if event.status == "inactive" %}selected{% endif %}>inactive</option>
+      </select>
+    </label>
+  </p>
+  <p>
+    <label>მინიმალური ასაკი (min_age) — ცარიელია → 13:<br>
+      <input type="number" name="min_age" value="{{ event.min_age|default('') }}" min="0" max="120" style="width:120px;">
+    </label>
+  </p>
+  <p>
+    <label>თარიღი (date_text) — მაგ.: „23 ივნისი, 19:00":<br>
+      <input type="text" name="date_text" value="{{ event.date_text|default('') }}" style="width:100%;">
+    </label>
+  </p>
+  <p>
+    <label>ლოკაცია:<br>
+      <input type="text" name="location" value="{{ event.location|default('') }}" style="width:100%;">
+    </label>
+  </p>
+  <p>
+    <label>ფასი ტექსტი (price_text):<br>
+      <input type="text" name="price_text" value="{{ event.price_text|default('') }}" style="width:200px;">
+    </label>
+    &nbsp;
+    <label>ფასი ლარში (price_gel, optional):<br>
+      <input type="number" name="price_gel" value="{{ event.price_gel|default('') }}" style="width:120px;">
+    </label>
+  </p>
+  <p>
+    <label>აღწერა (description):<br>
+      <textarea name="description" rows="3" style="width:100%;">{{ event.description|default('') }}</textarea>
+    </label>
+  </p>
+  <p>
+    <label>ჯავშნის ბმული (reservation_url) — payment_terms also accepted:<br>
+      <input type="text" name="reservation_url" value="{{ event.reservation_url|default('') }}" style="width:100%;">
+    </label>
+  </p>
+  <p>
+    <label>Facebook post ID (optional):<br>
+      <input type="text" name="facebook_post_id" value="{{ event.facebook_post_id|default('') }}" style="width:100%;">
+    </label>
+    <small style="color:#555;display:block;margin-top:4px;">
+      ცარიელად დატოვება დასაშვებია. შევსების შემთხვევაში ცხადი მისამართობა — კომენტარები ამ პოსტიდან ცალკეულ ღონისძიებას მიეცემა.
+    </small>
+  </p>
+  <p>
+    <label>თეგები / საკვანძო სიტყვები (comma-separated, optional):<br>
+      <input type="text" name="tags" value="{% if event.tags %}{{ event.tags|join(', ') }}{% endif %}" style="width:100%;">
+    </label>
+    <small style="color:#555;display:block;margin-top:4px;">
+      გამოიყენება კომენტარებიდან კონკრეტული ღონისძიების ამოსაცნობად. მაგალითად: ქართული პოეზია, ქართული_პოეზია, პოეზიის საღამო
+    </small>
+  </p>
+  <p style="background:#f5f5f5;padding:12px;border-radius:4px;">
+    <label>
+      <input type="checkbox" name="broadcast_after_save" value="on">
+      შენახვის შემდეგ გაუგზავნე subscribed მომხმარებლებს
+    </label>
+    <small style="color:#555;display:block;margin-top:4px;">
+      მონიშნეთ, თუ გსურთ, რომ ღონისძიების შენახვის შემდეგ ცალკეული შეტყობინება გაიგზავნოს subscribed მომხმარებლებთან. ცარიელად დატოვება — broadcast არ მოხდება. ღონისძიება უნდა იყოს active და ჰქონდეს ბილეთის ბმული.
+    </small>
+  </p>
+  <p>
+    <button class="button" type="submit">შენახვა</button>
+    <a class="button secondary" href="/admin/programs/adult_events/events">გაუქმება</a>
+  </p>
+</form>
+{% endblock %}

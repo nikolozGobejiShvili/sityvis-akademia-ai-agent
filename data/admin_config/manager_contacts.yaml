@@ -1,0 +1,10 @@
+# Admin-readable mirror of manager-contact placeholders.
+# Sensitive credentials (SMTP password, Meta tokens, Google service
+# account, OpenAI key, Redis URL) NEVER appear here — those stay in .env
+# and are not editable from the Admin Panel. This file is for non-secret
+# operator-facing values only.
+
+manager:
+  email_placeholder: "manager@example.com"
+  whatsapp_placeholder: ""
+  notification_label: "Email + WhatsApp"

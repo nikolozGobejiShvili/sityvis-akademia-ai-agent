@@ -1,0 +1,119 @@
+sections:
+- id: summer_camp
+  name: საზაფხულო ბანაკი
+  type: camp
+  status: active
+  hashtags:
+  - ბანაკი
+  - banaki
+  - bavshvebi
+  - camp
+  age_min: 9
+  age_max: 17
+  location: ამბასადორი კაჭრეთი
+  duration_text: ''
+  price_text: '2150'
+  price_gel: 2150
+  payment_terms: გადახდის გადანაწილება შესაძლებელია 6 თვემდე
+  description_short: ''
+  description_full: ''
+  registration_url: https://tinyurl.com/36jcae8z
+  manager_contact: 558 67 47 33
+  auto_dm_template_id: summer_camp_comment_dm
+  public_reply_template_id: default_public_reply
+  cta_text: თუ გსურთ, კონსულტაციაზე ჩაგწერთ.
+  streams:
+  - name: I ნაკადი
+    dates_text: 23-29 ივნისი
+    status: active
+  - name: II ნაკადი
+    dates_text: 5-11 ივლისი
+    status: active
+  - name: III ნაკადი
+    dates_text: 14-20 ივლისი
+    status: active
+  included_items:
+  - ტრანსპორტი
+  - განთავსება
+  - კვება
+  - პროგრამა
+  discounts:
+  - 10% დედმამიშვილებისთვის
+  - 10% წინა ბანაკის მონაწილეებისთვის
+  discovery_questions:
+  - რამდენი წლისაა თქვენი შვილი?
+  - რას ელოდებით ბანაკისგან?
+  duration_days: 7
+- id: sunday_school
+  name: საკვირაო სკოლა
+  type: kids_program
+  status: coming_soon
+  availability_text: საკვირაო სკოლა ივლისში დაემატება.
+  details_text: დეტალები ზუსტდება
+  handoff_enabled: true
+  lead_type: sunday_school
+  hashtags:
+  - საკვირაოსკოლა
+  - სკოლა
+  - sunday_school
+  age_min: null
+  age_max: null
+  location: ''
+  duration_text: ''
+  price_text: ''
+  schedule_text: ''
+  payment_terms: ''
+  discounts: []
+  included_items: []
+  description_short: საკვირაო სკოლა განკუთვნილია ბავშვებისთვის და მოიცავს რეგულარულ
+    შეხვედრებს, განვითარებაზე ორიენტირებულ გარემოსა და პრაქტიკულ აქტივობებს.
+  description_full: ''
+  registration_url: ''
+  manager_contact: ''
+  auto_dm_template_id: sunday_school_comment_dm
+  public_reply_template_id: default_public_reply
+  discovery_questions:
+  - რამდენი წლისაა ბავშვი?
+  - რომელი მიმართულება გაინტერესებთ?
+  cta_text: ''
+- id: adult_events
+  name: ზრდასრულთა ღონისძიებები
+  type: adult_events
+  status: active
+  hashtags:
+  - ღონისძიება
+  - საღამო
+  - event
+  - sagamo
+  age_min: 13
+  age_max: null
+  location: ბორის პაიჭაძის სტადიონი
+  duration_text: ''
+  price_text: '200'
+  price_gel: 200
+  payment_terms: https://railway.com/workspace/usage
+  description_short: maroon 5  კონცერტი
+  description_full: ''
+  registration_url: ''
+  manager_contact: ''
+  auto_dm_template_id: adult_events_comment_dm
+  public_reply_template_id: default_public_reply
+  cta_text: ''
+  streams:
+  - name: 23 ივნისიი
+    dates_text: დასაწყისი 19:00 საათზე
+    status: active
+  discovery_questions:
+  - რომელი ღონისძიება გაინტერესებთ?
+  events:
+  - id: fromula_1
+    title: fromula 1
+    status: active
+    date_text: 28 აგვისტო  19:00
+    location: monaco
+    price_text: '5000'
+    reservation_url: https://wordacademy.ge/courses/cart/
+    tags:
+    - '#formula 1'
+    min_age: 13
+    price_gel: 4999

@@ -1,0 +1,41 @@
+# Single source of truth for the 2026 camp.
+# Values user-verified against official documentation.
+# Phase 3 migration: facts that were previously hardcoded in templates,
+# prompts, and config.py now live here. Customer-facing templates may keep
+# embedded values for byte-safety (see Phase 3 report), but this file is
+# the authoritative source — when those templates are later switched to
+# placeholders, they must read from here.
+
+camp:
+  year: 2026
+  name: "სიტყვის აკადემიის ბანაკი"
+  # Authoritative location string (nominative). NEVER append the word
+  # "აკადემია" after "კაჭრეთი".
+  location: "ამბასადორი კაჭრეთი"
+  age_min: 9
+  age_max: 17
+  duration_days: 7
+  price_gel: 2150
+  includes: ["ტრანსპორტი", "განთავსება", "კვება", "პროგრამა"]
+  streams:
+    - { name: "I ნაკადი", dates_text: "23-29 ივნისი" }
+    - { name: "II ნაკადი", dates_text: "5-11 ივლისი" }
+    - { name: "III ნაკადი", dates_text: "14-20 ივლისი" }
+  discounts:
+    - { name: "დედმამიშვილებისთვის", percent: 10 }
+    - { name: "წინა ბანაკის მონაწილისთვის", percent: 10 }
+  payment:
+    installments_months: 6
+    banks: ["TBC", "საქართველოს ბანკი"]
+  registration_url: "https://tinyurl.com/36jcae8z"
+  phone: "558 67 47 33"
+  focus_areas:
+    - "დამოუკიდებელი აზროვნება"
+    - "კომუნიკაცია"
+    - "საკუთარი აზრის ჩამოყალიბება"
+    - "ცოცხალი ურთიერთობა"
+    - "ეკრანისგან დისტანცირება"
+  activities:
+    sports: ["ფეხბურთი", "კალათბურთი", "ჯირითი", "ჩოგბურთი"]
+    workshops: ["ფსიქოლოგია", "წიგნიერება", "მუსიკა", "ისტორია"]
+    other: ["აუზი", "ცნობილ ადამიანებთან შეხვედრები", "საღამოს აქტივობები"]

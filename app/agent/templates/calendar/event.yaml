@@ -1,0 +1,8 @@
+summary: "კონსულტაცია - {lead_name} ({lead_platform})"
+description: |-
+  ასაკი: {child_age}
+  გამოწვევა: {challenge}
+  ღრმა ფესვი: {deeper_concern}
+  სასურველი ცვლილება: {desired_change}
+slot_choice_prompt: "გთხოვთ აირჩიოთ ნომერი ({options})"
+options_separator: " ან "

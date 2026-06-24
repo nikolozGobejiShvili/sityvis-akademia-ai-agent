@@ -1,0 +1,29 @@
+# Business hours and slot-scheduling configuration.
+#
+# Booking Availability Patch (2026-06-03):
+#   * Consultation window widened to 10:00–21:00.
+#   * Slot duration standardised at 60 minutes — half-hour slots
+#     (10:30 / 11:30 / 20:30) are no longer offered or accepted.
+#   * Last valid slot start is 20:00 (20:00–21:00). 21:00 is closing
+#     time; no slot can start at 21:00 because 21:00 + 1h = 22:00 is
+#     past closing.
+
+business:
+  timezone: "Asia/Tbilisi"
+  # Scheduling window used when emitting "available slots" suggestions.
+  work_hours:
+    start: "10:00"
+    end:   "21:00"
+  # Hard cap for user-requested custom slots. `is_within_business_hours`
+  # rejects anything whose [start, start+duration] falls outside this
+  # window OR whose start minute is not on the hour (slots must be
+  # whole-hour aligned).
+  business_hours:
+    start: "10:00"
+    end:   "21:00"
+  slot:
+    # Minutes per consultation slot. Calendar events are also created
+    # with this duration.
+    duration_minutes: 60
+    # Earliest allowable slot relative to "now", in minutes.
+    buffer_minutes: 120

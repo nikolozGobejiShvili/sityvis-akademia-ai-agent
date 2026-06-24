@@ -1,0 +1,32 @@
+# Files Railway must NOT include in the deploy build context.
+# Secrets are injected via Railway dashboard env vars (GOOGLE_CREDENTIALS_JSON,
+# REDIS_URL, OPENAI_API_KEY, etc.) — they must never ship inside the image.
+
+# ── Secrets ─────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+credentials.json
+*credentials*.json
+*service-account*.json
+*secret*.json
+*token*.json
+*.key
+*.pem
+keys/
+secrets/
+
+# ── Python caches / local virtualenv ────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.hypothesis/
+.benchmarks/
+
+# ── Local scratch / VCS / reports ───────────────────────────────────────
+tools/reports/
+*.bak
+.git/
+.DS_Store

@@ -1,0 +1,86 @@
+# Follow-up strategy — extracted from
+#   docs/source/სიტყვის_აკადემია_ფოლოუ_აფი.docx
+#   docs/source/sales_agent_prompt.md (FOLLOW-UP LOGIC section)
+#
+# Owner-defined cadence: 24h → 3d → 7d, with scenario-specific variants.
+#
+# This file is *data* for a future scheduler (P3-B Redis + APScheduler).
+# Right now the engine reads `global_rules.do_not_follow_up_if` and the
+# `stages` keys to know which markers to record on a Conversation/Lead;
+# no message is actually sent from this task.
+
+global_rules:
+  send_only_if_user_stopped: true
+  do_not_follow_up_if:
+    - booked
+    - registered
+    - declined
+    - asked_no_more_messages
+    - manager_handoff_completed
+  tone:
+    - "თბილი"
+    - "მშვიდი"
+    - "დახმარებაზე ორიენტირებული"
+    - "არასაპრესინგო"
+
+stages:
+  first_24h:
+    delay_hours: 24
+    goal: "დიალოგის რბილად დაბრუნება"
+    when:
+      - "მომხმარებელი დაინტერესდა ბანაკით"
+      - "მიიღო ინფორმაცია"
+      - "არ უპასუხა"
+    message_template: |
+      {{First_Name}}, გამარჯობა.
+      გუშინ ბანაკის შესახებ მოგწერეთ და უბრალოდ მინდა გკითხოთ — ხომ არ დაგრჩათ რაიმე კითხვა?
+
+      ხშირად მშობლებს გადაწყვეტილების მიღებამდე აინტერესებთ:
+      • შეეფერება თუ არა ბანაკი ბავშვის ასაკს
+      • როგორ ეგუებიან ბავშვები ეკრანის გარეშე ყოფნას
+      • რა იცვლება ამ 7 დღეში
+      • როგორი გარემოა ადგილზე
+
+      თუ გინდათ, ერთი სიტყვით მომწერეთ, რა არის თქვენთვის ყველაზე მნიშვნელოვანი და ზუსტად იმ ნაწილზე ვისაუბროთ.
+
+  second_3d:
+    delay_hours: 72
+    goal: "ნდობის გაძლიერება და ღირებულების შეხსენება"
+    message_template: |
+      {{First_Name}}, ერთ რამეს გაგიზიარებთ, რაც მშობლებისგან ხშირად გვესმის.
+
+      ბევრს თავიდან ჰგონია, რომ ბანაკი უბრალოდ დასვენებაა.
+      მაგრამ რეალური ცვლილება ხშირად იწყება მაშინ, როცა ბავშვი რამდენიმე დღით ხვდება გარემოში, სადაც უსმენენ, აზრს ეკითხებიან და ეკრანის გარეშე ერთვება რეალურ ურთიერთობაში.
+
+      ასეთ გარემოში ბავშვები ხშირად ბუნებრივად იხსნებიან.
+
+  third_7d:
+    delay_hours: 168
+    goal: "მშვიდი დახურვა / scarcity / დახმარება"
+    message_template: |
+      {{First_Name}}, ბოლო შეტყობინებას გწერთ ამ თემაზე, რომ ზედმეტად არ შეგაწუხოთ.
+
+      ბანაკის ნაკადებზე ადგილები ეტაპობრივად ივსება. თუ ჯერ კიდევ ფიქრობთ მონაწილეობაზე, სიამოვნებით დაგეხმარებით გადაწყვეტილებაში.
+
+      შეგიძლიათ მომწეროთ ასაკი, მთავარი კითხვა ან საკონტაქტო ნომერი და მენეჯერი დაგიკავშირდებათ.
+
+      თუ ახლა არ არის თქვენთვის აქტუალური, პრობლემა არ არის.
+
+scenario_followups:
+  stopped_after_price:
+    message_goal: "არ ჰკითხო ყიდულობს თუ არა; აუხსენი ღირებულება"
+    suggested_message: "გინდათ, მოკლედ აგიხსნათ, რა შედის ამ ღირებულებაში და რატომ განსხვავდება ეს ბანაკი სტანდარტული დასვენებისგან?"
+
+  stopped_after_age:
+    message_goal: "ასაკზე მორგებული პროგრამის ღირებულება"
+    suggested_message: "ამ ასაკისთვის პროგრამა მორგებულია. გინდათ, მოკლედ გითხრათ, რას აკეთებენ ბავშვები პირველ დღეებში?"
+
+  said_will_think:
+    message_goal: "მშვიდი მხარდაჭერა"
+    suggested_message: "რა თქმა უნდა. გადაწყვეტილება მნიშვნელოვანია. თუ გინდათ, შემიძლია 2–3 მთავარი კითხვა დაგიტოვოთ, რითაც მიხვდებით, შეეფერება თუ არა ბანაკი თქვენს შვილს."
+
+after_7d:
+  stop_followups: true
+  resume_only_if:
+    - "new scarcity / last seats update"
+    - "user replies again"

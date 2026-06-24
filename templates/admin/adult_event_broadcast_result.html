@@ -1,0 +1,25 @@
+{% extends "admin/base.html" %}
+{% block title %}Broadcast Result — Adult Events{% endblock %}
+{% block content %}
+<h2>გაგზავნის შედეგი — {{ result.event_title or result.event_id or "(unknown)" }}</h2>
+
+<p style="background:{% if result.success %}#e8f5e9;border:1px solid #a5d6a7{% else %}#fff3e0;border:1px solid #ffb74d{% endif %};padding:12px;border-radius:4px;">
+  {{ summary }}
+</p>
+
+<table style="max-width:480px;">
+  <tbody>
+    <tr><th style="text-align:left;">სტატუსი</th>
+        <td>{% if result.success %}success{% else %}{{ result.reason or "failed" }}{% endif %}</td></tr>
+    <tr><th style="text-align:left;">გაგზავნილია</th><td>{{ result.sent }}</td></tr>
+    <tr><th style="text-align:left;">გამოტოვებულია (duplicate)</th><td>{{ result.skipped_duplicate }}</td></tr>
+    <tr><th style="text-align:left;">გამოტოვებულია (platform/sender)</th><td>{{ result.skipped_platform }}</td></tr>
+    <tr><th style="text-align:left;">ვერ მოხერხდა</th><td>{{ result.failed }}</td></tr>
+    <tr><th style="text-align:left;">სულ candidate</th><td>{{ result.total_candidates }}</td></tr>
+  </tbody>
+</table>
+
+<p style="margin-top:24px;">
+  <a class="button secondary" href="/admin/programs/adult_events/events">← ღონისძიებების სია</a>
+</p>
+{% endblock %}

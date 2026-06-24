@@ -1,0 +1,68 @@
+{% extends "admin/base.html" %}
+{% block title %}Adult Events — Admin{% endblock %}
+{% block content %}
+<h2>ზრდასრულთა ღონისძიებები ({{ events|length }})</h2>
+<p>
+  <a class="button" href="/admin/programs/adult_events/events/new">ახალი ღონისძიების დამატება</a>
+  &nbsp;
+  <a class="button secondary" href="/admin/programs/adult_events">← სექციის რედაქტირება</a>
+  &nbsp;
+  <a class="button secondary" href="/admin/programs">← Programs</a>
+</p>
+
+{% if events %}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>დასახელება</th>
+      <th>სტატუსი</th>
+      <th>min_age</th>
+      <th>თარიღი</th>
+      <th>ფასი</th>
+      <th>ქმედებები</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.id }}</td>
+      <td>{{ e.title }}</td>
+      <td>{{ e.status|default('active') }}</td>
+      <td>{{ e.min_age|default('—') }}</td>
+      <td>{{ e.date_text|default('—') }}</td>
+      <td>{{ e.price_text|default('—') }}</td>
+      <td>
+        <a class="button secondary" href="/admin/programs/adult_events/events/{{ e.id }}">რედაქტირება</a>
+        {% if (e.status|default('active')) == 'active' %}
+        <form method="post" action="/admin/programs/adult_events/events/{{ e.id }}/deactivate"
+              style="display:inline">
+          <button class="button secondary" type="submit">დეაქტივაცია</button>
+        </form>
+        <form method="post" action="/admin/programs/adult_events/events/{{ e.id }}/broadcast"
+              style="display:inline"
+              onsubmit="return confirm('გავუგზავნო შეტყობინება subscribed მომხმარებლებს?');">
+          <button class="button" type="submit">გაგზავნა subscribed მომხმარებლებთან</button>
+        </form>
+        {% else %}
+        <form method="post" action="/admin/programs/adult_events/events/{{ e.id }}/activate"
+              style="display:inline">
+          <button class="button" type="submit">აქტივაცია</button>
+        </form>
+        {% endif %}
+        <form method="post" action="/admin/programs/adult_events/events/{{ e.id }}/delete"
+              style="display:inline" onsubmit="return confirm('წავშალო ეს ღონისძიება?');">
+          <button class="button danger" type="submit">წაშლა</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>ჯერ ღონისძიებები არ არის დამატებული.</p>
+<p>
+  <a class="button" href="/admin/programs/adult_events/events/new">ახალი ღონისძიების დამატება</a>
+</p>
+{% endif %}
+{% endblock %}

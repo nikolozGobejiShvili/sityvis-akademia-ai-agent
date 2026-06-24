@@ -1,0 +1,40 @@
+# Georgian month names and parser stems.
+# Phase 3 migration: previously duplicated in:
+#   - app/services/calendar_service.py:GEORGIAN_MONTHS
+#   - app/flows/parent_flow.py:GEORGIAN_MONTHS_NOM  (identical)
+#   - app/flows/parent_flow.py:GEORGIAN_MONTH_STEMS (parser shape)
+# Single source of truth now lives here.
+
+# Nominative month names, indexed 1..12. Used for display ("15 მაისი").
+months_nominative:
+  1: "იანვარი"
+  2: "თებერვალი"
+  3: "მარტი"
+  4: "აპრილი"
+  5: "მაისი"
+  6: "ივნისი"
+  7: "ივლისი"
+  8: "აგვისტო"
+  9: "სექტემბერი"
+  10: "ოქტომბერი"
+  11: "ნოემბერი"
+  12: "დეკემბერი"
+
+# Lowercase stems used to parse user-typed Georgian month words. The stem is
+# the longest prefix that any valid case-form starts with — so a startswith
+# match catches every declension (e.g. "მაისს", "მაისში" both start with
+# "მაის"). For months whose nominative IS the stem (აგვისტო), the full word
+# appears here.
+month_stems:
+  "იანვარ": 1
+  "თებერვალ": 2
+  "მარტ": 3
+  "აპრილ": 4
+  "მაის": 5
+  "ივნის": 6
+  "ივლის": 7
+  "აგვისტო": 8
+  "სექტემბერ": 9
+  "ოქტომბერ": 10
+  "ნოემბერ": 11
+  "დეკემბერ": 12

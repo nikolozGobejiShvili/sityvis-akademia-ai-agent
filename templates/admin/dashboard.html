@@ -1,0 +1,46 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<h2>Dashboard</h2>
+
+<div class="grid">
+  <div class="card">
+    <h3 style="margin-top:0">Programs</h3>
+    <p class="status-line">{{ active_count }} active · {{ section_count }} total</p>
+    <p><a class="button" href="/admin/programs">Manage programs</a></p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Integrations</h3>
+    <p class="status-line">
+      Agent status:
+      {% if agent_enabled %}
+        <strong>Enabled &#9989;</strong>
+      {% else %}
+        <strong>Disabled &#128308;</strong>
+      {% endif %}
+      <br>
+      Redis: <strong>{{ "on" if redis_enabled else "off" }}</strong><br>
+      Email notifications: <strong>{{ "on" if email_enabled else "off" }}</strong><br>
+      Public comment reply: <strong>{{ "on" if public_reply_enabled else "off" }}</strong><br>
+      Manager email: <strong>{{ manager_email }}</strong>
+    </p>
+  </div>
+</div>
+
+<h3 style="margin-top:32px">Active sections</h3>
+<table>
+  <thead>
+    <tr><th>ID</th><th>Name</th><th>Status</th><th>Hashtags</th></tr>
+  </thead>
+  <tbody>
+    {% for s in sections %}
+      <tr>
+        <td><a href="/admin/programs/{{ s.id }}">{{ s.id }}</a></td>
+        <td>{{ s.name or "" }}</td>
+        <td><span class="badge {{ s.status }}">{{ s.status }}</span></td>
+        <td>{{ (s.hashtags or []) | join(", ") }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

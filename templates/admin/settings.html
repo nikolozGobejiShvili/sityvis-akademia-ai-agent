@@ -1,0 +1,49 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<h2>Settings</h2>
+<p class="status-line">
+  Read-only mirror of operator-facing config. Sensitive credentials
+  (SMTP password, Meta tokens, OpenAI key, Redis URL) live in
+  <code>.env</code> and are not editable from this panel.
+</p>
+
+<div class="grid">
+  <div class="card">
+    <h3 style="margin-top:0">Integrations</h3>
+    <p class="status-line">
+      Redis: <strong>{{ "on" if redis_enabled else "off" }}</strong><br>
+      Email notifications: <strong>{{ "on" if email_enabled else "off" }}</strong><br>
+      Public comment reply: <strong>{{ "on" if public_reply_enabled else "off" }}</strong><br>
+      Manager email: <strong>{{ manager_email or "(not set)" }}</strong>
+    </p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Business hours</h3>
+    {% if business and business.business %}
+      <p class="status-line">
+        Timezone: <strong>{{ business.business.timezone }}</strong><br>
+        Work hours: {{ business.business.work_hours.start }}–{{ business.business.work_hours.end }}<br>
+        Bookable: {{ business.business.business_hours.start }}–{{ business.business.business_hours.end }}<br>
+        Slot: {{ business.business.slot.duration_minutes }} min,
+        buffer {{ business.business.slot.buffer_minutes }} min
+      </p>
+    {% else %}
+      <p class="status-line">no business hours config found</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-top:20px">
+  <h3 style="margin-top:0">Manager contacts (placeholders)</h3>
+  {% if manager and manager.manager %}
+    <p class="status-line">
+      Email placeholder: <strong>{{ manager.manager.email_placeholder }}</strong><br>
+      WhatsApp placeholder: <strong>{{ manager.manager.whatsapp_placeholder or "(none)" }}</strong><br>
+      Notification label: {{ manager.manager.notification_label }}
+    </p>
+  {% else %}
+    <p class="status-line">no manager-contact mirror found</p>
+  {% endif %}
+</div>
+{% endblock %}

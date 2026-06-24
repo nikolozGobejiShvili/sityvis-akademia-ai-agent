@@ -1,0 +1,19 @@
+# Default placeholder strings for adult-segment event rendering.
+# These are used when an events.txt entry is missing a field and the agent
+# needs a graceful fallback word. Previously lived in data/prompts.py as the
+# ADULT_EVENT_* / ADULT_DEFAULT_EVENT_* module-level constants.
+
+adult_defaults:
+  # Generic "to be confirmed" placeholder used for missing date/guest/theme.
+  event_placeholder: "დასაზუსტებელია"
+  # Word substituted when an event has no name at all.
+  event_name_placeholder: "ღონისძიება"
+  # Default atmosphere description if events.txt did not declare one.
+  atmosphere: "დახვეწილი, მშვიდი და პრემიუმ ატმოსფერო"
+  # Fallback strings used when the entire selected event is unknown.
+  event:
+    name: "კულტურული საღამო"
+    theme: "კულტურული შეხვედრა"
+    guest: "სპეციალური სტუმარი"
+    location: "პრემიუმ სივრცე"
+    atmosphere_tbd: "მშვიდი, დახვეწილი და შინაარსიანი გარემო"

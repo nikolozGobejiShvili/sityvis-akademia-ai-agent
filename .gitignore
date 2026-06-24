@@ -1,0 +1,39 @@
+# ── Secrets — NEVER commit ──────────────────────────────────────────────
+# Real values live in the local .env and in Railway dashboard env vars.
+.env
+.env.*
+# Keep the committed template that documents required variables.
+!.env.example
+credentials.json
+*credentials*.json
+*service-account*.json
+*secret*.json
+*token*.json
+*.key
+*.pem
+keys/
+secrets/
+
+# ── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.hypothesis/
+.benchmarks/
+.mypy_cache/
+.ruff_cache/
+
+# ── Logs ────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Local scratch / generated artifacts ─────────────────────────────────
+tools/reports/
+*.bak
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

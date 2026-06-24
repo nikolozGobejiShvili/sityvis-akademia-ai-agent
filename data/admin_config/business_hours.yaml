@@ -1,0 +1,16 @@
+# Admin-readable mirror of business hours for the Admin Panel "Settings"
+# page. The booking pipeline still reads the canonical values from
+# `app/agent/knowledge/business_hours.yaml` — this file is for the
+# operator UI only. Keep the two in sync manually when editing here.
+
+business:
+  timezone: "Asia/Tbilisi"
+  work_hours:
+    start: "10:00"
+    end:   "21:00"
+  business_hours:
+    start: "10:00"
+    end:   "21:00"
+  slot:
+    duration_minutes: 60
+    buffer_minutes: 120

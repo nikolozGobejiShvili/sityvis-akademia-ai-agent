@@ -1,0 +1,202 @@
+# Prompt review run — 2026-05-21T01:22:02
+# Model: gpt-4.1-mini
+# Prompts reviewed: 14
+
+============================================================
+PROMPT NAME: PARENT_WELCOME
+============================================================
+FORMATTED TEXT:
+გამარჯობა 🌿
+
+სიტყვის აკადემიის ბანაკი არ არის უბრალოდ დასვენება — ეს არის 7 დღიანი გარემო, სადაც ბავშვი ცილდება ციფრულ ხმაურს და სწავლობს ცოცხალ აზროვნებას.
+
+სანამ დეტალებზე გადავალთ — რამდენი წლისაა შვილი?
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: PARENT_ASK_CHALLENGE
+============================================================
+FORMATTED TEXT:
+მესმის.
+
+თუ მოგვწერეთ — ალბათ რაღაც კონკრეტული გადგას წინ შვილის ცხოვრებაში.
+
+რა აწუხებთ ყველაზე მეტად — ეკრანი, კომუნიკაცია, საკუთარი თავის გამოხატვა, თუ რაიმე უფრო ჩუმი?
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: PARENT_OFFER_CONSULTATION
+============================================================
+FORMATTED TEXT:
+აქ უახლოესი დროები — აირჩიეთ, რომელი მოგწონთ:
+
+1️⃣ 15 მაისი - 14:00
+2️⃣ 15 მაისი - 16:00
+3️⃣ 16 მაისი - 11:00
+
+გთხოვთ აირჩიოთ ნომერი (1, 2 ან 3)
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: PARENT_BOOKING_CONFIRMED
+============================================================
+FORMATTED TEXT:
+დაჯავშნილია 🌿
+
+📅 15 მაისი, 14:00
+
+კონსულტანტი მალე დაგიკავშირდებათ — შვილზე უფრო დეტალურად ისაუბრებთ.
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: PARENT_FOLLOWUP
+============================================================
+FORMATTED TEXT:
+გამარჯობა 🌿
+
+ცოტა ხნის წინ დაგვიკავშირდით ცისარტყელასთან. თუ კიდევ ფიქრობთ — ჩვენ აქ ვართ, რომ ნებისმიერ კითხვაზე გიპასუხოთ.
+
+https://example.com/material
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: ADULT_WELCOME
+============================================================
+FORMATTED TEXT:
+კეთილი იყოს თქვენი ვიზიტი ცისარტყელაის
+კულტურულ სივრცეში ✨
+
+ამჟამად გთავაზობთ განსაკუთრებულ შეხვედრებს:
+
+1. პოეზიის საღამო
+   თარიღი: 15 მაისი
+   სტუმარი: პოეტი ნინო დარბაისელი
+
+2. მუსიკის კამერული საღამო
+   თარიღი: 16 მაისი
+   სტუმარი: პიანისტი გიორგი ცაგარელი
+
+რომელი საღამო გაინტერესებთ?
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: ADULT_EVENT_DETAILS
+============================================================
+FORMATTED TEXT:
+პოეზიის საღამო — განსაკუთრებული საღამო
+მათთვის, ვინც ფასობს ცოცხალ, შინაარსიან ურთიერთობას.
+
+📅 15 მაისი, 20:00
+📍 სასტუმრო Rooms-ის პრემიუმ დარბაზი
+🎭 პოეტი ნინო დარბაისელი და კამერული მუსიკის დუო
+
+დახურული კულტურული შეხვედრა მცირე საზოგადოებისთვის, სადაც პოეზია ცოცხალ მუსიკას ერწყმის.
+
+გსურთ ადგილის დაჯავშნა?
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: ADULT_SEND_BOOKING
+============================================================
+FORMATTED TEXT:
+სიამოვნებით. ადგილის დასაჯავშნად:
+
+https://example.com/booking
+
+ჯავშნის შემდეგ მიიღებთ დადასტურებას.
+ნებისმიერი კითხვის შემთხვევაში აქ ვართ.
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: ADULT_FOLLOWUP
+============================================================
+FORMATTED TEXT:
+ცისარტყელაის ახალი კულტურული საღამოს დეტალები:
+
+https://example.com/material
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: UNCLEAR_ROUTING
+============================================================
+FORMATTED TEXT:
+გამარჯობა 🌿
+
+გვითხარით, რა გაინტერესებთ:
+
+— ბავშვების საზაფხულო ბანაკი (9-17 წელი)
+— ზრდასრულთა კულტურული საღამოები
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: ERROR_MESSAGE
+============================================================
+FORMATTED TEXT:
+ბოდიში, ტექნიკური პრობლემა წარმოიშვა.
+გთხოვთ, ცოტა ხანში სცადოთ ან დაგვიკავშირდეთ პირდაპირ:
+558 67 47 33
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: COMMENT_REPLY_DM_SENT
+============================================================
+FORMATTED TEXT:
+გამარჯობა ნინო 🌿 დეტალები პირად შეტყობინებაში გამოგიგზავნეთ.
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: COMMENT_REPLY_FALLBACK
+============================================================
+FORMATTED TEXT:
+გამარჯობა ნინო 🌿 დეტალებისთვის გვიპასუხეთ პირადში ან გაიგეთ მეტი ბმულზე: https://example.com/info
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------
+============================================================
+PROMPT NAME: COMMENT_FOLLOWUP_REPLY
+============================================================
+FORMATTED TEXT:
+ნინო, შეგახსენებთ — დეტალებისთვის ბმული: https://example.com/info
+
+REVIEW:
+❌ შეფასება ვერ შესრულდა: Error code: 429 - {'error': {'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.', 'type': 'insufficient_quota', 'param': None, 'code': 'insufficient_quota'}}
+
+------------------------------------------------------------

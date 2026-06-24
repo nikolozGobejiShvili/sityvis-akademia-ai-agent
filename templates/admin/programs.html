@@ -1,0 +1,37 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<h2>Programs</h2>
+<p><a class="button" href="/admin/programs/new">+ New program</a></p>
+
+<table>
+  <thead>
+    <tr>
+      <th>ID</th><th>Name</th><th>Type</th><th>Status</th>
+      <th>Hashtags</th><th>Template</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in sections %}
+      <tr>
+        <td>{{ s.id }}</td>
+        <td>{{ s.name or "" }}</td>
+        <td>{{ s.type or "" }}</td>
+        <td><span class="badge {{ s.status }}">{{ s.status }}</span></td>
+        <td>{{ (s.hashtags or []) | join(", ") }}</td>
+        <td>{{ s.auto_dm_template_id or "" }}</td>
+        <td>
+          <a class="button secondary" href="/admin/programs/{{ s.id }}">Edit</a>
+          {% if s.id == "adult_events" or s.type == "adult_events" %}
+          <a class="button" href="/admin/programs/adult_events/events">ღონისძიებების მართვა</a>
+          {% endif %}
+          <form class="inline" method="post"
+                action="/admin/programs/{{ s.id }}/delete"
+                onsubmit="return confirm('Delete {{ s.id }}?');">
+            <button type="submit" class="button danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

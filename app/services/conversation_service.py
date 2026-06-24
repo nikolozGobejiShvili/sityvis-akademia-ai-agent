@@ -1,0 +1,931 @@
+import logging
+import re
+from dataclasses import dataclass
+from datetime import datetime
+from string import Formatter
+from typing import Any
+
+from app.config import DATA_DIR, settings
+from app.flows import adult_flow, parent_flow
+from app.models.conversation import Conversation
+from app.services import kill_switch, redis_state_service, sentry_service
+from data.prompts import UNCLEAR_ROUTING
+
+logger = logging.getLogger(__name__)
+
+conversations = {}  # {sender_id: Conversation}
+
+
+# -- P3-B Redis-backed persistence helpers --------------------------------
+#
+# `conversations` (above) is the in-memory working store and remains the
+# fast path / source of truth during a single process lifetime. Redis is
+# a write-through mirror: every successful message handling saves the
+# Conversation as JSON under `conversation:{platform}:{sender_id}`. On
+# load, if the sender is missing from the in-memory dict we ask Redis
+# first; a hit re-hydrates and re-populates the in-memory dict so the
+# rest of the code path is unchanged.
+#
+# Redis disabled / unavailable → these helpers are no-ops and the legacy
+# in-memory dict behaviour is preserved exactly.
+
+
+def _conversation_redis_key(platform: str, sender_id: str) -> str:
+    # Platform first so per-platform key scans / dashboards are easier.
+    # Sender_id second so a key can be derived without knowing platform
+    # in the rare case where it differs (we always know platform at
+    # callsite though).
+    return f"conversation:{platform or 'unknown'}:{sender_id}"
+
+
+def _load_conversation_from_redis(sender_id: str, platform: str) -> Conversation | None:
+    """Try to restore a Conversation from Redis. None on miss / disabled / error."""
+    if not redis_state_service.is_enabled():
+        return None
+    key = _conversation_redis_key(platform, sender_id)
+    payload = redis_state_service.get_json(key)
+    if not payload:
+        return None
+    try:
+        return Conversation.from_dict(payload)
+    except Exception as exc:
+        # Unknown / corrupt payload — log and drop so the next message
+        # creates a fresh Conversation. Never crash on bad JSON.
+        logger.warning(
+            "[redis] conversation %s deserialise failed — discarding: %s",
+            key, exc,
+        )
+        return None
+
+
+def _save_conversation_to_redis(conversation: Conversation) -> None:
+    if not redis_state_service.is_enabled():
+        return
+    key = _conversation_redis_key(conversation.platform, conversation.sender_id)
+    try:
+        payload = conversation.to_dict()
+    except Exception as exc:
+        logger.warning(
+            "[redis] conversation %s serialise failed: %s", key, exc,
+        )
+        return
+    redis_state_service.set_json(key, payload)
+
+# -- Segment classification (Phase 3.6A — owner-confirmed policy) -----------
+#
+# Bare greetings ("გამარჯობა", "Hi") now route to UNCLEAR. The user is asked
+# to pick a direction (children's camp vs adult cultural evenings) before the
+# agent enters either flow. UNCLEAR is RECOVERABLE: the next message is
+# re-classified on the same conversation, so split-fragment intent like
+#   user: "გამარჯობა"      → UNCLEAR (asks direction)
+#   user: "ბანაკი მაინტერესებს" → PARENT (continues camp flow)
+# is resolved without losing context.
+#
+# Classification is keyword-based on stems (no morphology library) so it
+# survives Georgian noun declension: "ბანაკი / ბანაკში / ბანაკის" all match
+# the stem "ბანაკ". Matching is plain substring `in lowered_text`. This
+# accepts the occasional accidental hit (a stem that appears inside an
+# unrelated word) in exchange for zero dependencies and predictable
+# behaviour. If a hit is wrong, the user can clarify in the next turn —
+# UNCLEAR is recoverable.
+
+GREETING_ONLY_KEYWORDS = (
+    "გამარჯობა", "სალამი", "გაუმარჯოს", "მოგესალმებით",
+    "ჰაი", "ჰელო", "hi", "hello", "hey",
+)
+
+# Camp / children's-camp keyword stems. Matching is substring on a lower-
+# cased message. Stems cover Georgian declension (e.g. "ბანაკ" catches
+# ბანაკი, ბანაკში, ბანაკის, ბანაკიდან).
+# NOTE: "პროგრამა" is intentionally NOT included — it is generic and can
+# also describe an adult cultural programme; including it would cause
+# tie-break misfires.
+CAMP_KEYWORDS = (
+    "ბანაკ",      # ბანაკი, ბანაკში, ბანაკის ...
+    "ლაგერ",      # ლაგერი
+    "ბავშვ",      # ბავშვი, ბავშვები, ბავშვებს
+    "შვილ",       # შვილი, შვილს, შვილზე
+    "საზაფხულო",
+    "ეკრან",      # ეკრანი, ეკრანთან, ეკრანდამოკიდებულება
+    "მოზარდ",     # მოზარდი, მოზარდები
+    "სკოლ",       # სკოლა, სკოლაში
+    # Minimal English camp-intent stems. We don't aim for broad English
+    # conversation support — the parent LLM engine still replies in
+    # Georgian — but a parent who happens to write "I want camp for my
+    # child" should not be dropped into the UNCLEAR menu when the
+    # intent is unambiguous.
+    "camp",
+    "child",
+    "kid",
+    "summer",
+)
+
+# Adult / cultural-evening keyword stems.
+ADULT_KEYWORDS = (
+    "ღონისძიებ",  # ღონისძიება, ღონისძიების
+    "საღამო",
+    "ბილეთ",      # ბილეთი, ბილეთები
+    "კულტურ",     # კულტურა, კულტურული
+    "პოეზი",      # პოეზია, პოეზიის
+    "მუსიკ",      # მუსიკა, მუსიკალური
+    "შეხვედრ",    # შეხვედრა, შეხვედრის
+    "კლუბ",       # კლუბი, კლუბში
+)
+
+# Price-only keyword stems. A message that ONLY signals price (no camp or
+# adult signal) stays UNCLEAR — adult events also have ticket prices, so
+# price alone does not prove camp interest. Owner-confirmed (Phase 3.6A).
+PRICE_KEYWORDS = (
+    "ფასი",
+    "ღირს",
+    "რამდენი",
+    "გადახდ",     # გადახდა, გადახდის
+)
+
+
+def _is_pure_greeting(text: str) -> bool:
+    """Return True only when message is a bare greeting (no other content).
+
+    "გამარჯობა" → True       — sets UNCLEAR per Phase 3.6A owner decision
+    "გამარჯობა ბანაკი მაინტერესებს" → False (has more content; falls to
+                                              keyword classifier → PARENT)
+    """
+    cleaned = (text or "").strip().lower().strip("!.,?:;")
+    if not cleaned:
+        return False
+    return cleaned in GREETING_ONLY_KEYWORDS
+
+
+_IDENTITY_QUESTION_STEMS: tuple[str, ...] = (
+    "ბოტი ხარ", "ბოტი ხართ", "რობოტი ხარ", "რობოტი ხართ",
+    "ai ხარ", "ai ხართ", "ხელოვნურ", "მანქან", "ნამდვი",
+    "გენდერ", "ვინ ხარ", "ვინ ხართ",
+)
+
+
+def _maybe_identity_reply(message_text: str) -> str | None:
+    """Short brand-identity reply for the UNCLEAR-segment case where
+    the user asks "ბოტი ხარ?" / "AI ხარ?" / "ვინ ხართ?". The reply is
+    intentionally short and brand-grounded — it does not name a model
+    family (GPT / Claude / OpenAI / Anthropic) and re-offers the
+    routing menu so the user can pick a direction.
+
+    Returns ``None`` when the message is not an identity question, so
+    the caller falls back to the normal UNCLEAR menu.
+    """
+    text = (message_text or "").lower().strip()
+    if not text or len(text) > 80:
+        return None
+    if not any(stem in text for stem in _IDENTITY_QUESTION_STEMS):
+        return None
+    # Brand name in Georgian genitive: trailing "ა" → "ის"
+    # (e.g. "სიტყვის აკადემია" → "სიტყვის აკადემიის"). Conservative:
+    # only inflect when the brand actually ends in "ა"; otherwise
+    # keep the raw form.
+    company = getattr(settings, "COMPANY_NAME", "სიტყვის აკადემია") or ""
+    if company.endswith("ა"):
+        company_gen = company[:-1] + "ის"
+    else:
+        company_gen = company
+    return (
+        f"{company_gen} ვირტუალური ასისტენტი ვარ — ვეხმარები ბანაკისა და "
+        "ღონისძიებების შესახებ ინფორმაციით. გვითხარით, რა გაინტერესებთ — "
+        "ბავშვების საზაფხულო ბანაკი თუ ზრდასრულთა კულტურული საღამოები?"
+    )
+
+
+def _classify_segment(message_text: str) -> str:
+    """Deterministic keyword classifier — Phase 3.6A.
+
+    Returns one of: "PARENT", "ADULT", "UNCLEAR".
+
+    Rules (owner-confirmed):
+      1. Bare greeting                       → UNCLEAR
+      2. Both camp and adult keywords match  → UNCLEAR (tie-break: do not guess)
+      3. Only camp keywords match            → PARENT
+      4. Only adult keywords match           → ADULT
+      5. No camp/adult match (incl. bare price questions like "ფასი?") → UNCLEAR
+    """
+    if _is_pure_greeting(message_text):
+        return "UNCLEAR"
+
+    text = (message_text or "").lower()
+    has_camp = any(kw in text for kw in CAMP_KEYWORDS)
+    has_adult = any(kw in text for kw in ADULT_KEYWORDS)
+
+    # Tie-break: do not guess between camp and adult. Stay UNCLEAR and re-ask.
+    if has_camp and has_adult:
+        return "UNCLEAR"
+    if has_camp:
+        return "PARENT"
+    if has_adult:
+        return "ADULT"
+
+    # No camp/adult signal — includes bare price questions ("ფასი?"), vague
+    # follow-ups ("მაინტერესებს"), and anything else. Stay UNCLEAR so the
+    # user picks a direction explicitly. The next message will be re-
+    # classified on the same conversation (recovery loop in process_message).
+    return "UNCLEAR"
+
+
+# PARENT Reschedule State + Segment Override Patch (2026-06-10).
+#
+# Live bug: a conversation that had been locked to ADULT (from earlier
+# adult-event testing) stayed ADULT forever — `process_message` only
+# re-classifies the segment when it is NOT already PARENT/ADULT (see the
+# routing block). So „კონსულტაციის გადატანა მინდა" routed to the ADULT
+# engine and got answered with an adult-event date. These deterministic,
+# unambiguous PARENT/consultation/reschedule phrases must OVERRIDE a
+# sticky ADULT segment and route to the PARENT booking/reschedule flow.
+# The lead's PARENT fields (child_age / name / phone / booking) are
+# preserved — only the routing segment flips.
+_PARENT_CONSULTATION_OVERRIDE_PHRASES: tuple[str, ...] = (
+    "კონსულტაცი",            # კონსულტაცია / კონსულტაციის / კონსულტაციაზე
+    "კონსულტაციის გადატანა",
+    "გადავიტანოთ",
+    "გადატანა მინდა",
+    "ჩავნიშნეთ",
+    "ჩამწერეთ",
+    "ჩავწეროთ",
+    "ბანაკზე გეუბნები",
+    "ბანაკის კონსულტაცი",
+    "ბანაკის შესახებ",
+    "სხვა დროზე გადავიტანოთ",
+)
+
+
+def _is_parent_consultation_intent(message_text: str) -> bool:
+    """True when the message carries an unambiguous PARENT/camp
+    consultation or reschedule signal that must win over a sticky ADULT
+    segment. Deliberately narrow — only clear consultation/reschedule
+    vocabulary, so a genuine adult-event question is never hijacked."""
+    text = (message_text or "").lower()
+    if not text:
+        return False
+    return any(p in text for p in _PARENT_CONSULTATION_OVERRIDE_PHRASES)
+
+
+# General Registration-Link Intent Routing (2026-06-19).
+#
+# A registration/sign-up link/form request is answered with the CONFIGURED
+# Admin link for the clear target:
+#   * camp keyword       → segment PARENT  → engine `get_camp_info("registration")`
+#                          → camp Admin `registration_url`;
+#   * adult-event keyword/ context → segment ADULT → engine
+#                          `provide_adult_reservation_link` → event `reservation_url`;
+#   * a sticky PARENT/ADULT segment (context target) → that flow resolves it.
+# The links live in Admin/config (`get_camp_facts()` / `find_adult_event`) and
+# are NEVER invented; a missing URL degrades to the manager/contact fallback
+# inside those tools.
+#
+# The ONLY gap this helper fills: a FRESH request that asks for a
+# registration link/form but names NO target (no camp/adult keyword) and has
+# no established segment → the classifier returns UNCLEAR. Rather than guess
+# a link (or show the generic two-option menu), we ask a short,
+# registration-specific clarification. Code-level string (no prompt change).
+_REGISTRATION_LINK_MARKERS: tuple[str, ...] = (
+    "რეგისტრაცი",   # რეგისტრაცია / რეგისტრაციის / სარეგისტრაციო
+    "დარეგისტრ",    # დარეგისტრირება / დარეგისტრირდე
+    "დავრეგისტრ",   # დავრეგისტრირდე
+    "ჩაწერა",       # ჩაწერა — NOT bare „ჩაწერ" (the past participle
+                    # „ჩაწერილი" / „already enrolled" must not match)
+    "ჩავწერ",       # ჩავწერო
+    "ჩავეწერ",      # ჩავეწერო
+    "ბმულ",         # ბმული
+    "ლინკ",         # ლინკი
+    "registr",      # registration / register (English)
+    "link",         # English "link" (English "form" deliberately omitted —
+                    # it is a substring of "information")
+    "sign up",
+    "signup",
+    "sign-up",
+)
+
+# „ფორმა"/„ფორმის" as a STANDALONE token — word-boundary-aware so it never
+# fires inside „ინ-ფორმა-ცია" (information) or „ფორმატ-ი" (format). Same live
+# substring bug as parent_flow._CAMP_FORM_TOKEN_RE (2026-06-20).
+_REGISTRATION_FORM_TOKEN_RE = re.compile(r"(?<![ა-ჰ])ფორმ(?!ატ)")
+
+_REGISTRATION_LINK_CLARIFICATION = (
+    "რომელი მიმართულების რეგისტრაციის ლინკი გნებავთ — "
+    "ბანაკის თუ კონკრეტული ღონისძიების?"
+)
+
+
+def _is_registration_link_request(message_text: str) -> bool:
+    """True when the message asks for a registration / sign-up link or form.
+
+    Used ONLY in the UNCLEAR branch (no camp/adult target, no sticky
+    segment) to ask a registration-specific clarification instead of
+    guessing a link. A request that already names the camp / an event, or
+    arrives inside a PARENT/ADULT conversation, never reaches this — it is
+    routed to the camp / adult flow which returns the configured link. The
+    „ფორმა" token is word-boundary-aware so an INFORMATION request
+    („ინფორმაცია მომწერე") never matches."""
+    text = (message_text or "").lower()
+    if not text:
+        return False
+    if any(m in text for m in _REGISTRATION_LINK_MARKERS):
+        return True
+    return bool(_REGISTRATION_FORM_TOKEN_RE.search(text))
+
+
+class SafeFormatter(Formatter):
+    def get_value(self, key: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        if isinstance(key, str):
+            return kwargs.get(key, "{" + key + "}")
+        return Formatter.get_value(self, key, args, kwargs)
+
+
+@dataclass
+class ContentRepository:
+    def __post_init__(self) -> None:
+        self.knowledge = self._load(DATA_DIR / "knowledge_base.txt")
+        self.events_data = self._load(DATA_DIR / "events.txt")
+        self.formatter = SafeFormatter()
+
+    def _load(self, path) -> str:
+        return path.read_text(encoding="utf-8")
+
+    def knowledge_text(self, section: str, key: str, **values: Any) -> str:
+        return self._section_text(self.knowledge, section, **values)
+
+    def event_text(self, section: str, key: str, **values: Any) -> str:
+        return self._section_text(self.events_data, section, **values)
+
+    def _section_text(self, text: str, section: str, **values: Any) -> str:
+        section_map = {
+            "company": "COMPANY INFO",
+            "messages": "SALES SCRIPTS",
+            "routing": "SALES SCRIPTS",
+            "events": "EVENT",
+            "calendar": "EVENT",
+        }
+        marker = section_map.get(section, section).upper()
+        extracted = _extract_template_section(text, marker) or text
+        return self.formatter.format(extracted, **values).strip()
+
+
+@dataclass
+class FlowContext:
+    conversation: Conversation
+    message_text: str
+    content: ContentRepository
+
+    @property
+    def variables(self) -> dict[str, Any]:
+        return {
+            "company_name": settings.COMPANY_NAME,
+            "company_tone": _segment_tone(self.conversation.segment),
+            "company_language": settings.COMPANY_LANGUAGE,
+            "message": self.message_text,
+            "sender_id": self.conversation.sender_id,
+            "camp_price": settings.CAMP_PRICE,
+        }
+
+    def knowledge(self, section: str, key: str) -> str:
+        return self.content.knowledge_text(section, key, **self.variables)
+
+    def events(self, section: str, key: str) -> str:
+        return self.content.event_text(section, key, **self.variables)
+
+    def join_text(self, parts: list[str]) -> str:
+        return "\n\n".join(part for part in parts if part)
+
+
+content_repository = ContentRepository()
+
+
+def _mask_user_phone_in_response(conversation, response: str) -> str:
+    """Central privacy guard — replace the user's OWN stored phone with a masked
+    form (`595999733` → `595***733`) anywhere it appears in an outgoing reply,
+    tolerating spacing / dashes / a `+995` prefix. Reads `conversation.lead.phone`
+    and masks ONLY that exact number, so the manager phone (a different number)
+    and any other digits are never touched. Idempotent (an already-masked
+    `595***733` has no full digit run, so nothing matches). Never raises."""
+    try:
+        if not response:
+            return response
+        lead = getattr(conversation, "lead", None)
+        phone = (getattr(lead, "phone", "") or "").strip() if lead else ""
+        digits = re.sub(r"\D", "", phone)
+        local = digits[-9:] if len(digits) >= 9 else digits
+        if len(local) != 9:
+            return response
+        masked = f"{local[:3]}***{local[6:]}"
+        pattern = re.compile(r"(?:\+?995[\s\-]?)?" + r"[\s\-]?".join(local))
+        return pattern.sub(masked, response)
+    except Exception:  # pragma: no cover — privacy guard must never break a reply
+        return response
+
+
+def process_message(sender_id: str, message_text: str, platform: str) -> str:
+    """Public entry — wraps the real implementation with an exception
+    capture so production errors reach Sentry with a privacy-safe
+    context. The wrapper re-raises so the webhook layer's existing
+    exception handling (`logger.exception` + skip send) is preserved
+    exactly — we do NOT swallow exceptions that previously surfaced.
+    """
+    masked = sentry_service.mask_sender(sender_id)
+    logger.info(
+        "[conversation] start platform=%s sender=%s", platform, masked,
+    )
+    try:
+        response = _process_message_impl(sender_id, message_text, platform)
+        logger.info(
+            "[conversation] completed platform=%s sender=%s reply_len=%d",
+            platform, masked, len(response or ""),
+        )
+        return response
+    except Exception as exc:
+        logger.exception(
+            "[conversation] error platform=%s sender=%s error=%s",
+            platform, masked, type(exc).__name__,
+        )
+        # Sentry capture with PRIVACY-SAFE context only — no message
+        # body, no full sender id. Per the Basic Error Monitoring
+        # Patch brief.
+        sentry_service.capture_exception(
+            exc,
+            context={
+                "area": "conversation_service",
+                "platform": platform,
+                "sender": masked,
+            },
+        )
+        raise
+
+
+def _process_message_impl(sender_id: str, message_text: str, platform: str) -> str:
+    # Emergency Kill Switch (operator-controlled via AGENT_ENABLED env).
+    # Returns the safe offline message BEFORE creating a Conversation,
+    # classifying the segment, calling the LLM engine, looking up
+    # slots, booking, saving leads, notifying the manager, or capturing
+    # follow-up markers. The check lives at the very top so a single
+    # `.env` flip + restart truly disables every downstream side effect.
+    if not kill_switch.is_agent_enabled():
+        kill_switch.log_disabled_skip(
+            context="dm", sender_id=sender_id, extra=f"platform={platform}",
+        )
+        return kill_switch.AGENT_DISABLED_MESSAGE
+
+    conversation = _get_or_create_conversation(sender_id, platform)
+    conversation.last_activity = datetime.utcnow()
+    conversation.history.append({"role": "user", "content": message_text})
+
+    # P3-C PATCH 3 — capture pre-response follow-up markers based on
+    # what the user *just* said. These are data-only flags for a future
+    # scheduler; no message is sent from here.
+    _record_pre_response_followup_markers(conversation, message_text)
+
+    # Re-classify the segment whenever it isn't already locked to PARENT or
+    # ADULT. This makes UNCLEAR a RECOVERABLE state: a bare greeting routes
+    # to UNCLEAR on turn 1, then a follow-up like "ბანაკი მაინტერესებს" on
+    # turn 2 upgrades the segment to PARENT and enters the camp flow,
+    # without losing conversation history.
+    #
+    # Booked-state guard: a conversation with ``state == "DONE"`` and a
+    # booked lead is already past the routing decision — any further
+    # message (e.g. "რა ხდება შემდეგ?") must stay in the PARENT flow
+    # and not be re-routed through the UNCLEAR menu just because it
+    # lacks a camp keyword. Mirror the same logic when the lead has
+    # already disclosed name+phone, since that conclusively places the
+    # parent in the active PARENT flow.
+    lead = conversation.lead
+    if conversation.segment not in {"PARENT", "ADULT"}:
+        booked = bool(lead and lead.calendly_booked)
+        in_flow_state = conversation.state not in {"", "START"}
+        if booked or (in_flow_state and lead is not None):
+            conversation.segment = "PARENT"
+        else:
+            conversation.segment = _classify_segment(message_text)
+
+    # PARENT Reschedule State + Segment Override Patch (2026-06-10).
+    # A sticky ADULT segment (from earlier adult-event testing) must NOT
+    # swallow an explicit camp-consultation / reschedule message. Flip to
+    # PARENT deterministically — the lead's PARENT fields are preserved,
+    # so the booking/reschedule flow continues with the known child age /
+    # name / phone instead of re-running adult-event handling.
+    if (
+        conversation.segment == "ADULT"
+        and _is_parent_consultation_intent(message_text)
+    ):
+        logger.info(
+            "[routing] consultation/reschedule intent overrides ADULT → "
+            "PARENT (sender=%s)",
+            sentry_service.mask_sender(sender_id),
+        )
+        conversation.segment = "PARENT"
+
+    if conversation.segment == "UNCLEAR":
+        # Identity-question short-circuit: when the user asks "ბოტი
+        # ხარ?" / "AI ხარ?" while still in the unclear-segment menu,
+        # answer briefly with the brand identity instead of just
+        # re-sending the routing menu. Stays on-policy (no engine
+        # mention, no model name).
+        identity_reply = _maybe_identity_reply(message_text)
+        if identity_reply is not None:
+            response = identity_reply
+        elif _is_registration_link_request(message_text):
+            # Registration/link request with NO clear target (UNCLEAR
+            # segment) → ask a registration-specific clarification; never
+            # guess or invent a link. Once the user names camp / an event,
+            # the recovery loop re-classifies and the camp / adult flow
+            # returns the configured Admin link.
+            response = _REGISTRATION_LINK_CLARIFICATION
+        else:
+            response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
+    elif conversation.segment == "PARENT":
+        response = parent_flow.handle(conversation, message_text)
+    elif conversation.segment == "ADULT":
+        response = adult_flow.handle(conversation, message_text)
+    else:
+        response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
+
+    # Central PII chokepoint (Response Planner Hardening, 2026-06-23) — the
+    # user's OWN stored phone must NEVER be echoed back in clear over an
+    # unauthenticated channel. Masks `lead.phone` (any spacing / +995 prefix)
+    # → „595***733" on EVERY outgoing reply (parent / adult / unclear), so even
+    # a typo'd state-recall question that slips past the masked deterministic
+    # handler and reaches the LLM cannot leak the full number. The manager phone
+    # (a different, intentionally-disclosed number) is untouched.
+    response = _mask_user_phone_in_response(conversation, response)
+
+    conversation.history.append({"role": "assistant", "content": response})
+    # P3-C PATCH 3 — capture post-response follow-up markers. Knowing
+    # when the bot last spoke lets the scheduler decide whether the
+    # 24h / 3d / 7d window has elapsed.
+    conversation.last_bot_message_at = datetime.utcnow().isoformat()
+    _record_post_response_followup_markers(conversation)
+
+    # P3-B — write-through to Redis so a server restart can restore
+    # state. TTL refreshes on every save (sliding 7-day default).
+    _save_conversation_to_redis(conversation)
+
+    return response
+
+
+# -- P3-C PATCH 3 — follow-up marker capture ------------------------------
+
+
+_USER_DECLINE_PHRASES: tuple[str, ...] = (
+    "არ მინდა", "არა მადლობა", "უარს ვამბობ", "გავაუქმოთ", "არ მსურს",
+)
+_USER_WILL_THINK_PHRASES: tuple[str, ...] = (
+    "დავფიქრდები", "მერე", "მოგვიანებით", "შემდეგ", "გადავწყვეტ",
+)
+_USER_NO_MORE_PHRASES: tuple[str, ...] = (
+    "აღარ მომწეროთ", "ნუ მომწერთ", "მეტი არ მინდა",
+)
+_PRICE_INTEREST_KEYWORDS: tuple[str, ...] = (
+    "ფასი", "ღირს", "ღირებულება", "რამდენი", "გადახდა",
+)
+_AGE_PROVIDED_KEYWORDS: tuple[str, ...] = (
+    "წლის", "წლისაა", "წლისა",
+)
+
+
+def _record_pre_response_followup_markers(
+    conversation, message_text: str,
+) -> None:
+    """Detect lightweight signals on the inbound user message and stash
+    them on the Conversation for a future scheduler. Never raises.
+
+    Follow-up Test Mode Patch (2026-06-06): a single masked-sender log
+    line surfaces blocked-reason transitions so an operator running a
+    live follow-up test can see at a glance why a conversation became
+    ineligible. Other marker writes (stopped_after / interest) stay
+    quiet to keep the per-turn log volume low.
+    """
+    try:
+        from app.services import sentry_service
+    except Exception:  # pragma: no cover — defensive import
+        sentry_service = None  # type: ignore[assignment]
+
+    def _log_blocked(reason: str) -> None:
+        if sentry_service is None:
+            return
+        try:
+            logger.info(
+                "[FOLLOWUP] marker_skipped sender=%s reason=%s",
+                sentry_service.mask_sender(
+                    getattr(conversation, "sender_id", "") or "",
+                ),
+                reason,
+            )
+        except Exception:
+            pass
+
+    try:
+        text = (message_text or "").lower().strip()
+        if not text:
+            return
+
+        # Explicit decline — strongest signal.
+        if any(p in text for p in _USER_NO_MORE_PHRASES):
+            conversation.followup_blocked_reason = "asked_no_more_messages"
+            _log_blocked("asked_no_more_messages")
+            return
+        if any(p in text for p in _USER_DECLINE_PHRASES):
+            conversation.followup_blocked_reason = "declined"
+            conversation.stopped_after = "decline"
+            _log_blocked("declined")
+            return
+
+        # "Will think about it" — supportive close, follow-up later.
+        if any(p in text for p in _USER_WILL_THINK_PHRASES):
+            conversation.stopped_after = "will_think"
+            return
+
+        # Price interest — meaningful interest signal.
+        if any(kw in text for kw in _PRICE_INTEREST_KEYWORDS):
+            conversation.last_meaningful_interest = "price"
+            conversation.stopped_after = "price"
+            return
+
+        # Age provided — record so the scheduler picks the age scenario.
+        if any(kw in text for kw in _AGE_PROVIDED_KEYWORDS):
+            conversation.stopped_after = "age"
+            return
+    except Exception:
+        # Marker capture must never break the message pipeline.
+        return
+
+
+def _record_post_response_followup_markers(conversation) -> None:
+    """After the bot responds, mark booking / manager-handoff completion
+    so the scheduler skips this lead in the future."""
+    try:
+        from app.services import sentry_service
+    except Exception:  # pragma: no cover — defensive
+        sentry_service = None  # type: ignore[assignment]
+
+    def _log_blocked(reason: str) -> None:
+        if sentry_service is None:
+            return
+        try:
+            logger.info(
+                "[FOLLOWUP] marker_skipped sender=%s reason=%s",
+                sentry_service.mask_sender(
+                    getattr(conversation, "sender_id", "") or "",
+                ),
+                reason,
+            )
+        except Exception:
+            pass
+
+    try:
+        lead = conversation.lead
+        if lead is None:
+            return
+        prior_reason = getattr(conversation, "followup_blocked_reason", "") or ""
+        if getattr(lead, "calendly_booked", False):
+            conversation.followup_blocked_reason = "booked"
+            if prior_reason != "booked":
+                _log_blocked("booked")
+            return
+        # Manager-handoff completion is tracked via the executor's
+        # module-level dict. Read it lazily to avoid a circular import.
+        try:
+            from app.agent.tools.parent_tool_executor import (
+                manager_notified_for_conversation,
+            )
+            if manager_notified_for_conversation.get(conversation.sender_id):
+                # Only block follow-ups if the user has not been declined;
+                # decline takes priority.
+                if conversation.followup_blocked_reason not in {
+                    "declined", "asked_no_more_messages",
+                }:
+                    conversation.followup_blocked_reason = "manager_handoff_completed"
+                    if prior_reason != "manager_handoff_completed":
+                        _log_blocked("manager_handoff_completed")
+        except Exception:
+            pass
+    except Exception:
+        return
+
+
+def get_all_conversations_snapshot() -> list[Conversation]:
+    """Return a copy of every active in-memory Conversation.
+
+    Used by the follow-up scheduler to scan eligible parents without
+    holding a reference to the mutable module-level ``conversations``
+    dict. The returned list is a fresh container — appending / popping
+    from it does not affect the live store — but the Conversation
+    objects themselves are still the live ones (the scheduler
+    legitimately needs to read/update their followup_stage and
+    write-through to Redis after a send).
+
+    Limitation: this is the in-memory snapshot only. A one-off CLI
+    invocation (`python -c "from app.services import followup_service;
+    followup_service.check_and_send_followups()"`) starts with an
+    empty in-memory dict and would silently skip every conversation
+    the live server is holding. Use ``hydrate_from_redis()`` BEFORE
+    calling the scheduler from a one-off process — both the live
+    server and the legacy in-memory tests work unchanged.
+    """
+    return list(conversations.values())
+
+
+def hydrate_from_redis() -> int:
+    """Follow-up Live-Test Hydrate Patch (2026-06-06).
+
+    Load every Redis-persisted Conversation into the in-memory
+    ``conversations`` dict. Idempotent — a sender that already lives
+    in memory is left untouched (the live process is the source of
+    truth for fresh state).
+
+    Returns the number of conversations loaded. Safe no-op when Redis
+    is disabled / unreachable. Never raises.
+
+    Use from a one-off CLI process before invoking
+    ``followup_service.check_and_send_followups()`` so the scheduler
+    sees the same conversations the live server is holding.
+    """
+    if not redis_state_service.is_enabled():
+        logger.info("[FOLLOWUP] hydrate skipped — redis disabled/unavailable")
+        return 0
+    try:
+        keys = redis_state_service.scan_keys("conversation:*")
+    except Exception as exc:
+        logger.warning("[FOLLOWUP] hydrate scan failed: %s", exc)
+        return 0
+
+    loaded = 0
+    skipped_existing = 0
+    skipped_invalid = 0
+    for key in keys:
+        # Key shape: ``conversation:{platform}:{sender_id}``. We need
+        # the sender_id to seed the in-memory dict.
+        parts = key.split(":", 2)
+        if len(parts) != 3:
+            skipped_invalid += 1
+            continue
+        _, _, sender_id = parts
+        if not sender_id:
+            skipped_invalid += 1
+            continue
+        if sender_id in conversations:
+            skipped_existing += 1
+            continue
+        try:
+            payload = redis_state_service.get_json(key)
+        except Exception as exc:
+            logger.warning(
+                "[FOLLOWUP] hydrate read key=%s failed: %s", key, exc,
+            )
+            skipped_invalid += 1
+            continue
+        if not payload:
+            skipped_invalid += 1
+            continue
+        try:
+            conv = Conversation.from_dict(payload)
+        except Exception as exc:
+            logger.warning(
+                "[FOLLOWUP] hydrate deserialise key=%s failed: %s",
+                key, exc,
+            )
+            skipped_invalid += 1
+            continue
+        conversations[sender_id] = conv
+        loaded += 1
+
+    logger.info(
+        "[FOLLOWUP] hydrate complete keys=%d loaded=%d skipped_existing=%d "
+        "skipped_invalid=%d",
+        len(keys), loaded, skipped_existing, skipped_invalid,
+    )
+    return loaded
+
+
+def _get_or_create_conversation(sender_id: str, platform: str) -> Conversation:
+    if sender_id in conversations:
+        return conversations[sender_id]
+
+    # In-memory miss — try Redis restore before creating a fresh one.
+    # This is the P3-B restart-safety path: server restart wipes the
+    # in-memory dict but Redis still holds the last-known Conversation.
+    restored = _load_conversation_from_redis(sender_id, platform)
+    if restored is not None:
+        logger.info(
+            "[redis] conversation restored sender=%s platform=%s state=%s segment=%s "
+            "pending_booking=%s",
+            sender_id, platform, restored.state, restored.segment,
+            bool(restored.pending_booking),
+        )
+        conversations[sender_id] = restored
+        return restored
+
+    conversations[sender_id] = Conversation(sender_id=sender_id, platform=platform)
+    return conversations[sender_id]
+
+
+def reset_conversation_for_sender(sender_id: str) -> bool:
+    """P3-C PATCH 7 — clear ALL per-sender state for QA / tests.
+
+    Returns True when something was actually cleared.
+
+    Wipes the conversation entry plus every per-sender entry in the
+    in-memory module-level dicts (slot caches, retry counters,
+    manager-notified flag, tool-success flag, adult selected event,
+    message-buffer queues). Intended for manual QA where multiple
+    scenarios are tested back-to-back from the same sender_id without a
+    process restart; production traffic never calls this.
+
+    Not a magic teardown — it does NOT delete Calendar events or Sheets
+    rows. Use a fresh sender_id between QA scenarios when you want a
+    truly clean lead in the CRM.
+    """
+    cleared = False
+    if sender_id in conversations:
+        conversations.pop(sender_id, None)
+        cleared = True
+
+    try:
+        from app.flows import parent_flow, parent_turn_router
+        for d in (
+            parent_flow.available_slots,
+            parent_flow.ask_name_retries,
+            parent_flow.invalid_phone_retries,
+            parent_flow.slots_shown_for_state,
+            parent_turn_router.manager_offer_shown,
+        ):
+            if sender_id in d:
+                d.pop(sender_id, None)
+                cleared = True
+    except Exception:
+        pass
+
+    try:
+        from app.flows import adult_flow
+        if sender_id in adult_flow.selected_events:
+            adult_flow.selected_events.pop(sender_id, None)
+            cleared = True
+    except Exception:
+        pass
+
+    try:
+        from app.agent.tools import parent_tool_executor
+        for d in (
+            parent_tool_executor.manager_notified_for_conversation,
+            parent_tool_executor._last_slots_by_sender,
+            parent_tool_executor.book_consultation_success_for_conversation,
+        ):
+            if sender_id in d:
+                d.pop(sender_id, None)
+                cleared = True
+    except Exception:
+        pass
+
+    try:
+        from app.services import message_buffer
+        for attr in (
+            "_pending_messages",
+            "_pending_tasks",
+            "_buffer_started_at",
+            "_locks",
+        ):
+            d = getattr(message_buffer, attr, None)
+            if isinstance(d, dict) and sender_id in d:
+                d.pop(sender_id, None)
+                cleared = True
+    except Exception:
+        pass
+
+    return cleared
+
+
+def _flow_context(conversation: Conversation, message_text: str) -> FlowContext:
+    return FlowContext(
+        conversation=conversation,
+        message_text=message_text,
+        content=content_repository,
+    )
+
+
+def _segment_tone(segment: str) -> str:
+    if segment == "PARENT":
+        return settings.COMPANY_TONE_PARENTS
+    if segment == "ADULT":
+        return settings.COMPANY_TONE_ADULTS
+    return ""
+
+
+def _extract_template_section(text: str, marker: str) -> str:
+    lines = text.splitlines()
+    collected = []
+    in_section = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("===") and stripped.endswith("==="):
+            title = stripped.strip("= ").upper()
+            if in_section:
+                break
+            in_section = marker in title
+            continue
+        if in_section:
+            collected.append(line)
+
+    return "\n".join(collected).strip()

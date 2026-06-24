@@ -1,0 +1,160 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<h2>{{ "New program" if is_new else "Edit: " ~ section.id }}</h2>
+
+{% if not is_new and section.id == "adult_events" %}
+<div style="background:#e3f2fd;border:1px solid #90caf9;padding:12px 14px;margin:0 0 16px;border-radius:6px;">
+  <strong>ზრდასრულთა ღონისძიებების მართვა</strong> — სექციის მეტადატის გვერდი (hashtags, age_min, ნაგულისხმევი template) იცვლება ქვემოთ.
+  ცალკეული ღონისძიებების სიის სამართავად (დამატება / რედაქტირება / დეაქტივაცია / აქტივაცია):
+  <a class="button" href="/admin/programs/adult_events/events" style="margin-left:8px;">ღონისძიებების მართვა</a>
+</div>
+{% endif %}
+
+{% if errors %}
+  <div class="error">
+    <strong>Could not save:</strong>
+    <ul>
+      {% for err in errors %}<li>{{ err }}</li>{% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+<form method="post" action="{% if is_new %}/admin/programs/new{% else %}/admin/programs/{{ section.id }}{% endif %}">
+  {% if is_new %}
+    <label>ID (slug, e.g. summer_camp)
+      <input type="text" name="id" value="{{ section.id or '' }}" required>
+    </label>
+  {% else %}
+    <p class="status-line">ID: <strong>{{ section.id }}</strong> (immutable)</p>
+  {% endif %}
+
+  <label>Name (Georgian display)
+    <input type="text" name="name" value="{{ section.name or '' }}" required>
+  </label>
+
+  <label>Type (camp / kids_program / adult_events / …)
+    <input type="text" name="type" value="{{ section.type or '' }}" required>
+  </label>
+
+  <label>Status
+    <select name="status">
+      {% for s in valid_statuses %}
+        <option value="{{ s }}"{% if section.status == s %} selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Hashtags (comma-separated, "#" optional)
+    <input type="text" name="hashtags" value="{{ (section.hashtags or []) | join(', ') }}">
+  </label>
+
+  <div class="grid">
+    <label>Min age
+      <input type="number" name="age_min" value="{{ section.age_min if section.age_min is not none else '' }}">
+    </label>
+    <label>Max age
+      <input type="number" name="age_max" value="{{ section.age_max if section.age_max is not none else '' }}">
+    </label>
+  </div>
+
+  <label>Location (nominative Georgian, e.g. "ამბასადორი კაჭრეთი")
+    <input type="text" name="location" value="{{ section.location or '' }}">
+  </label>
+
+  <label>Duration text
+    <input type="text" name="duration_text" value="{{ section.duration_text or '' }}">
+  </label>
+
+  <label>Price text (free-form, e.g. "2150 ლარი")
+    <input type="text" name="price_text" value="{{ section.price_text or '' }}">
+    {% if section.price_gel is not none and section.price_gel != '' %}
+      <small style="color:#555">Normalized price_gel: <strong>{{ section.price_gel }}</strong> (auto-derived on save)</small>
+    {% endif %}
+  </label>
+
+  <label>Payment terms
+    <input type="text" name="payment_terms" value="{{ section.payment_terms or '' }}">
+  </label>
+
+  {# --- Streams / nakadebi --------------------------------------------- #}
+  <label>Streams / ნაკადები (one per line: <code>name | dates_text | status</code>)
+    <textarea name="streams_text" rows="4" placeholder="I ნაკადი | 23-29 ივნისი | active">
+{%- if section._form_streams_text is defined -%}
+{{ section._form_streams_text }}
+{%- else -%}
+{%- for s in section.streams or [] -%}
+{{ s.name or '' }} | {{ s.dates_text or '' }} | {{ s.status or 'active' }}
+{% endfor -%}
+{%- endif -%}
+</textarea>
+  </label>
+
+  {# --- Included items ------------------------------------------------- #}
+  <label>Included items (one per line)
+    <textarea name="included_items_text" rows="4">
+{%- if section._form_included_items_text is defined -%}
+{{ section._form_included_items_text }}
+{%- else -%}
+{%- for item in section.included_items or section.includes or [] -%}
+{{ item }}
+{% endfor -%}
+{%- endif -%}
+</textarea>
+  </label>
+
+  {# --- Discounts ------------------------------------------------------ #}
+  <label>Discounts (one per line)
+    <textarea name="discounts_text" rows="3">
+{%- if section._form_discounts_text is defined -%}
+{{ section._form_discounts_text }}
+{%- else -%}
+{%- for d in section.discounts or [] -%}
+{%- if d is mapping -%}{{ d.percent }}% {{ d.name }}{%- else -%}{{ d }}{%- endif %}
+{% endfor -%}
+{%- endif -%}
+</textarea>
+  </label>
+
+  <label>Short description
+    <textarea name="description_short">{{ section.description_short or '' }}</textarea>
+  </label>
+
+  <label>Full description
+    <textarea name="description_full">{{ section.description_full or '' }}</textarea>
+  </label>
+
+  <label>Registration URL
+    <input type="url" name="registration_url" value="{{ section.registration_url or '' }}">
+  </label>
+
+  <label>Manager contact (phone)
+    <input type="text" name="manager_contact" value="{{ section.manager_contact or '' }}">
+  </label>
+
+  <label>Auto-DM template ID
+    <select name="auto_dm_template_id">
+      <option value="">(none)</option>
+      {% for tid in templates %}
+        <option value="{{ tid }}"{% if section.auto_dm_template_id == tid %} selected{% endif %}>{{ tid }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Public-reply template ID
+    <select name="public_reply_template_id">
+      {% for tid in templates %}
+        <option value="{{ tid }}"{% if section.public_reply_template_id == tid %} selected{% endif %}>{{ tid }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>CTA text (one Georgian sentence)
+    <input type="text" name="cta_text" value="{{ section.cta_text or '' }}">
+  </label>
+
+  <p style="margin-top:24px">
+    <button type="submit" class="button">Save</button>
+    <a class="button secondary" href="/admin/programs">Cancel</a>
+  </p>
+</form>
+{% endblock %}
