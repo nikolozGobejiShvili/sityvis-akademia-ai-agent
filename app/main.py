@@ -41,6 +41,13 @@ async def startup():
     print(f"⚙️ USE_LLM_TURN_ANALYZER={settings.USE_LLM_TURN_ANALYZER}")
     print(f"⚙️ USE_LLM_COMPOSER={settings.USE_LLM_COMPOSER}")
     print(f"⚙️ USE_PARENT_LLM_ENGINE={settings.USE_PARENT_LLM_ENGINE}")
+    # Conversation Planner (Phase 3) rollout visibility — confirm at boot whether
+    # the planner is computing (shadow) and whether it is authoritative.
+    print(f"⚙️ USE_CONVERSATION_PLANNER={settings.USE_CONVERSATION_PLANNER}")
+    print(
+        "⚙️ CONVERSATION_PLANNER_AUTHORITATIVE="
+        f"{getattr(settings, 'CONVERSATION_PLANNER_AUTHORITATIVE', False)}"
+    )
     print(f"🔍 Sentry {'enabled' if settings.SENTRY_DSN else 'disabled'}")
 
     # Instagram Webhook Signature Patch (2026-06-08): boot-time
