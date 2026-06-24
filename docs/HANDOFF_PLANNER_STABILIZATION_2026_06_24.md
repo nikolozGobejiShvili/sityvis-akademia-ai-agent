@@ -1,11 +1,40 @@
-# HANDOFF — Planner-First Stabilization Patch (Classes 1–6), 2026-06-24
+# HANDOFF — Planner-First Stabilization + Consultant-Quality Policy, 2026-06-24
 
 > Continuation handoff. Implements the Class 1–6 fix plan from
-> `docs/HANDOFF_LIVE_PLANNER_TRACE_2026_06_24.md`. All new behaviour is behind the
-> existing planner flags (`USE_CONVERSATION_PLANNER` +
-> `CONVERSATION_PLANNER_AUTHORITATIVE`) plus the new `USE_SLIM_PROMPTS`. Default
-> OFF + pinned OFF in tests → the 2992-test baseline is byte-identical.
-> **Production is still NOT GREEN until the live controlled smoke passes.**
+> `docs/HANDOFF_LIVE_PLANNER_TRACE_2026_06_24.md`, then the adult generic-discovery
+> fix, then the consultant-quality conversation policy (Stage 3). All new
+> behaviour is behind the existing planner flags (`USE_CONVERSATION_PLANNER` +
+> `CONVERSATION_PLANNER_AUTHORITATIVE`) plus `USE_SLIM_PROMPTS`. Default OFF +
+> pinned OFF in tests → the planner-off suite is byte-identical.
+> **Production is still NOT GREEN until the supervised staging smoke passes.**
+
+## CURRENT STATE (READ FIRST after /clear)
+* **HEAD = `70b2d8b`** (branch `master`). Commit timeline since the trace-only
+  baseline `e67b1ab`:
+  * `0897e08` — Planner-First Stabilization (Classes 1–6) — see "What changed".
+  * `5aba5f3` — Adult generic-discovery vs named-event fix — see that section.
+  * `70b2d8b` — Consultant-quality conversation policy (Stage 3) — see that section.
+* **Gates at `70b2d8b`:** `pytest tests/` **3031 passed / 0 failed / 28 skipped**
+  (run against the COMMITTED `sections.yaml`); corpus **9/9**; property **28/28**
+  (`RUN_PROPERTY_TESTS=1`); `test_agent.py` PASS. Controlled real-LLM smoke
+  (externals blocked) — all critical turns correct.
+* **Operator `.env` has all four flags LIVE:** `USE_CONVERSATION_PLANNER=true`,
+  `CONVERSATION_PLANNER_AUTHORITATIVE=true`, `CONVERSATION_TRACE_DEBUG=true`,
+  `USE_SLIM_PROMPTS=true`. Settings are `@lru_cache`d → a flag change needs a
+  FULL restart (not `--reload`).
+* **Uncommitted working tree:** ONLY `data/admin_config/sections.yaml` — an
+  operator admin-panel edit (active adult event = „maroon 5 კონცერტი", currently
+  date-filtered → 0 active). Intentionally not committed. Committed HEAD still
+  carries the test data (fromula 1).
+* **New modules:** `app/reasoning/selected_state.py`, `app/reasoning/response_policy.py`,
+  `app/agent/prompts/{parent_core,adult_core}.md`. New tests:
+  `tests/test_planner_stabilization_2026_06_24.py`,
+  `tests/test_adult_generic_discovery_2026_06_24.py`,
+  `tests/test_conversation_policy_2026_06_24.py`. Offline smoke harness:
+  `tools/trace_planner_smoke_2026_06_24.py`.
+* **NEXT:** supervised STAGING smoke (full restart + `FLUSHALL`) → seed a real
+  future active adult event → only then a controlled Meta test. Do NOT connect
+  the client's real Page first.
 
 ## What changed (by Class)
 
