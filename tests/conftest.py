@@ -69,6 +69,7 @@ def _force_parent_llm_engine_off(monkeypatch):
         config_module.settings,
         USE_PARENT_LLM_ENGINE=False,
         USE_REASONING_LAYER=False,
+        USE_CONVERSATION_PLANNER=False,
     )
     monkeypatch.setattr(parent_flow, "settings", swapped)
     yield

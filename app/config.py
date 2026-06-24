@@ -322,6 +322,10 @@ class Settings:
     # (decline + topic-switch). NO LLM call, no side effects. Pinned OFF in
     # tests/conftest.py exactly like USE_PARENT_LLM_ENGINE.
     USE_REASONING_LAYER: bool = False
+    # Conversation Planner (Reasoning Layer Phase 3, 2026-06-24) — one unified,
+    # DETERMINISTIC, metadata-only planning layer. Default OFF; Stage 1 wires it
+    # in SHADOW (log-only) mode. Pinned OFF in tests/conftest.py.
+    USE_CONVERSATION_PLANNER: bool = False
     # ADULT LLM Engine — mirrors P3-C SAFE for the adult cultural-events
     # flow. When False (default), adult_flow.handle() runs the legacy
     # deterministic state machine + PATCH 7 global intent guard exactly
@@ -500,6 +504,7 @@ class Settings:
             USE_LLM_TURN_ANALYZER=_parse_bool_optional("USE_LLM_TURN_ANALYZER", False),
             USE_PARENT_LLM_ENGINE=_parse_bool_optional("USE_PARENT_LLM_ENGINE", False),
             USE_REASONING_LAYER=_parse_bool_optional("USE_REASONING_LAYER", False),
+            USE_CONVERSATION_PLANNER=_parse_bool_optional("USE_CONVERSATION_PLANNER", False),
             USE_ADULT_LLM_ENGINE=_parse_bool_optional("USE_ADULT_LLM_ENGINE", True),
             ENABLE_PUBLIC_COMMENT_REPLY=_parse_bool_optional(
                 "ENABLE_PUBLIC_COMMENT_REPLY", False,

@@ -223,6 +223,10 @@ def handle(conversation: Conversation, message: str) -> str:
     # effects — the handlers below act on its routing metadata.
     gateway = _turn_intent_gateway(message)
 
+    # Conversation Planner (Phase 3, 2026-06-24) — SHADOW only (default OFF):
+    # observe the unified plan against live turns without changing routing.
+    _maybe_plan_turn(conversation, message)
+
     # Response-Planner Hardening (finding D) — a PURE „talk to me like a human /
     # without scripted text" request gets a short natural ack, not a meta
     # self-description. Defers when the turn also carries a real question.
@@ -3144,6 +3148,31 @@ def _turn_intent_gateway(message: str):
         from app.reasoning import reasoning_layer
         return reasoning_layer.analyze_turn_intent(message)
     except Exception:  # pragma: no cover — defensive; analyzer never raises
+        return None
+
+
+def _maybe_plan_turn(conversation, message: str):
+    """Conversation Planner (Reasoning Layer Phase 3) — SHADOW mode (Stage 1).
+
+    Behind the default-OFF flag ``USE_CONVERSATION_PLANNER``. When ON it computes
+    the unified `TurnPlan` and LOGS it (metadata-only) WITHOUT changing any
+    routing/answer — so the planner can be observed against live turns before it
+    is made authoritative (Stage 2). Default OFF + pinned OFF in conftest →
+    byte-identical behaviour. Never raises."""
+    if not getattr(settings, "USE_CONVERSATION_PLANNER", False):
+        return None
+    try:
+        from app.reasoning import conversation_planner
+        plan = conversation_planner.plan_turn(message, conversation)
+        logger.info(
+            "[planner][shadow] intent=%s topic=%s policy=%s clear=%s "
+            "use_booking=%s ask_clarify=%s reason=%s",
+            plan.user_current_intent, plan.active_topic, plan.answer_policy,
+            plan.state_to_clear, plan.should_use_confirmed_booking,
+            plan.should_ask_clarifying_question, plan.reason,
+        )
+        return plan
+    except Exception:  # pragma: no cover — shadow planner must never break a reply
         return None
 
 
