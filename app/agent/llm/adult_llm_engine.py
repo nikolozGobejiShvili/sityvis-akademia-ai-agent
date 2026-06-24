@@ -526,6 +526,13 @@ _ADULT_RELATIVE_PATTERNS: tuple[tuple[str, str], ...] = (
 # Optional age inline, e.g. „ჩემი 14 წლის დისთვის".
 _RELATIVE_AGE_HINT_RE = re.compile(r"(\d{1,2})\s*წლის")
 
+# The user's OWN age, e.g. „მე ვარ 30 წლის" / „ჩემი ასაკია 30 წლის". An age
+# bound to a self-reference is the USER'S adult age, NOT the relative/child's —
+# so a mixed „ჩემთვის და ჩემი შვილისთვის ... მე ვარ 30 წლის" must not store 30
+# as adult_target_age (2026-06-24 surgical fix). „ჩემი 14 წლის დისთვის" has no
+# self-age marker, so the relative age is still captured normally.
+_SELF_OWN_AGE_RE = re.compile(r"(?:მე\s+ვარ|ჩემი\s+ასაკი(?:ა)?)\s*(\d{1,2})\s*წლ")
+
 # Relation labels that mean „the user's own child" — the ONLY relations for
 # which a known PARENT `child_age` may be reused as `adult_target_age`.
 _ADULT_CHILD_RELATIONS: frozenset[str] = frozenset({"შვილი", "ბავშვი"})
@@ -612,11 +619,42 @@ def _maybe_capture_adult_target(user_message: str, lead: Lead) -> None:
             detected_relation,
         )
 
+    # Mixed self+child intent fix (2026-06-24): if the message states the
+    # USER'S OWN age („მე ვარ 30 წლის"), that age belongs to the user — record
+    # it as `adult_age` (kept separate from child_age) and NEVER attribute it to
+    # the relative target below. Pure „ჩემი 14 წლის დისთვის" has no self-age
+    # marker, so `self_own_age` stays None and the relative age is captured as
+    # before.
+    self_own_age: str | None = None
+    m_self = _SELF_OWN_AGE_RE.search(text)
+    if m_self:
+        try:
+            n_self = int(m_self.group(1))
+        except (TypeError, ValueError):
+            n_self = -1
+        if 0 <= n_self <= 120:
+            self_own_age = str(n_self)
+            if (
+                hasattr(lead, "adult_age")
+                and not (getattr(lead, "adult_age", "") or "").strip()
+            ):
+                lead.adult_age = self_own_age
+                logger.info(
+                    "[adult_llm_engine] captured own adult_age=%s "
+                    "(self+relative mixed intent)", self_own_age,
+                )
+
     if not existing_age:
-        m = _RELATIVE_AGE_HINT_RE.search(user_message or "")
-        if m:
+        target_age: str | None = None
+        for m in _RELATIVE_AGE_HINT_RE.finditer(user_message or ""):
+            # Skip an age that is the user's OWN stated age, not the relative's.
+            if self_own_age is not None and m.group(1) == self_own_age:
+                continue
+            target_age = m.group(1)
+            break
+        if target_age is not None:
             try:
-                age_int = int(m.group(1))
+                age_int = int(target_age)
             except (TypeError, ValueError):
                 age_int = -1
             if 0 <= age_int <= 120 and hasattr(lead, "adult_target_age"):

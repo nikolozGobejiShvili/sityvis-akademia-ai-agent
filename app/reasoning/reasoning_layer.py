@@ -476,12 +476,26 @@ def _analyze_turn(message: str, conversation) -> TurnIntent:
     # A real date („29 აგვისტოს") or a genuine event name keeps it firing.
     # adult-self = the user is asking for THEMSELVES (self-reference or an
     # adult age) and NOT for a child → the for-whom clarifier is redundant.
+    # Mixed self+child intent (2026-06-24 surgical narrowing): the original
+    # `not has_child` made is_adult_self False whenever a child cue co-occurred,
+    # so „ჩემთვის და ჩემი შვილისთვის ... მე ვარ 30 წლის" lost the adult-self
+    # signal. Relax to `(has_self or not has_child)` so an EXPLICIT self-ref
+    # („ჩემთვის"/„მე მინდა") qualifies even alongside a child cue, while a pure
+    # child message (no self-ref) still yields is_adult_self=False (unchanged).
     is_adult_self = bool(
         (has_self or (age is not None and age >= 18))
-        and not has_child
+        and (has_self or not has_child)
         and (is_adult_event or has_self or (age is not None and age >= 18))
     )
 
+    # Surgical narrowing (2026-06-24): the age-without-date clause was overbroad
+    # — it blocked a genuine ADULT-EVENT question merely because it mentioned a
+    # child age (e.g. „ზრდასრულთა კულტურული ღონისძიებები 7 წლის ბავშვებისთვის
+    # არის?"). Exempt topic=="adult_event" so such questions reach event
+    # resolution. The age-as-DATE protection is preserved for every other topic
+    # (camp / other), and the day-extractor `_extract_event_day_reference` keeps
+    # its own independent age guard, so the original „29 წლის → day 29" bug
+    # cannot return.
     block_event_inquiry = bool(
         is_decline
         or ask_manager_phone
@@ -489,7 +503,7 @@ def _analyze_turn(message: str, conversation) -> TurnIntent:
         or is_off_topic
         or is_insult
         or topic in ("sunday_school", "registration")
-        or (is_age_statement and date_text is None)
+        or (is_age_statement and date_text is None and topic != "adult_event")
     )
     # Sticky adult-event context clears on decline or a clear switch to a
     # different domain (camp / sunday-school / manager / registration). Uses the

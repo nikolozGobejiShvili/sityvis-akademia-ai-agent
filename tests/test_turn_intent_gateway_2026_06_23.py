@@ -44,9 +44,14 @@ def _conv_with_event_listing() -> Conversation:
 def test_age_statement_is_age_not_date():
     t = analyze_turn_intent("მე ვარ 29 წლის და მინდა ღონისძიებებს გავეცნო")
     assert t.age == 29
-    assert t.date_text is None
+    assert t.date_text is None                     # the age-vs-date guarantee
     assert t.is_age_statement is True
-    assert t.block_event_inquiry is True          # never a day/event-name lookup
+    # Surgical narrowing (2026-06-24): an ADULT-EVENT age statement is NO LONGER
+    # blocked just because it states an age — the age-as-date protection now
+    # lives in date_text (None above) + the day-extractor's own guard, NOT in a
+    # blanket block of event inquiry. (Non-event age statements still block —
+    # see test_age_correction_still_blocks_event_lookup.)
+    assert t.block_event_inquiry is False
     assert t.segment == "adult"
     assert t.topic == "adult_event"
 
@@ -217,7 +222,10 @@ def test_gateway_is_flag_independent(monkeypatch):
             dataclasses.replace(base, USE_REASONING_LAYER=flag),
         )
         t = analyze_turn_intent("მე ვარ 29 წლის და ღონისძიება მინდა")
-        assert t.age == 29 and t.block_event_inquiry is True
+        # adult-event age statement is not blocked (2026-06-24 narrowing); the
+        # point of this test is flag-independence — the result is identical for
+        # both USE_REASONING_LAYER values.
+        assert t.age == 29 and t.block_event_inquiry is False
 
 
 def test_phase1_analyzer_unchanged():
