@@ -229,10 +229,38 @@ def handle(conversation: Conversation, message: str) -> str:
     # intents up-front (reusing existing builders) so state recall never
     # continues the booking flow and a confirmed booking is always used.
     _planner_plan = _maybe_plan_turn(conversation, message)
+    try:
+        from app.reasoning import conversation_trace as _trace
+        if _planner_plan is not None and _trace.active():
+            _trace.set(
+                planner_called=True,
+                planner={
+                    "user_current_intent": _planner_plan.user_current_intent,
+                    "active_topic": _planner_plan.active_topic,
+                    "answer_policy": _planner_plan.answer_policy,
+                    "state_to_use": _planner_plan.state_to_use,
+                    "state_to_ignore": _planner_plan.state_to_ignore,
+                    "state_to_clear": _planner_plan.state_to_clear,
+                    "forbidden": _planner_plan.forbidden_response_patterns,
+                    "adult_age": _planner_plan.adult_age,
+                    "child_age": _planner_plan.child_age,
+                    "wants_for_child": _planner_plan.wants_for_child,
+                    "should_use_confirmed_booking": _planner_plan.should_use_confirmed_booking,
+                    "should_continue_booking": _planner_plan.should_continue_booking,
+                    "should_answer_directly": _planner_plan.should_answer_directly,
+                },
+            )
+    except Exception:  # pragma: no cover — trace must never break a reply
+        _trace = None
     if _planner_plan is not None and _planner_authoritative():
         _planner_apply_state_clears(conversation, _planner_plan)
         _planner_forced = _planner_pre_answer(conversation, message, _planner_plan)
         if _planner_forced is not None:
+            if _trace is not None:
+                _trace.set(
+                    answered_by="planner_pre_answer",
+                    handler=f"_planner_pre_answer:{_planner_plan.user_current_intent}",
+                )
             return _sanitise_booking_confirmation(conversation, _planner_forced)
 
     # Response-Planner Hardening (finding D) — a PURE „talk to me like a human /
@@ -487,15 +515,28 @@ def handle(conversation: Conversation, message: str) -> str:
             # price / price-objection answer into paragraphs (runs last so
             # the appended age question becomes its own paragraph too).
             engine_response = _format_multipoint_paragraphs(engine_response)
+            if _trace is not None:
+                _trace.set(answered_by="parent_llm_engine", handler="run_parent_llm_turn")
             if _planner_plan is not None and _planner_authoritative():
+                _before = engine_response
                 engine_response = _planner_validate_response(
                     conversation, _planner_plan, engine_response,
                 )
+                if _trace is not None:
+                    _trace.set(
+                        validator_ran=True,
+                        validator_changed=(engine_response != _before),
+                    )
             return _sanitise_booking_confirmation(conversation, engine_response)
 
     response = _handle_impl(conversation, message)
+    if _trace is not None:
+        _trace.set(answered_by="legacy_state_machine", handler="_handle_impl")
     if _planner_plan is not None and _planner_authoritative():
+        _before = response
         response = _planner_validate_response(conversation, _planner_plan, response)
+        if _trace is not None:
+            _trace.set(validator_ran=True, validator_changed=(response != _before))
     return _sanitise_booking_confirmation(conversation, response)
 
 

@@ -71,7 +71,13 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_REASONING_LAYER=False,
         USE_CONVERSATION_PLANNER=False,
         CONVERSATION_PLANNER_AUTHORITATIVE=False,
+        CONVERSATION_TRACE_DEBUG=False,
     )
+    # Pin the config singleton too, so tests that rebuild settings from
+    # `config_module.settings` (rather than the already-pinned module copies) do
+    # NOT inherit whatever the operator set in `.env` (e.g. a live
+    # CONVERSATION_PLANNER_AUTHORITATIVE=true). Test isolation only.
+    monkeypatch.setattr(config_module, "settings", swapped)
     monkeypatch.setattr(parent_flow, "settings", swapped)
     yield
 

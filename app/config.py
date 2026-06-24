@@ -333,6 +333,11 @@ class Settings:
     # suppression, forbidden-pattern validation of LLM output). Default OFF;
     # pinned OFF in tests/conftest.py.
     CONVERSATION_PLANNER_AUTHORITATIVE: bool = False
+    # Per-turn diagnostic trace (Phase 3, 2026-06-24). When True, one compact
+    # structured block is logged per inbound turn (route / planner output /
+    # handler / answered-by / validator / side-effects / masked lead state).
+    # Observability only — NO behaviour change. Default OFF; pinned OFF in tests.
+    CONVERSATION_TRACE_DEBUG: bool = False
     # ADULT LLM Engine — mirrors P3-C SAFE for the adult cultural-events
     # flow. When False (default), adult_flow.handle() runs the legacy
     # deterministic state machine + PATCH 7 global intent guard exactly
@@ -513,6 +518,7 @@ class Settings:
             USE_REASONING_LAYER=_parse_bool_optional("USE_REASONING_LAYER", False),
             USE_CONVERSATION_PLANNER=_parse_bool_optional("USE_CONVERSATION_PLANNER", False),
             CONVERSATION_PLANNER_AUTHORITATIVE=_parse_bool_optional("CONVERSATION_PLANNER_AUTHORITATIVE", False),
+            CONVERSATION_TRACE_DEBUG=_parse_bool_optional("CONVERSATION_TRACE_DEBUG", False),
             USE_ADULT_LLM_ENGINE=_parse_bool_optional("USE_ADULT_LLM_ENGINE", True),
             ENABLE_PUBLIC_COMMENT_REPLY=_parse_bool_optional(
                 "ENABLE_PUBLIC_COMMENT_REPLY", False,

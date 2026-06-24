@@ -473,6 +473,17 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
     conversation.last_activity = datetime.utcnow()
     conversation.history.append({"role": "user", "content": message_text})
 
+    # Per-turn diagnostic trace (CONVERSATION_TRACE_DEBUG) — observability only.
+    from app.reasoning import conversation_trace as _trace
+    _trace.begin(sender_id, message_text, platform)
+    _trace.set(
+        flow_before=conversation.segment or "(empty)",
+        use_planner=getattr(settings, "USE_CONVERSATION_PLANNER", False),
+        planner_authoritative=getattr(
+            settings, "CONVERSATION_PLANNER_AUTHORITATIVE", False,
+        ),
+    )
+
     # P3-C PATCH 3 — capture pre-response follow-up markers based on
     # what the user *just* said. These are data-only flags for a future
     # scheduler; no message is sent from here.
@@ -536,10 +547,19 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
         else:
             response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
     elif conversation.segment == "PARENT":
+        _trace.set(route="parent_flow", segment="PARENT")
         response = parent_flow.handle(conversation, message_text)
     elif conversation.segment == "ADULT":
+        # NOTE: the Conversation Planner is authoritative ONLY inside
+        # parent_flow.handle; the ADULT route does NOT consult it.
+        _trace.set(
+            route="adult_flow", segment="ADULT",
+            planner_applies_on_route=False,
+            note="planner not wired into adult_flow",
+        )
         response = adult_flow.handle(conversation, message_text)
     else:
+        _trace.set(route="unclear_routing", segment=conversation.segment)
         response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
 
     # Central PII chokepoint (Response Planner Hardening, 2026-06-23) — the
@@ -562,6 +582,22 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
     # state. TTL refreshes on every save (sliding 7-day default).
     _save_conversation_to_redis(conversation)
 
+    _lead = conversation.lead
+    _trace.set(
+        final_answer=(response or "")[:200],
+        lead_after={
+            "name_exists": bool((getattr(_lead, "name", "") or "").strip()) if _lead else False,
+            "phone": _trace.mask_phone(getattr(_lead, "phone", "") if _lead else ""),
+            "child_age": getattr(_lead, "child_age", "") if _lead else "",
+            "adult_age": getattr(_lead, "adult_age", "") if _lead else "",
+            "adult_target_age": getattr(_lead, "adult_target_age", "") if _lead else "",
+            "adult_target_relation": getattr(_lead, "adult_target_relation", "") if _lead else "",
+            "booked_datetime_iso": getattr(_lead, "booked_datetime_iso", "") if _lead else "",
+            "state": conversation.state,
+            "pending_booking_exists": bool(conversation.pending_booking),
+        },
+    )
+    _trace.emit()
     return response
 
 
