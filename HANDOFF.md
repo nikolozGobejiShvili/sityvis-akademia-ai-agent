@@ -4,6 +4,8 @@
 
 ## ⚠️ CURRENT STATUS (2026-06-24) — READ THIS FIRST (supersedes the 2026-06-23 state below)
 
+**LATEST handoff (read after the status doc):** [`docs/HANDOFF_LIVE_PLANNER_TRACE_2026_06_24.md`](docs/HANDOFF_LIVE_PLANNER_TRACE_2026_06_24.md) — Live Planner/Route Trace root-cause + the planner-first / topic-routing / selected-state / slim-prompt / validator fix plan (Classes 1–6). The Conversation Planner Stage 1+2 (commits `b402834`/`284b60b`) + live trace diagnostics (`b703e22`) are in; **authoritative planner controls only 4 intents and runs after the Sunday-School/pending handlers, so live answers still mix.** Diagnostic only — no behaviour patched.
+
 **Authoritative status doc:** [`docs/CURRENT_STATUS_AND_LIVE_REGRESSION_2026_06_24.md`](docs/CURRENT_STATUS_AND_LIVE_REGRESSION_2026_06_24.md) — where any older doc disagrees, that file wins.
 
 - **Production: NOT green. Open client test: NOT approved. Guided client test: PAUSED.**
