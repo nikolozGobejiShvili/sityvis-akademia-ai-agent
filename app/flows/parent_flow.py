@@ -223,9 +223,17 @@ def handle(conversation: Conversation, message: str) -> str:
     # effects — the handlers below act on its routing metadata.
     gateway = _turn_intent_gateway(message)
 
-    # Conversation Planner (Phase 3, 2026-06-24) — SHADOW only (default OFF):
-    # observe the unified plan against live turns without changing routing.
-    _maybe_plan_turn(conversation, message)
+    # Conversation Planner (Phase 3, 2026-06-24). SHADOW (default) just logs the
+    # plan. AUTHORITATIVE mode (both flags ON) lets the plan constrain this turn:
+    # clear incompatible context, then answer the deterministic recall/booking
+    # intents up-front (reusing existing builders) so state recall never
+    # continues the booking flow and a confirmed booking is always used.
+    _planner_plan = _maybe_plan_turn(conversation, message)
+    if _planner_plan is not None and _planner_authoritative():
+        _planner_apply_state_clears(conversation, _planner_plan)
+        _planner_forced = _planner_pre_answer(conversation, message, _planner_plan)
+        if _planner_forced is not None:
+            return _sanitise_booking_confirmation(conversation, _planner_forced)
 
     # Response-Planner Hardening (finding D) — a PURE „talk to me like a human /
     # without scripted text" request gets a short natural ack, not a meta
@@ -244,9 +252,16 @@ def handle(conversation: Conversation, message: str) -> str:
     # paragraph formatting. The gateway blocks it on a decline / manager-phone /
     # age-statement so an AGE („29 წლის") is never read as a day and a DECLINE is
     # never treated as an event-name search.
-    event_response = _maybe_handle_event_inquiry(conversation, message, gateway)
-    if event_response is not None:
-        return event_response
+    # Planner authoritative: a generic adult-event DISCOVERY turn must not be
+    # consumed by the sticky named-event interceptor („ამ სახელით ვერ ვპოულობ").
+    _planner_skip_event = bool(
+        _planner_plan is not None and _planner_authoritative()
+        and _planner_forbids_named_event(_planner_plan)
+    )
+    if not _planner_skip_event:
+        event_response = _maybe_handle_event_inquiry(conversation, message, gateway)
+        if event_response is not None:
+            return event_response
 
     # Live mismatch fix (2026-06-19) — a clear camp REGISTRATION / link /
     # form / sign-up request is TRANSACTIONAL: return the configured Admin
@@ -472,9 +487,15 @@ def handle(conversation: Conversation, message: str) -> str:
             # price / price-objection answer into paragraphs (runs last so
             # the appended age question becomes its own paragraph too).
             engine_response = _format_multipoint_paragraphs(engine_response)
+            if _planner_plan is not None and _planner_authoritative():
+                engine_response = _planner_validate_response(
+                    conversation, _planner_plan, engine_response,
+                )
             return _sanitise_booking_confirmation(conversation, engine_response)
 
     response = _handle_impl(conversation, message)
+    if _planner_plan is not None and _planner_authoritative():
+        response = _planner_validate_response(conversation, _planner_plan, response)
     return _sanitise_booking_confirmation(conversation, response)
 
 
@@ -3176,6 +3197,139 @@ def _maybe_plan_turn(conversation, message: str):
         return None
 
 
+# =========================================================================
+# Conversation Planner — AUTHORITATIVE mode (Phase 3, Stage 2, 2026-06-24).
+#
+# Gated by USE_CONVERSATION_PLANNER AND CONVERSATION_PLANNER_AUTHORITATIVE (both
+# default OFF, pinned OFF in conftest). When ON, the plan constrains the turn at
+# the SINGLE parent_flow.handle chokepoint:
+#   * PRE: clear incompatible context (adult-event target) per state_to_clear;
+#          answer deterministic intents (state_recall / booking_recall) by
+#          REUSING existing builders — bypassing the typo-fragile triggers and
+#          the LLM so recall/booking never continue the booking flow;
+#   * suppress the sticky event interceptor on a discovery intent
+#          (do_not_treat_generic_discovery_as_named_event_lookup);
+#   * POST: validate the LLM/legacy answer against forbidden_response_patterns
+#          and apply a lightweight deterministic correction (strip consultation-
+#          format framing from a camp-safety answer).
+# It adds NO per-phrase handlers and duplicates NO existing handler (it reuses
+# `_build_state_recall_reply`, `_format_booked_datetime_short_georgian`,
+# `_maybe_handle_decline_engine`). Fail-closed: any error → existing behaviour.
+# =========================================================================
+
+def _planner_authoritative() -> bool:
+    return bool(
+        getattr(settings, "USE_CONVERSATION_PLANNER", False)
+        and getattr(settings, "CONVERSATION_PLANNER_AUTHORITATIVE", False)
+    )
+
+
+def _planner_forbids_named_event(plan) -> bool:
+    try:
+        from app.reasoning import conversation_planner as _cp
+        return _cp.F_NO_NAMED_EVENT_LOOKUP in (
+            getattr(plan, "forbidden_response_patterns", []) or []
+        )
+    except Exception:  # pragma: no cover — defensive
+        return False
+
+
+def _planner_apply_state_clears(conversation, plan) -> None:
+    """Clear incompatible pending context the plan flagged. Conservative: clears
+    only the adult-event target (lowest-risk); never drops an active
+    pending_booking (a separate, booking-disruption risk left to the booking
+    handlers)."""
+    try:
+        from app.reasoning import conversation_planner as _cp
+        clears = getattr(plan, "state_to_clear", []) or []
+        if _cp.S_ADULT_TARGET in clears:
+            lead = getattr(conversation, "lead", None)
+            if lead is not None:
+                if (getattr(lead, "adult_target_relation", "") or "").strip() \
+                        or (getattr(lead, "adult_target_age", "") or "").strip():
+                    lead.adult_target_relation = ""
+                    lead.adult_target_age = ""
+                    logger.info("[planner][auth] cleared adult-event target")
+    except Exception:  # pragma: no cover — defensive
+        pass
+
+
+def _planner_pre_answer(conversation, message: str, plan) -> str | None:
+    """Deterministic answer for intents the LLM mis-handles, REUSING existing
+    builders. Returns None for every intent that should keep the normal flow."""
+    try:
+        intent = getattr(plan, "user_current_intent", "")
+        if intent == "state_recall":
+            return _build_state_recall_reply(conversation)
+        if intent in ("decline", "adult_event_decline"):
+            # reuse the existing decline wording; clears already applied
+            txt = _maybe_handle_decline_engine(conversation, message)
+            return txt  # may be None → existing flow closes it
+        if intent == "name_update":
+            # A provided name must NOT resurrect a stale underage/camp narrative.
+            # Short, safe ack (no underage flow, no booking continuation). Proper
+            # name capture stays the job of the existing contact handlers.
+            return (
+                "გასაგებია. რით შემიძლია დაგეხმაროთ ბანაკთან დაკავშირებით?"
+            )
+        if intent == "booking_recall":
+            lead = _ensure_lead(conversation)
+            _expire_past_booking_if_needed(lead)
+            if _lead_is_booked(lead):
+                dt = _format_booked_datetime_short_georgian(
+                    getattr(lead, "booked_datetime_iso", "") or "",
+                )
+                if dt:
+                    return (
+                        f"კონსულტაცია ჩანიშნულია {dt}. "
+                        "ახალ ჩაწერას აღარ გთავაზობთ."
+                    )
+                return "კონსულტაცია უკვე ჩანიშნულია. ახალ ჩაწერას აღარ გთავაზობთ."
+        return None
+    except Exception:  # pragma: no cover — defensive
+        return None
+
+
+# Consultation-FORMAT markers — a camp safety/visit/contact answer must NOT talk
+# about the consultation being by phone/video (the live conflation bug).
+_CONSULTATION_FORMAT_MARKERS: tuple[str, ...] = (
+    "ტელეფონით ან ვიდეო", "ვიდეოზარით", "ვიდეო ზარით", "ტელეფონით ტარდება",
+    "ვიზიტის ფორმატი", "ადგილზე მოსვლას არ", "კონსულტაცია ტარდება",
+)
+
+
+def _planner_validate_response(conversation, plan, response: str) -> str:
+    """Lightweight policy validator (POST). When the plan forbids consultation-
+    format framing (camp safety/contact/visit), strip any sentence that leaked
+    it. Other forbidden patterns are enforced PRE (recall/booking) or by the
+    existing deterministic guards (PII mask, fake-booking guard). Fail-closed."""
+    try:
+        if not response:
+            return response
+        forbidden = getattr(plan, "forbidden_response_patterns", []) or []
+        from app.reasoning import conversation_planner as _cp
+        if _cp.F_NO_CONSULTATION_FORMAT in forbidden:
+            low = response.lower()
+            if any(m in low for m in _CONSULTATION_FORMAT_MARKERS):
+                kept = [
+                    s for s in re.split(r"(?<=[.!?])\s+", response)
+                    if not any(m in s.lower() for m in _CONSULTATION_FORMAT_MARKERS)
+                ]
+                cleaned = " ".join(kept).strip()
+                logger.info("[planner][auth] stripped consultation-format framing")
+                if cleaned:
+                    return cleaned
+                # Whole answer was consultation-format → safe camp redirect.
+                return (
+                    "ბანაკის უსაფრთხოებასა და ორგანიზებასთან დაკავშირებით "
+                    "დეტალებს მენეჯერი დაგიზუსტებთ. თუ გსურთ, დაგაკავშირებთ "
+                    "მენეჯერთან."
+                )
+        return response
+    except Exception:  # pragma: no cover — defensive
+        return response
+
+
 def _extract_event_day_reference(message: str) -> int | None:
     """Return a 1–31 calendar day referenced in the message, or None.
 
@@ -3659,11 +3813,19 @@ def _maybe_memory_info_reply(
                 parts.append("ნომერი ჯერ არ მაქვს შენახული.")
         return " ".join(parts)
 
-    # Expired Booking Memory Fix — if the stored booked_datetime_iso is
-    # already in the past, demote the lead to "not currently booked"
-    # before composing the memory summary. Live observation: a stale
-    # `2026-05-29T15:00` in Redis on June 2 was being echoed back as
-    # "კონსულტაცია ჩანიშნულია 29 მაისს, 15:00 საათზე". Wrong.
+    # General summary — extracted so the Conversation Planner (authoritative
+    # mode) can reuse the EXACT same builder for a state_recall decision that the
+    # typo-fragile trigger above missed (no duplication).
+    return _build_state_recall_reply(conversation)
+
+
+def _build_state_recall_reply(conversation: Conversation) -> str:
+    """Build the privacy-safe state-recall summary (name + MASKED phone +
+    child_age + interest + confirmed booking). Shared by `_maybe_memory_info_reply`
+    (trigger path) and the Conversation Planner (authoritative state_recall).
+    Never calls the LLM / Calendar / Sheets; never exposes the full phone."""
+    lead = _ensure_lead(conversation)
+    # Expired Booking Memory Fix — demote a stale past booking before composing.
     expired_now = _expire_past_booking_if_needed(lead)
 
     lines: list[str] = []
@@ -3676,23 +3838,22 @@ def _maybe_memory_info_reply(
         lines.append(f"— ნომერი: {_mask_phone_for_recall(stored_phone)}")
     if (lead.child_age or "").strip():
         lines.append(f"— შვილის ასაკი: {lead.child_age.strip()} წელი")
+    adult_age = (getattr(lead, "adult_age", "") or "").strip()
+    if adult_age:
+        lines.append(f"— თქვენი ასაკი: {adult_age} წელი")
     if (lead.challenge or "").strip():
         lines.append(f"— მთავარი ინტერესი: {lead.challenge.strip()}")
 
     booked = _lead_is_booked(lead)
-    booking_line = ""
     if booked:
         formatted = _format_booked_datetime_short_georgian(
             getattr(lead, "booked_datetime_iso", "") or "",
         )
-        if formatted:
-            booking_line = f"— კონსულტაცია: {formatted}"
-        else:
-            booking_line = "— კონსულტაცია: ჩანიშნულია"
-        lines.append(booking_line)
+        lines.append(
+            f"— კონსულტაცია: {formatted}" if formatted else "— კონსულტაცია: ჩანიშნულია"
+        )
 
     if not lines:
-        # Nothing meaningful on record yet.
         return (
             "ამ ეტაპზე ბევრი ინფორმაცია არ მაქვს შენახული. "
             "თუ ბანაკთან დაკავშირებით კითხვა გაქვთ, მომწერეთ და "
@@ -3706,9 +3867,6 @@ def _maybe_memory_info_reply(
             "გაქვთ, მომწერეთ და დაგეხმარებით."
         )
     elif expired_now:
-        # Expired Booking Memory Fix — the user had a stored booking
-        # whose date is already past. Acknowledge gently (no old date
-        # mentioned, no "უკვე გასულია") and leave the door open.
         cta = (
             "კონსულტაციის აქტიური დრო ამ ეტაპზე არ ფიქსირდება. "
             "სურვილის შემთხვევაში, შემიძლია თავისუფალი დროები "

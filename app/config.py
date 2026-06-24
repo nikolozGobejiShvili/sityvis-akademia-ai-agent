@@ -326,6 +326,13 @@ class Settings:
     # DETERMINISTIC, metadata-only planning layer. Default OFF; Stage 1 wires it
     # in SHADOW (log-only) mode. Pinned OFF in tests/conftest.py.
     USE_CONVERSATION_PLANNER: bool = False
+    # Conversation Planner — AUTHORITATIVE mode (Phase 3 Stage 2, 2026-06-24).
+    # When this AND USE_CONVERSATION_PLANNER are both True, the planner decision
+    # constrains routing/response at the single parent_flow.handle chokepoint
+    # (deterministic recall/booking answers, state clears, event-lookup
+    # suppression, forbidden-pattern validation of LLM output). Default OFF;
+    # pinned OFF in tests/conftest.py.
+    CONVERSATION_PLANNER_AUTHORITATIVE: bool = False
     # ADULT LLM Engine — mirrors P3-C SAFE for the adult cultural-events
     # flow. When False (default), adult_flow.handle() runs the legacy
     # deterministic state machine + PATCH 7 global intent guard exactly
@@ -505,6 +512,7 @@ class Settings:
             USE_PARENT_LLM_ENGINE=_parse_bool_optional("USE_PARENT_LLM_ENGINE", False),
             USE_REASONING_LAYER=_parse_bool_optional("USE_REASONING_LAYER", False),
             USE_CONVERSATION_PLANNER=_parse_bool_optional("USE_CONVERSATION_PLANNER", False),
+            CONVERSATION_PLANNER_AUTHORITATIVE=_parse_bool_optional("CONVERSATION_PLANNER_AUTHORITATIVE", False),
             USE_ADULT_LLM_ENGINE=_parse_bool_optional("USE_ADULT_LLM_ENGINE", True),
             ENABLE_PUBLIC_COMMENT_REPLY=_parse_bool_optional(
                 "ENABLE_PUBLIC_COMMENT_REPLY", False,
