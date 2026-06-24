@@ -4906,6 +4906,26 @@ def _maybe_handle_contact_collection(
 
     lead = _ensure_lead(conversation)
 
+    # Requirement #3 (live bug 2026-06-25) — capture the child's age from the
+    # SAME message INDEPENDENTLY of the contact parse. This handler short-
+    # circuits before the engine's own age capture, so without this a combined
+    # „10 წლის არის ჩემი შვილი … ნიკოლოზი 595999733" turn would lose child_age.
+    # Conservative: no-op when the age is unknown / a range / a time / absent of
+    # age context (the fallback enforces all of that).
+    try:
+        from app.agent.llm.parent_llm_engine import (
+            _bot_recently_asked_child_age,
+            maybe_capture_child_age_fallback,
+        )
+        maybe_capture_child_age_fallback(
+            lead, text,
+            age_question_pending=_bot_recently_asked_child_age(conversation),
+        )
+    except Exception:
+        logger.exception(
+            "[parent_flow] contact-collection age capture raised — ignored",
+        )
+
     # A stale / too-close confirmed pending datetime is not bookable from a
     # contact-only message — clear it so neither the commit helper nor the
     # LLM re-attempts that (non-)time.
@@ -6095,6 +6115,14 @@ _NAME_REJECT_STEMS: tuple[str, ...] = (
     # → never name=„საკვირაო სკოლა მაინტერესებს"). No real first name starts
     # with these stems.
     "საკვირაო", "სკოლ", "მაინტერეს",
+    # Relationship / context words (live bug 2026-06-25 — „10 წლის არის ჩემი
+    # შვილი … ნიკოლოზი 595999733" stored name=„შვილი"). These stems' startswith
+    # never hits a real Georgian first name, so ALL case forms are caught
+    # (შვილი/შვილის/შვილს/შვილმა, ბავშვი/ბავშვის, მშობელი/მშობლის,
+    # მეუღლე/მეუღლის, ასაკი/ასაკის, საკონტაქტო, ბანაკი/ბანაკის). The
+    # name-colliding relationship words (მამა→მამუკა, ბიჭი→ბიჭიკო, გოგო→გოგა,
+    # დედა) are handled by exact match in _RELATIONSHIP_NAME_BLOCK_EXACT below.
+    "შვილ", "ბავშვ", "მშობ", "მეუღლ", "ასაკ", "საკონტაქტ", "ბანაკ",
 )
 
 # Exact-token rejects — short ambiguous words that must NOT be matched by
@@ -6103,6 +6131,20 @@ _NAME_REJECT_STEMS: tuple[str, ...] = (
 _NAME_REJECT_EXACT: frozenset[str] = frozenset({
     "დრო", "დროზე", "ზე",
     "მინდა", "უნდა", "მსურს", "ვაპირებ",
+})
+
+# Relationship / context words whose STEM would collide with a real Georgian
+# first name (მამა→მამუკა/მამია, ბიჭი→ბიჭიკო, გოგო→გოგა/გოგი/გოგიტა, დედა), so
+# they are rejected by EXACT token match only — never as a startswith stem
+# (live bug 2026-06-25: „ჩემი შვილი" must not become name=„შვილი", and these
+# context words must never be a name either). The unambiguous relationship
+# stems (შვილ/ბავშვ/…) live in _NAME_REJECT_STEMS above.
+_RELATIONSHIP_NAME_BLOCK_EXACT: frozenset[str] = frozenset({
+    "ბიჭი", "ბიჭის", "ბიჭს",
+    "გოგო", "გოგოს", "გოგონა",
+    "დედა", "დედის", "დედას",
+    "მამა", "მამის", "მამას",
+    "თქვენი", "ჩემია",
 })
 
 # Free-form robustness (2026-06-23, PART A) — Latin-script intent / topic /
@@ -6159,6 +6201,10 @@ def _name_token_is_valid(token: str) -> bool:
     if low in NAME_FILLER_WORDS:
         return False
     if low in _NAME_REJECT_EXACT:
+        return False
+    # Relationship / context words whose stem would collide with a real name
+    # (მამა / ბიჭი / გოგო / დედა / თქვენი / ჩემია) — exact match only.
+    if low in _RELATIONSHIP_NAME_BLOCK_EXACT:
         return False
     # B2 fix (2026-06-13) — refusal/correction tokens („არა"/„არ"/„ვერ"/„კი"/
     # „okay"…) are never a real first name; reject so they don't leak into a
@@ -6285,6 +6331,7 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
     # the phone if it appears later).
     candidate_str = ""
     phone = ""
+    phone_start: int | None = None
     for match in PHONE_CANDIDATE_PATTERN.finditer(text):
         token = match.group(0)
         if not re.search(r"\d", token):
@@ -6296,6 +6343,7 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
         if len(local_digits) == 9 and local_digits[0] in VALID_LOCAL_PREFIXES:
             phone = ("+" + digits) if digits.startswith("995") else digits
             candidate_str = token
+            phone_start = match.start()
             break
         # Compound rescue: scan inside the captured digit run for a
         # clean 9-digit window starting with a valid local prefix.
@@ -6308,6 +6356,7 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
         if rescued:
             phone = rescued
             candidate_str = token
+            phone_start = match.start()
             logger.info(
                 "[parent_flow] phone rescued from compound digit run: %s",
                 "***" + rescued[-3:],
@@ -6331,6 +6380,26 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
         remainder = text.replace(candidate_str, "", 1)
     else:
         remainder = text
+
+    # Requirement #2 (live bug 2026-06-25) — PREFER the name immediately before
+    # the phone. „… ჩემი შვილი ნიკოლოზი 595999733" → „ნიკოლოზი", never an
+    # earlier word. Take the contiguous run of valid name tokens ending right
+    # before the phone; the first invalid token (filler / relationship / age
+    # word, e.g. „შვილი", „ვარ", „წლის") stops the run. Empty when the name is
+    # placed AFTER the phone („595999733 ლიზი") — handled by the full scan below.
+    near_phone_name = ""
+    if phone_start is not None:
+        before_tokens = [
+            t for t in re.split(r"[,.:\s\-—–]+", text[:phone_start]) if t
+        ]
+        trailing: list[str] = []
+        for tok in reversed(before_tokens):
+            if _name_token_is_valid(tok):
+                trailing.insert(0, tok)
+            else:
+                break
+        if 0 < len(trailing) <= _NAME_TOKEN_CAP:
+            near_phone_name = " ".join(trailing)
 
     tokens = re.split(r"[,.:\s]+", remainder)
     # B2 fix (2026-06-13) — correction cut: if a „არა" („no") marker appears
@@ -6362,6 +6431,12 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
     name = " ".join(name_tokens).strip()
     if len(name) <= 1:
         name = ""
+
+    # Prefer the name that sits immediately before the phone (requirement #2) —
+    # overrides the full-scan result so an earlier stray valid token can never
+    # win over the name next to the number.
+    if near_phone_name:
+        name = near_phone_name
 
     if name:
         name_lower = name.lower()
