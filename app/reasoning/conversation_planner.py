@@ -402,6 +402,11 @@ def _plan(message: str, conversation) -> TurnPlan:
             plan.adult_age = str(gw_age)
             if not adult_age:
                 plan.writeback_adult_age = str(gw_age)
+        # A GENUINE event-name reference (proper-noun token, per the gateway) is
+        # a NAMED lookup — NOT generic discovery — so the adult-route named-event
+        # interceptor should still resolve it. Generic discovery / self / child
+        # turns are NOT named lookups (forbidden below).
+        genuine_named = bool(getattr(gw, "is_genuine_event_reference", False))
         if has_self and has_child:
             plan.user_current_intent = "adult_event_for_self_and_child"
             plan.wants_for_child = True
@@ -413,6 +418,8 @@ def _plan(message: str, conversation) -> TurnPlan:
             plan.wants_for_child = True
         elif has_self:
             plan.user_current_intent = "adult_event_for_self"
+        elif genuine_named:
+            plan.user_current_intent = "adult_event_named"
         else:
             plan.user_current_intent = "adult_event_discovery"
         plan.active_topic = "adult_event"
@@ -425,12 +432,13 @@ def _plan(message: str, conversation) -> TurnPlan:
         plan.forbidden_response_patterns += [
             F_NO_CAMP_ELIGIBILITY_FOR_ADULT, F_NO_ADULT_AGE_AS_CHILD,
         ]
-        # Every „events for me / for my child / what do you offer" turn is
-        # DISCOVERY, not a named-event lookup — so the gateway's deliberately
-        # loose genuine-name gate must never turn it into „ამ სახელით ვერ
-        # ვპოულობ". (A turn that truly names a specific event is handled by the
-        # existing named-event resolvers, not this planner intent.)
-        plan.forbidden_response_patterns.append(F_NO_NAMED_EVENT_LOOKUP)
+        # A generic „events for me / for my child / what do you offer" turn is
+        # DISCOVERY, not a named-event lookup — forbid the „ამ სახელით ვერ
+        # ვპოულობ" fallback so the adult route lists active events instead. A
+        # turn that truly NAMES a specific event (`adult_event_named`) keeps the
+        # named-event resolver allowed (no forbidden pattern).
+        if plan.user_current_intent != "adult_event_named":
+            plan.forbidden_response_patterns.append(F_NO_NAMED_EVENT_LOOKUP)
         plan.reason = "adult event interest"
         return plan
 

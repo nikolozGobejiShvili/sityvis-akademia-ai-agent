@@ -87,6 +87,25 @@ Flags ON: `USE_CONVERSATION_PLANNER=true`, `CONVERSATION_PLANNER_AUTHORITATIVE=t
 restart (settings are `@lru_cache`d) + `FLUSHALL` Redis. Offline rehearsal:
 `python tools/trace_planner_smoke_2026_06_24.py` (LLM mocked).
 
+## Follow-up — adult generic-discovery vs named-event lookup (2026-06-24)
+The controlled real-LLM smoke surfaced one residual: a GENERIC adult-events
+question („ამ ეტაპზე რა ღონისძიებები გაქვთ?" / „ზრდასრულთა ღონისძიებებს
+ვგულისხმობ") routed correctly to `adult_flow` but the adult route's
+deterministic named-event interceptor could still answer „ამ სახელით ღონისძიება
+ვერ მოვძებნე". Fixed (no new behavior beyond this):
+* `adult_llm_engine.run_adult_llm_turn` now SKIPS `_maybe_handle_named_adult_event`
+  when the authoritative planner flags `F_NO_NAMED_EVENT_LOOKUP`
+  (`_planner_forbids_named_event_lookup`) — generic discovery is handled by the
+  LLM via the `get_adult_events` tool (lists active events, or says none are
+  active). Never „ვერ მოვძებნე".
+* The planner classifies a GENUINE event-name reference as `adult_event_named`
+  (no forbidden pattern) so the deterministic named-event resolver still runs for
+  real named lookups.
+* `_has_genuine_event_name_token` no longer treats the generic discourse words
+  „ეტაპ" / „ვგულისხმ" or the CATEGORY word „ღონისძიებ*" as event names.
+* Tests: `tests/test_adult_generic_discovery_2026_06_24.py` (generic → no
+  „ვერ მოვძებნე"; named lookup still resolves; planner-off regression).
+
 ## Remaining risks / NOT-GREEN items
 * The adult-event turns are answered by the REAL adult LLM engine live — its
   prose quality is not asserted offline (only the route + selected_state +

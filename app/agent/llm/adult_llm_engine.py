@@ -1867,6 +1867,15 @@ _NON_EVENT_NAME_TOKENS: tuple[str, ...] = (
     "კულტურულ", "ზრდასრულ", "მაინტერეს", "დაინტერეს",
     "კიდევ", "სხვა", "ახალ", "ნებისმ", "ზოგად", "უბრალ", "მინდა", "მსურს",
     "ასევე",  # „also" — a continuation word, never an event name (BUG 2 hardening)
+    # Generic discourse words seen in live generic-discovery turns — never an
+    # event name (2026-06-24): „ეტაპ(ზე)" = stage/phase („ამ ეტაპზე რა
+    # ღონისძიებები გაქვთ?"); „ვგულისხმ(ობ)" = „I mean" („ზრდასრულთა
+    # ღონისძიებებს ვგულისხმობ"). „ღონისძიებ*" is the CATEGORY word „event(s)"
+    # itself (every inflection: ღონისძიება/ღონისძიებები/ღონისძიებებს/…) — never a
+    # specific event NAME, so it must not pass the genuine-name gate (the
+    # generic-query stem failed to prefix-match the plural „ღონისძიებებს" and the
+    # gate wrongly read it as a named-event lookup → „ვერ მოვძებნე").
+    "ეტაპ", "ვგულისხმ", "ღონისძიებ",
 )
 
 
@@ -2134,7 +2143,24 @@ def run_adult_llm_turn(
         _gw = _gw_fn(user_message)
     except Exception:  # pragma: no cover — defensive; analyzer never raises
         _gw = None
-    if _gw is None or not getattr(_gw, "block_event_inquiry", False):
+    # Conversation Planner authority (2026-06-24): a GENERIC adult-event
+    # discovery turn („რა ღონისძიებები გაქვთ?" / „ზრდასრულთა ღონისძიებებს
+    # ვგულისხმობ") is NOT a named-event lookup. When the authoritative planner
+    # flags `F_NO_NAMED_EVENT_LOOKUP`, skip this deterministic interceptor so it
+    # never answers „ამ სახელით ღონისძიება ვერ მოვძებნე" — the LLM lists the
+    # active events via the `get_adult_events` tool instead. A turn that truly
+    # names a specific event is classified `adult_event_named` (no forbidden
+    # pattern) by the planner, so the interceptor still resolves it directly.
+    _planner_blocks_named = _planner_forbids_named_event_lookup(conversation)
+    if _gw is not None and not getattr(_gw, "block_event_inquiry", False) \
+            and _planner_blocks_named:
+        logger.info(
+            "[adult_llm_engine] named-event search skipped — planner flagged "
+            "generic discovery (intent=%s) sender=%s",
+            getattr(getattr(conversation, "_turn_plan", None), "user_current_intent", "?"),
+            sender_id,
+        )
+    elif _gw is None or not getattr(_gw, "block_event_inquiry", False):
         named_event_reply = _maybe_handle_named_adult_event(user_message)
         if named_event_reply is not None:
             logger.info(
@@ -2305,6 +2331,29 @@ def _use_slim_prompts() -> bool:
     """Slim Prompt mode (Class 4) — load `adult_core.md` instead of the 54 KB
     `system_adult_v1.md` and inject only planner policy + selected_state."""
     return bool(getattr(settings, "USE_SLIM_PROMPTS", False))
+
+
+def _planner_forbids_named_event_lookup(conversation) -> bool:
+    """True when the authoritative planner flagged the current turn as generic
+    adult discovery (`F_NO_NAMED_EVENT_LOOKUP`) — the deterministic named-event
+    interceptor must then NOT treat the message as a named-event query. Returns
+    False when the planner is off / not authoritative / no plan (the interceptor
+    runs as before). Never raises."""
+    try:
+        if not (
+            getattr(settings, "USE_CONVERSATION_PLANNER", False)
+            and getattr(settings, "CONVERSATION_PLANNER_AUTHORITATIVE", False)
+        ):
+            return False
+        plan = getattr(conversation, "_turn_plan", None)
+        if plan is None:
+            return False
+        from app.reasoning import conversation_planner as _cp
+        return _cp.F_NO_NAMED_EVENT_LOOKUP in (
+            getattr(plan, "forbidden_response_patterns", []) or []
+        )
+    except Exception:  # pragma: no cover — defensive
+        return False
 
 
 def _build_system_prompt() -> str:

@@ -2561,8 +2561,8 @@ def _render_sunday_school_answer() -> str:
 _SUNDAY_SCHOOL_DEFER_INTENTS: frozenset[str] = frozenset({
     "manager_phone_request", "state_recall", "decline", "adult_event_decline",
     "adult_event_discovery", "adult_event_for_self", "adult_event_for_child",
-    "adult_event_for_self_and_child", "adult_age_correction", "booking_recall",
-    "camp_registration",
+    "adult_event_for_self_and_child", "adult_event_named", "adult_age_correction",
+    "booking_recall", "camp_registration",
 })
 
 
