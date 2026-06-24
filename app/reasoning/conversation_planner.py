@@ -55,6 +55,10 @@ F_NO_FULL_PHONE = "do_not_leak_full_phone"
 F_NO_REPEAT_WRONG_FALLBACK = "do_not_repeat_wrong_fallback_after_correction"
 F_NO_NAMED_EVENT_LOOKUP = "do_not_treat_generic_discovery_as_named_event_lookup"
 F_NO_INVENT_FACTS = "do_not_invent_unspecified_facts"
+F_MUST_RETURN_MANAGER_PHONE = "must_return_manager_phone"
+F_MUST_RETURN_REGISTRATION_LINK = "must_return_registration_link"
+F_NO_ROBOTIC_DECLINE_PHRASE = "do_not_use_robotic_decline_phrase"
+F_NO_REASK_KNOWN_CONTACT = "do_not_reask_known_name_or_phone"
 
 # ── Camp sub-intent stem groups (classification, NOT handlers) ────────────────
 _CAMP_CONTACT = ("დავურეკ", "დაურეკ", "დარეკ", "დაკავშირდე", "დაკავშირება ბავშვ")
@@ -64,6 +68,19 @@ _CAMP_GUESTS = ("მოწვე", "სტუმ")
 _CAMP_ACTIVITIES = ("აქტივ", "თამაშ", "ინტელექტ", "გასართ", "ჩაკეტ", "მეგობრ", "განვითარ", "პროგრამა")
 _CAMP_DATES = ("როდის", "თარიღ", "ნაკად", "რიცხვ", "როდიდან", "რა დროს")
 _CAMP_PRICE = ("ფასი", "ღირ", "გადახდ", "განვადებ")
+
+# ── Adult-age self-statement markers (Class 5 — adult age self-correction) ────
+# A genuine self-age CORRECTION reads as „ჩემი ასაკი 29 …" (an explicit „my
+# age" statement) and/or attributes the other number to the child („ეგ ჩემი
+# შვილის ასაკია"). These are intentionally NARROW so a normal adult-self
+# DISCOVERY turn („მე ვარ 30 წლის, რა შემომთავაზებთ?") is NOT swallowed — that
+# is plain adult-event discovery (handled by the adult_event branch, which
+# writes the adult age back on its own).
+_ADULT_SELF_AGE_MARKERS = ("ჩემი ასაკი", "ჩემი ასაკია")
+_CHILD_AGE_ATTRIBUTION_MARKERS = ("შვილის ასაკი", "ბავშვის ასაკი")
+
+# ── Registration intent markers (used only as a planner-side fallback) ────────
+_REGISTRATION_STEMS = ("რეგისტრ", "სარეგისტრაც", "დარეგისტრ", "დავრეგისტრ")
 
 # ── Name/phone-update statement markers (NOT questions) ───────────────────────
 _NAME_UPDATE = ("მქვია", "სახელია", "მერქმევა", "დამიძახე")
@@ -96,6 +113,14 @@ class TurnPlan:
     adult_age: str | None = None
     child_age: str | None = None
     wants_for_child: bool = False
+    # State WRITEBACKS (Class 5, 2026-06-24). The planner is metadata-only and
+    # NEVER mutates state itself; when one of these is set, the AUTHORITATIVE
+    # apply step (`conversation_service` / `parent_flow`) performs the write.
+    # `writeback_adult_age` captures a self-age correction
+    # („ჩემი ასაკი 29 წელია…") onto `lead.adult_age` WITHOUT touching
+    # `lead.child_age`. Empty = no writeback.
+    writeback_adult_age: str | None = None
+    writeback_child_age: str | None = None
     confidence: float = 0.0
     reason: str = ""
 
@@ -156,6 +181,55 @@ def _plan(message: str, conversation) -> TurnPlan:
     # Universal: full phone is always masked in the user-facing reply.
     plan.forbidden_response_patterns.append(F_NO_FULL_PHONE)
 
+    seg = (getattr(conversation, "segment", "") or "").upper()
+    adult_ctx = seg == "ADULT" or _recent_adult_context(conversation)
+
+    # ── 0. Manager-phone request (HIGHEST priority) ───────────────────────────
+    # An explicit „მენეჯერის ნომერი" / „მე თვითონ დავურეკავ" request must be
+    # answered with the manager number on THIS turn — even mid Sunday-School
+    # collection or mid-booking. Class 1: it OVERRIDES pending Sunday-School /
+    # adult-event context so a pending collection can never swallow it.
+    if getattr(gw, "is_manager_phone_request", False):
+        plan.user_current_intent = "manager_phone_request"
+        plan.active_topic = "manager_contact"
+        plan.answer_policy = "give_manager_phone"
+        plan.should_answer_directly = True
+        plan.should_handoff_to_manager = True
+        plan.should_not_call_tools = True
+        plan.state_to_ignore = [S_PENDING_BOOKING, S_ADULT_TARGET]
+        plan.forbidden_response_patterns.append(F_MUST_RETURN_MANAGER_PHONE)
+        plan.reason = "explicit manager-phone request (overrides pending state)"
+        return plan
+
+    # ── 0b. Adult-age self-correction (Class 5) ───────────────────────────────
+    # „ჩემი ასაკი 29 წელია, ეგ ჩემი შვილის ასაკია" → write adult_age=29, keep
+    # child_age. The planner is metadata-only; the writeback is applied by the
+    # authoritative caller. active_topic stays adult_event when that was the
+    # current topic; otherwise it is a neutral state update.
+    if _is_adult_age_self_statement(low, gw):
+        gw_age = getattr(gw, "age", None)
+        plan.user_current_intent = "adult_age_correction"
+        plan.adult_age = str(gw_age) if gw_age is not None else (adult_age or None)
+        plan.writeback_adult_age = plan.adult_age
+        plan.child_age = child_age or None          # preserved, never touched
+        if adult_ctx:
+            plan.active_topic = "adult_event"
+            plan.answer_policy = "event_discovery"
+            plan.should_call_tools = True
+            plan.state_to_use = [S_ADULT_AGE]
+            plan.forbidden_response_patterns += [
+                F_NO_CAMP_ELIGIBILITY_FOR_ADULT, F_NO_ADULT_AGE_AS_CHILD,
+                F_NO_NAMED_EVENT_LOOKUP,
+            ]
+        else:
+            plan.active_topic = "general_state"
+            plan.answer_policy = "answer_directly"
+            plan.should_answer_directly = True
+            plan.forbidden_response_patterns.append(F_NO_ADULT_AGE_AS_CHILD)
+        plan.state_to_ignore = [S_PENDING_BOOKING]
+        plan.reason = "adult age self-correction (adult_age writeback, child_age preserved)"
+        return plan
+
     # ── 1. Tone request (only when there is no real business question) ────────
     if getattr(gw, "is_human_tone_request", False) and not getattr(gw, "has_question", False) \
             and getattr(gw, "topic", "other") == "other":
@@ -213,8 +287,38 @@ def _plan(message: str, conversation) -> TurnPlan:
         plan.answer_policy = "close_context"
         plan.state_to_clear = [S_ADULT_TARGET, S_PENDING_BOOKING]
         plan.should_not_call_tools = True
+        # The polite close must never be the robotic „სიამოვნებით." opener.
+        plan.forbidden_response_patterns.append(F_NO_ROBOTIC_DECLINE_PHRASE)
         plan.reason = "decline closes pending sales/event context"
         return plan
+
+    # ── 4. Bare registration in an active camp context (Class 5) ──────────────
+    # „რეგისტრაცია მინდა" with NO camp keyword falls through the existing
+    # camp-keyword-gated `_maybe_handle_camp_registration_link`. When the active
+    # context is camp (PARENT segment / known child / recent camp), classify it
+    # as camp registration → return the link, never append an age question.
+    if (
+        getattr(gw, "topic", "other") == "registration"
+        or any(s in low for s in _REGISTRATION_STEMS)
+    ) and not getattr(gw, "is_consultation_request", False):
+        camp_ctx = (
+            seg == "PARENT" or bool(child_age) or _has_camp_signal(low)
+            or _recent_camp_context(conversation)
+        )
+        if camp_ctx and not adult_ctx:
+            plan.user_current_intent = "camp_registration"
+            plan.active_topic = "camp"
+            plan.answer_policy = "camp_registration_link"
+            plan.should_answer_directly = True
+            plan.state_to_use = [S_CHILD_AGE] if child_age else []
+            plan.state_to_ignore = [S_ADULT_TARGET, S_PENDING_BOOKING, S_ADULT_AGE]
+            plan.forbidden_response_patterns += [
+                F_MUST_RETURN_REGISTRATION_LINK, F_NO_DATE_TIME_QUESTION,
+            ]
+            if child_age:
+                plan.forbidden_response_patterns.append(F_NO_REASK_CHILD_AGE)
+            plan.reason = "bare registration in active camp context"
+            return plan
 
     # ── 5. Sunday School (clears adult-event + pending booking) ───────────────
     if getattr(gw, "topic", "other") == "sunday_school":
@@ -223,6 +327,15 @@ def _plan(message: str, conversation) -> TurnPlan:
         plan.answer_policy = "answer_directly"
         plan.should_answer_directly = True
         plan.state_to_clear = [S_ADULT_TARGET, S_PENDING_BOOKING]
+        plan.state_to_use = []
+        if name:
+            plan.state_to_use.append(S_NAME)
+        if phone:
+            plan.state_to_use.append(S_PHONE)
+        # Class 1: when the contact is already known, the handoff must NOT
+        # re-ask name/phone — it uses the stored contact.
+        if name and phone:
+            plan.forbidden_response_patterns.append(F_NO_REASK_KNOWN_CONTACT)
         plan.reason = "sunday school status"
         return plan
 
@@ -282,9 +395,13 @@ def _plan(message: str, conversation) -> TurnPlan:
         has_self = bool(getattr(gw, "is_self_reference", False)) or bool(getattr(gw, "is_adult_self", False))
         has_child = bool(getattr(gw, "is_child_reference", False))
         gw_age = getattr(gw, "age", None)
-        # adult_age = an explicit self age (>=18); NEVER the child's.
+        # adult_age = an explicit self age (>=18); NEVER the child's. Persist it
+        # (writeback) when the lead has no adult_age yet, so a later state recall
+        # / event turn keeps it.
         if gw_age is not None and gw_age >= 18 and has_self:
             plan.adult_age = str(gw_age)
+            if not adult_age:
+                plan.writeback_adult_age = str(gw_age)
         if has_self and has_child:
             plan.user_current_intent = "adult_event_for_self_and_child"
             plan.wants_for_child = True
@@ -433,6 +550,56 @@ def _matches_recall_when(low: str) -> bool:
 
 def _has_camp_signal(low: str) -> bool:
     return any(s in low for s in ("ბანაკ", "საზაფხულო", "ნაკად", "ლაგერ"))
+
+
+def _is_adult_age_self_statement(low: str, gw) -> bool:
+    """True when the user states THEIR OWN age (>=18) — an adult-age
+    self-correction („ჩემი ასაკი 29 წელია, ეგ ჩემი შვილის ასაკია").
+
+    Requires an adult self-age marker AND a self-age ≥ 18 from the gateway. A
+    child age statement („7 წლის არის") never matches (no self marker; age<18)."""
+    gw_age = getattr(gw, "age", None)
+    if gw_age is None or gw_age < 18:
+        return False
+    has_self_marker = any(m in low for m in _ADULT_SELF_AGE_MARKERS)
+    # „… ჩემი შვილის ასაკია" reinforces (the OTHER number was the child's).
+    attributes_child = any(m in low for m in _CHILD_AGE_ATTRIBUTION_MARKERS)
+    return has_self_marker or attributes_child
+
+
+def _last_assistant_content(conversation) -> str:
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if isinstance(turn, dict) and turn.get("role") == "assistant":
+            return str(turn.get("content") or "")
+    return ""
+
+
+def _recent_adult_context(conversation) -> bool:
+    """True when the conversation is CURRENTLY in an adult-event context — the
+    lead carries an adult-event relative target OR the last assistant turn was
+    about adult events. Used so an adult-age self-correction keeps
+    active_topic=adult_event when the current message has no event word.
+
+    NOTE: a persisted ``lead.adult_age`` is deliberately NOT treated as
+    „current adult context" — it stays set even after the user switches back to
+    camp, so relying on it would wrongly keep every later turn adult (it once
+    blocked a bare „რეგისტრაცია მინდა" from resolving to camp registration). The
+    active topic is driven by the sticky segment (handled at the call site) and
+    the recent assistant turn, not by the long-lived age field."""
+    lead = _lead_of(conversation)
+    if lead is not None:
+        if (getattr(lead, "adult_target_relation", "") or "").strip() \
+                or (getattr(lead, "adult_target_age", "") or "").strip():
+            return True
+    last = _last_assistant_content(conversation).lower()
+    return any(s in last for s in ("ღონისძიებ", "ზრდასრულ", "საღამო", "კონცერტ"))
+
+
+def _recent_camp_context(conversation) -> bool:
+    """True when the recent assistant turn was about the camp / camp
+    registration — so a bare „რეგისტრაცია მინდა" resolves to camp registration."""
+    last = _last_assistant_content(conversation).lower()
+    return any(s in last for s in ("ბანაკ", "საზაფხულო", "რეგისტრაცი", "ჩაწერ"))
 
 
 def _has_camp_concern(low: str) -> bool:

@@ -48,6 +48,11 @@ async def startup():
         "⚙️ CONVERSATION_PLANNER_AUTHORITATIVE="
         f"{getattr(settings, 'CONVERSATION_PLANNER_AUTHORITATIVE', False)}"
     )
+    print(f"⚙️ USE_SLIM_PROMPTS={getattr(settings, 'USE_SLIM_PROMPTS', False)}")
+    print(
+        "⚙️ CONVERSATION_TRACE_DEBUG="
+        f"{getattr(settings, 'CONVERSATION_TRACE_DEBUG', False)}"
+    )
     print(f"🔍 Sentry {'enabled' if settings.SENTRY_DSN else 'disabled'}")
 
     # Instagram Webhook Signature Patch (2026-06-08): boot-time

@@ -338,6 +338,15 @@ class Settings:
     # handler / answered-by / validator / side-effects / masked lead state).
     # Observability only — NO behaviour change. Default OFF; pinned OFF in tests.
     CONVERSATION_TRACE_DEBUG: bool = False
+    # Slim Prompt / Topic-Scoped Context (Phase 3 Stage 2.2, 2026-06-24). Default
+    # OFF — the engines load the full giant prompts (`system_parent_v2.md` /
+    # `system_adult_v1.md`) exactly as before. When True AND the conversation
+    # planner is authoritative, the engines load the short core prompts
+    # (`parent_core.md` / `adult_core.md`) instead and inject ONLY the planner
+    # policy + selected_state + topic-scoped knowledge — never the 100 KB camp
+    # prompt. The old prompt files are NOT deleted. Pinned OFF in tests so the
+    # 2992-test baseline is byte-identical; the slim-prompt test file enables it.
+    USE_SLIM_PROMPTS: bool = False
     # ADULT LLM Engine — mirrors P3-C SAFE for the adult cultural-events
     # flow. When False (default), adult_flow.handle() runs the legacy
     # deterministic state machine + PATCH 7 global intent guard exactly
@@ -519,6 +528,7 @@ class Settings:
             USE_CONVERSATION_PLANNER=_parse_bool_optional("USE_CONVERSATION_PLANNER", False),
             CONVERSATION_PLANNER_AUTHORITATIVE=_parse_bool_optional("CONVERSATION_PLANNER_AUTHORITATIVE", False),
             CONVERSATION_TRACE_DEBUG=_parse_bool_optional("CONVERSATION_TRACE_DEBUG", False),
+            USE_SLIM_PROMPTS=_parse_bool_optional("USE_SLIM_PROMPTS", False),
             USE_ADULT_LLM_ENGINE=_parse_bool_optional("USE_ADULT_LLM_ENGINE", True),
             ENABLE_PUBLIC_COMMENT_REPLY=_parse_bool_optional(
                 "ENABLE_PUBLIC_COMMENT_REPLY", False,

@@ -72,6 +72,7 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_CONVERSATION_PLANNER=False,
         CONVERSATION_PLANNER_AUTHORITATIVE=False,
         CONVERSATION_TRACE_DEBUG=False,
+        USE_SLIM_PROMPTS=False,
     )
     # Pin the config singleton too, so tests that rebuild settings from
     # `config_module.settings` (rather than the already-pinned module copies) do
@@ -79,6 +80,20 @@ def _force_parent_llm_engine_off(monkeypatch):
     # CONVERSATION_PLANNER_AUTHORITATIVE=true). Test isolation only.
     monkeypatch.setattr(config_module, "settings", swapped)
     monkeypatch.setattr(parent_flow, "settings", swapped)
+    # conversation_service holds its OWN `from app.config import settings`
+    # binding (the original object built from the live `.env`, which has the
+    # planner authoritative). The Phase-3 topic-routing / writeback logic reads
+    # those flags, so pin its copy OFF too — otherwise every legacy
+    # process_message test would inherit live planner routing. The engines
+    # (parent/adult) read USE_SLIM_PROMPTS, so pin theirs as well. Tests that
+    # exercise the planner/slim path override these with their own monkeypatch
+    # on top of this (LIFO) stack.
+    from app.services import conversation_service as _cs
+    from app.agent.llm import parent_llm_engine as _ple
+    from app.agent.llm import adult_llm_engine as _ale
+    monkeypatch.setattr(_cs, "settings", swapped)
+    monkeypatch.setattr(_ple, "settings", swapped)
+    monkeypatch.setattr(_ale, "settings", swapped)
     yield
 
 

@@ -1846,14 +1846,25 @@ def run_parent_llm_turn(
     # build the context, so the model never re-asks for a fact it already has.
     _capture_turn_facts(conversation, lead, user_message)
 
-    context_message = _build_context_message(conversation, lead, user_message)
-    sales_context = _build_sales_context(conversation, lead, user_message)
-
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt},
-        {"role": "system", "content": context_message},
-        {"role": "system", "content": sales_context},
-    ]
+    if _use_slim_prompts():
+        # Slim mode: inject ONLY the planner policy + selected_state (topic-
+        # scoped) instead of the full lead-context + giant sales context.
+        slim_state, slim_policy = _build_slim_context(conversation, lead)
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": slim_state},
+            {"role": "system", "content": slim_policy},
+        ]
+        _trace_prompt_mode("slim", slim_state)
+    else:
+        context_message = _build_context_message(conversation, lead, user_message)
+        sales_context = _build_sales_context(conversation, lead, user_message)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": context_message},
+            {"role": "system", "content": sales_context},
+        ]
+        _trace_prompt_mode("giant", None)
     messages.extend(_recent_history(conversation))
     messages.append({"role": "user", "content": user_message})
 
@@ -1970,8 +1981,15 @@ def run_parent_llm_turn(
 # -- prompt + context assembly -------------------------------------------
 
 
+def _use_slim_prompts() -> bool:
+    """Slim Prompt mode (Class 4). When ON, the engine loads the short
+    `parent_core.md` core prompt instead of the 100 KB `system_parent_v2.md`,
+    and injects only the planner policy + selected_state (the giant
+    situation-aware sales context is replaced)."""
+    return bool(getattr(settings, "USE_SLIM_PROMPTS", False))
+
+
 def _build_system_prompt() -> str:
-    raw = load_prompt("system_parent_v2")
     # Canonical Admin Config age band (5A-2 migration) — runtime prompt
     # context only; the `system_parent_v2.md` file is untouched. With the
     # shipped config the band stays 9–17, so the rendered prompt is identical.
@@ -1979,11 +1997,38 @@ def _build_system_prompt() -> str:
     age_min, age_max = admin_config_service.get_camp_age_bounds()
 
     company_name = settings.COMPANY_NAME or "სიტყვის აკადემია"
+    # Class 4: slim mode loads the short core prompt; default loads the giant
+    # prompt exactly as before (do NOT load system_parent_v2.md when slim).
+    prompt_name = "parent_core" if _use_slim_prompts() else "system_parent_v2"
+    raw = load_prompt(prompt_name)
     return raw.format(
         company_name=company_name,
         age_min=age_min,
         age_max=age_max,
     )
+
+
+def _build_slim_context(conversation, lead) -> tuple[str, str]:
+    """Build the (selected_state, planner_policy) system blocks for slim mode
+    from the turn plan stashed on the conversation. Topic-scoped: only the
+    relevant state reaches the LLM (Class 3). Never raises."""
+    try:
+        from app.reasoning import selected_state as _ss
+        plan = getattr(conversation, "_turn_plan", None)
+        selected = _ss.build_selected_state(plan, lead, conversation)
+        return _ss.format_selected_state(selected), _ss.format_planner_policy(plan)
+    except Exception:  # pragma: no cover — slim context must never break a reply
+        return "SELECTED STATE: (ცარიელია)", "PLANNER POLICY: (none)"
+
+
+def _trace_prompt_mode(mode: str, selected_block) -> None:
+    try:
+        from app.reasoning import conversation_trace as _trace
+        _trace.set(prompt_mode=mode)
+        if selected_block is not None:
+            _trace.set(selected_state=selected_block)
+    except Exception:  # pragma: no cover — trace must never break a reply
+        pass
 
 
 # =========================================================================

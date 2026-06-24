@@ -145,6 +145,26 @@ def handle(conversation: Conversation, message: str) -> str:
     "DONE"`` BEFORE returning the confirmation template, so legitimate
     confirmations are not affected.
     """
+    # Conversation Planner — PLANNER-FIRST protection (Phase 3, Class 1,
+    # 2026-06-24). The plan is computed ONCE (at the conversation_service routing
+    # chokepoint) and reused here, so it is available BEFORE the sticky
+    # deterministic handlers below (Sunday-School / static / pending). When the
+    # planner is authoritative AND the current intent is an explicit
+    # manager-phone request, answer it immediately with the configured number —
+    # this OVERRIDES a pending Sunday-School collection that would otherwise
+    # swallow the turn (live bug). Returns None for every other turn.
+    _planner_plan = _maybe_plan_turn(conversation, message)
+    if _planner_plan is not None and _planner_authoritative():
+        protected = _planner_protect_manager_phone(conversation, message, _planner_plan)
+        if protected is not None:
+            try:
+                from app.reasoning import conversation_trace as _t
+                _t.set(answered_by="planner_pre_answer",
+                       handler="_planner_protect_manager_phone")
+            except Exception:  # pragma: no cover — trace must never break a reply
+                pass
+            return _sanitise_booking_confirmation(conversation, protected)
+
     # Sunday School (planned July) — deterministic EMAIL-ONLY manager handoff.
     # Runs FIRST (before the static welcome / engine / camp contact-collection)
     # so a clear Sunday-school request — first message or mid-conversation — is
@@ -152,8 +172,12 @@ def handle(conversation: Conversation, message: str) -> str:
     # and the handoff really dispatches (the LLM previously only PROMISED it).
     # NO Calendar booking, NO WhatsApp; confirms only on a real email send.
     # Returns None for every non-Sunday-school message, so all other flows
-    # (incl. the static welcome below) are untouched.
-    sunday_school_response = _maybe_handle_sunday_school(conversation, message)
+    # (incl. the static welcome below) are untouched. Class 1: the planner plan
+    # is passed in so a pending collection defers to an unrelated current intent
+    # and never re-asks an already-known name/phone.
+    sunday_school_response = _maybe_handle_sunday_school(
+        conversation, message, plan=_planner_plan,
+    )
     if sunday_school_response is not None:
         return sunday_school_response
 
@@ -2532,15 +2556,69 @@ def _render_sunday_school_answer() -> str:
     return f"{avail} " + _SUNDAY_SCHOOL_OFFER_TAIL
 
 
+# Planner intents that, mid Sunday-School collection, are a CLEAR unrelated
+# current intent and must NOT be swallowed by the pending collection (Class 1).
+_SUNDAY_SCHOOL_DEFER_INTENTS: frozenset[str] = frozenset({
+    "manager_phone_request", "state_recall", "decline", "adult_event_decline",
+    "adult_event_discovery", "adult_event_for_self", "adult_event_for_child",
+    "adult_event_for_self_and_child", "adult_age_correction", "booking_recall",
+    "camp_registration",
+})
+
+
+def _render_sunday_school_status_only() -> str:
+    """The Sunday-School status (availability + details) WITHOUT the contact-ask
+    tail — used when the contact is already known (Class 1: never re-ask)."""
+    try:
+        from app.services import admin_config_service
+        st = admin_config_service.get_sunday_school_status() or {}
+    except Exception:  # pragma: no cover — defensive
+        st = {}
+    avail = (st.get("availability_text") or "").strip() or _SUNDAY_SCHOOL_FALLBACK_AVAILABILITY
+    details = (st.get("details_text") or "").strip()
+    return f"{avail} {details}".strip() if details else avail
+
+
+def _sunday_school_dispatch(conversation: Conversation, lead, text: str) -> str:
+    """Dispatch the Sunday-School manager handoff (EMAIL only) and return the
+    success / failure confirmation. Reused by the known-contact short-circuit
+    and the contact-collection completion."""
+    dispatched = False
+    try:
+        dispatched = notification_service.notify_sunday_school_handoff(lead)
+    except Exception:
+        logger.exception("[parent_flow] sunday-school email dispatch raised")
+        dispatched = False
+    try:
+        sheets_service.log_sunday_school_lead(
+            lead, user_message=text,
+            notification_status="sent" if dispatched else "failed",
+        )
+    except Exception:
+        logger.exception("[parent_flow] sunday-school sheet log raised")
+    if dispatched:
+        _sunday_school_notified_senders.add(conversation.sender_id)
+        logger.info("[parent_flow] sunday-school handoff dispatched")
+        return _SUNDAY_SCHOOL_SUCCESS
+    return _SUNDAY_SCHOOL_FAIL
+
+
 def _maybe_handle_sunday_school(
-    conversation: Conversation, message: str,
+    conversation: Conversation, message: str, plan=None,
 ) -> str | None:
     """Deterministic Sunday-School manager handoff (EMAIL ONLY).
 
     Fires on a Sunday-school request or while collecting Sunday-school
     contact. NEVER books a Calendar consultation, NEVER sends WhatsApp, and
     only confirms „გადავეცი" when the manager EMAIL actually dispatched.
-    Returns None for everything else so all other flows are untouched."""
+    Returns None for everything else so all other flows are untouched.
+
+    Class 1 (2026-06-24): the planner plan is passed in. When the planner is
+    authoritative and the CURRENT intent is a clear unrelated request
+    (manager phone / adult event / state recall / decline / …), a pending
+    collection DEFERS instead of swallowing the turn. And when name+phone are
+    ALREADY known, the handoff dispatches with the stored contact — it never
+    re-asks for them."""
     text = (message or "").strip()
     if not text:
         return None
@@ -2558,6 +2636,14 @@ def _maybe_handle_sunday_school(
     text_low = text.lower()
     phones = _distinct_valid_phones(text)
 
+    # Class 1 — planner-authoritative deferral: a clear unrelated current intent
+    # mid-collection must reach its own handler, never be swallowed here.
+    if (
+        in_collection and plan is not None and _planner_authoritative()
+        and getattr(plan, "user_current_intent", "") in _SUNDAY_SCHOOL_DEFER_INTENTS
+    ):
+        return None
+
     # A clear give-up OR a topic pivot / question mid-collection (no phone)
     # defers to the normal decline / engine path — instead of trapping the user
     # in the Sunday-school ask or mis-capturing a topic word („ბანაკი"/„ფასი")
@@ -2568,6 +2654,20 @@ def _maybe_handle_sunday_school(
         or "?" in text
     ):
         return None
+
+    # Class 1 — known contact: when name + phone are ALREADY on record, dispatch
+    # the handoff with the stored contact and NEVER re-ask for them. On a genuine
+    # first touch (intent, not yet collecting) lead with the status; on a
+    # mid-collection retry just return the dispatch result (the user already saw
+    # the status).
+    name_known_pre = bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
+    phone_known_pre = bool((lead.phone or "").strip())
+    if name_known_pre and phone_known_pre and not phones:
+        result = _sunday_school_dispatch(conversation, lead, text)
+        if not in_collection:
+            status = _render_sunday_school_status_only()
+            return f"{status} {result}".strip()
+        return result
 
     # First touch (pure intent, no contact yet) → answer + ask name+phone.
     # Do NOT parse a name here: „საკვირაო სკოლა მაინტერესებს" must never be
@@ -2598,25 +2698,7 @@ def _maybe_handle_sunday_school(
     have_name = name_known
 
     if have_phone and have_name:
-        dispatched = False
-        try:
-            dispatched = notification_service.notify_sunday_school_handoff(lead)
-        except Exception:
-            logger.exception("[parent_flow] sunday-school email dispatch raised")
-            dispatched = False
-        # Separate SundaySchoolLeads log — best-effort, NEVER blocks the email.
-        try:
-            sheets_service.log_sunday_school_lead(
-                lead, user_message=text,
-                notification_status="sent" if dispatched else "failed",
-            )
-        except Exception:
-            logger.exception("[parent_flow] sunday-school sheet log raised")
-        if dispatched:
-            _sunday_school_notified_senders.add(conversation.sender_id)
-            logger.info("[parent_flow] sunday-school handoff dispatched")
-            return _SUNDAY_SCHOOL_SUCCESS
-        return _SUNDAY_SCHOOL_FAIL
+        return _sunday_school_dispatch(conversation, lead, text)
 
     if have_phone and not have_name:
         return _SUNDAY_SCHOOL_ASK_NAME
@@ -3225,6 +3307,14 @@ def _maybe_plan_turn(conversation, message: str):
         return None
     try:
         from app.reasoning import conversation_planner
+        # Reuse the plan computed once at the conversation_service routing
+        # chokepoint (stashed on the conversation) so parent_flow never drifts
+        # from the routing decision (and the shadow log is not duplicated).
+        # Recompute + log only when parent_flow.handle is called directly (e.g.
+        # unit tests that bypass conversation_service).
+        stashed = getattr(conversation, "_turn_plan", None)
+        if stashed is not None:
+            return stashed
         plan = conversation_planner.plan_turn(message, conversation)
         logger.info(
             "[planner][shadow] intent=%s topic=%s policy=%s clear=%s "
@@ -3295,11 +3385,37 @@ def _planner_apply_state_clears(conversation, plan) -> None:
         pass
 
 
+def _planner_protect_manager_phone(conversation, message: str, plan) -> str | None:
+    """Class 1 — planner-first protection for an explicit manager-phone request.
+
+    Runs BEFORE the Sunday-School / pending / static handlers so a pending
+    Sunday-School collection can never swallow „მენეჯერის ნომერი მომწერეთ".
+    Returns the configured manager number (deterministically) or None when the
+    plan is not a manager-phone request."""
+    try:
+        if getattr(plan, "user_current_intent", "") != "manager_phone_request":
+            return None
+        lead = _ensure_lead(conversation)
+        logger.info(
+            "[planner][auth] manager-phone request → deterministic disclosure "
+            "(overrides pending state, sender=%s)", conversation.sender_id,
+        )
+        return _render_manager_number_answer(lead)
+    except Exception:  # pragma: no cover — defensive
+        return None
+
+
 def _planner_pre_answer(conversation, message: str, plan) -> str | None:
     """Deterministic answer for intents the LLM mis-handles, REUSING existing
     builders. Returns None for every intent that should keep the normal flow."""
     try:
         intent = getattr(plan, "user_current_intent", "")
+        if intent == "manager_phone_request":
+            return _render_manager_number_answer(_ensure_lead(conversation))
+        if intent == "camp_registration":
+            # Bare „რეგისტრაცია მინდა" in an active camp context → the configured
+            # registration link, never an age question (Class 5 #2).
+            return _render_camp_registration_answer()
         if intent == "state_recall":
             return _build_state_recall_reply(conversation)
         if intent in ("decline", "adult_event_decline"):
@@ -3369,6 +3485,148 @@ def _planner_validate_response(conversation, plan, response: str) -> str:
         return response
     except Exception:  # pragma: no cover — defensive
         return response
+
+
+# ── Central final validator (Class 6) ─────────────────────────────────────────
+# The LAST safety layer before the reply leaves `conversation_service`. It runs
+# on the FINAL answer of BOTH routes (parent + adult) and enforces the planner's
+# critical forbidden-response classes. Upstream routing/context fixes are
+# preferred; this only repairs a leaked violation. Conservative: it repairs ONLY
+# when a violation is detected, otherwise returns the response unchanged.
+
+# Camp-eligibility framing that must NOT appear in an adult-event answer.
+_CAMP_ELIGIBILITY_MARKERS: tuple[str, ...] = (
+    "9-17", "9–17", "9 -17", "9- 17", "ბანაკში მონაწილეობა",
+    "ბანაკში ჩაწერა", "ბანაკში ჩასაწერად", "2150",
+)
+# Age-question markers (a registration answer must not append one).
+_AGE_QUESTION_MARKERS: tuple[str, ...] = (
+    "რამდენი წლისაა", "რამდენი წლის არის", "რა ასაკის", "შვილი რამდენი წლის",
+    "ბავშვი რამდენი წლის", "რამდენი წლისაა შვილი",
+)
+# Contact-ask markers (must not re-ask when name+phone already known).
+_CONTACT_ASK_MARKERS: tuple[str, ...] = (
+    "მომწერეთ თქვენი სახელი", "მომწერეთ სახელი", "9-ნიშნა ნომერი",
+    "9 ნიშნა ნომერი", "თქვენი საკონტაქტო ნომერი", "მომწერეთ თქვენი 9",
+    "სახელი და 9", "სახელი და ნომერი", "თქვენი ნომერი",
+)
+# The robotic decline opener the brand-owner banned.
+_ROBOTIC_DECLINE_RE = re.compile(r"სიამოვნებით\.")
+
+
+def _split_sentences(text: str) -> list[str]:
+    return [s for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+
+
+def _strip_sentences_matching(response: str, markers: tuple[str, ...]) -> str:
+    kept = [
+        s for s in _split_sentences(response)
+        if not any(m in s.lower() for m in markers)
+    ]
+    return " ".join(kept).strip()
+
+
+def planner_final_validate(conversation, plan, response: str) -> str:
+    """Central final validator (Class 6). Enforces the planner's forbidden /
+    required response patterns on the FINAL answer (any route). Fail-closed:
+    returns the original response on any error."""
+    try:
+        if not response or plan is None:
+            return response
+        forbidden = set(getattr(plan, "forbidden_response_patterns", []) or [])
+        from app.reasoning import conversation_planner as _cp
+
+        out = response
+        low = out.lower()
+
+        # Reuse the consultation-format strip (camp safety/contact/visit).
+        out = _planner_validate_response(conversation, plan, out)
+        low = out.lower()
+
+        # 1) A manager-phone request MUST return the configured number.
+        if _cp.F_MUST_RETURN_MANAGER_PHONE in forbidden:
+            try:
+                from app.services import admin_config_service
+                phone = (admin_config_service.get_manager_phone() or "").strip()
+            except Exception:
+                phone = "558 67 47 33"
+            phone = phone or "558 67 47 33"
+            digits = re.sub(r"\D", "", phone)
+            if digits and digits not in re.sub(r"\D", "", out):
+                logger.info("[planner][validator] forced manager-phone disclosure")
+                out = _render_manager_number_answer(getattr(conversation, "lead", None))
+                low = out.lower()
+
+        # 2) A registration request MUST return the link and MUST NOT append an
+        #    age question.
+        if _cp.F_MUST_RETURN_REGISTRATION_LINK in forbidden:
+            link = _camp_registration_url()
+            if link and link not in out:
+                logger.info("[planner][validator] forced camp registration link")
+                out = _render_camp_registration_answer()
+                low = out.lower()
+            elif any(m in low for m in _AGE_QUESTION_MARKERS):
+                out = _strip_sentences_matching(out, _AGE_QUESTION_MARKERS)
+                low = out.lower()
+
+        # 3) A registration / recall answer must NOT append an age/date question.
+        if _cp.F_NO_DATE_TIME_QUESTION in forbidden and any(
+            m in low for m in _AGE_QUESTION_MARKERS
+        ):
+            out = _strip_sentences_matching(out, _AGE_QUESTION_MARKERS)
+            low = out.lower()
+
+        # 4) child_age must NEVER be presented as the user's (adult) age.
+        if _cp.F_NO_ADULT_AGE_AS_CHILD in forbidden:
+            child_age = (getattr(plan, "child_age", "") or "").strip()
+            if child_age:
+                bad = (
+                    f"თქვენ {child_age} წლის", f"თქვენი ასაკი {child_age}",
+                    f"თქვენ {child_age} წელ",
+                )
+                if any(b in out for b in bad):
+                    logger.info("[planner][validator] stripped child-age-as-adult-age")
+                    out = _strip_sentences_matching(
+                        out, tuple(b.lower() for b in bad),
+                    )
+                    low = out.lower()
+
+        # 5) An adult-event answer must NOT use camp eligibility framing.
+        if _cp.F_NO_CAMP_ELIGIBILITY_FOR_ADULT in forbidden and any(
+            m in low for m in _CAMP_ELIGIBILITY_MARKERS
+        ):
+            stripped = _strip_sentences_matching(out, _CAMP_ELIGIBILITY_MARKERS)
+            if stripped:
+                logger.info("[planner][validator] stripped camp eligibility from adult answer")
+                out = stripped
+                low = out.lower()
+
+        # 6) A decline must NOT use the robotic „სიამოვნებით." opener.
+        if _cp.F_NO_ROBOTIC_DECLINE_PHRASE in forbidden and _ROBOTIC_DECLINE_RE.search(out):
+            out = _ROBOTIC_DECLINE_RE.sub("გმადლობთ.", out, count=1).strip()
+            low = out.lower()
+
+        # 7) Known name/phone must not be re-asked.
+        if _cp.F_NO_REASK_KNOWN_CONTACT in forbidden and any(
+            m in low for m in _CONTACT_ASK_MARKERS
+        ):
+            stripped = _strip_sentences_matching(out, _CONTACT_ASK_MARKERS)
+            if stripped:
+                out = stripped
+                low = out.lower()
+
+        return out or response
+    except Exception:  # pragma: no cover — validator must never break a reply
+        return response
+
+
+def _camp_registration_url() -> str:
+    try:
+        from app.services import admin_config_service
+        camp = admin_config_service.get_camp_facts() or {}
+        return (camp.get("registration_url") or "").strip()
+    except Exception:  # pragma: no cover — defensive
+        return ""
 
 
 def _extract_event_day_reference(message: str) -> int | None:

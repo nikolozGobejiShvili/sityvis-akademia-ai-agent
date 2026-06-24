@@ -330,6 +330,116 @@ def _is_registration_link_request(message_text: str) -> bool:
     return bool(_REGISTRATION_FORM_TOKEN_RE.search(text))
 
 
+# =========================================================================
+# Conversation Planner integration (Phase 3, 2026-06-24) — the topic-routing
+# authority + state-writeback + central final-validator chokepoint. All gated
+# behind USE_CONVERSATION_PLANNER (compute/shadow) and additionally
+# CONVERSATION_PLANNER_AUTHORITATIVE (apply). Default OFF + pinned OFF in
+# tests → byte-identical behaviour for the existing suite. Fail-closed.
+# =========================================================================
+
+# Intents the PARENT flow answers deterministically (planner pre-answer / the
+# existing deterministic handlers). When the planner returns one of these the
+# turn is routed to parent_flow even from a sticky-ADULT segment, WITHOUT
+# flipping the sticky segment (route this turn only).
+_PLANNER_PARENT_INTENTS: frozenset[str] = frozenset({
+    "state_recall", "manager_phone_request", "booking_recall", "decline",
+    "adult_event_decline", "name_update", "sunday_school", "tone_request",
+    "camp_registration",
+})
+
+
+def _planner_authoritative() -> bool:
+    return bool(
+        getattr(settings, "USE_CONVERSATION_PLANNER", False)
+        and getattr(settings, "CONVERSATION_PLANNER_AUTHORITATIVE", False)
+    )
+
+
+def _maybe_compute_plan(conversation, message_text: str):
+    """Compute the unified TurnPlan once per turn (when USE_CONVERSATION_PLANNER
+    is on). Returns None when the flag is off or on any error (fail-closed)."""
+    if not getattr(settings, "USE_CONVERSATION_PLANNER", False):
+        return None
+    try:
+        from app.reasoning import conversation_planner
+        plan = conversation_planner.plan_turn(message_text, conversation)
+        logger.info(
+            "[planner][%s] intent=%s topic=%s policy=%s clear=%s "
+            "use_booking=%s wb_adult=%s reason=%s",
+            "auth" if _planner_authoritative() else "shadow",
+            plan.user_current_intent, plan.active_topic, plan.answer_policy,
+            plan.state_to_clear, plan.should_use_confirmed_booking,
+            plan.writeback_adult_age, plan.reason,
+        )
+        return plan
+    except Exception:  # pragma: no cover — planner must never break a reply
+        return None
+
+
+def _planner_apply_writebacks(conversation, plan) -> None:
+    """Apply the planner's deterministic state writebacks (Class 5). Currently:
+    the adult-age self-correction writes ``lead.adult_age`` while preserving
+    ``lead.child_age``. Pure, in-memory; never touches Calendar/Sheets. Visible
+    in the trace as ``writebacks``."""
+    try:
+        wb_adult = (getattr(plan, "writeback_adult_age", None) or "").strip()
+        if not wb_adult:
+            return
+        lead = getattr(conversation, "lead", None)
+        if lead is None:
+            return
+        before = (getattr(lead, "adult_age", "") or "").strip()
+        if before == wb_adult:
+            return
+        lead.adult_age = wb_adult
+        # child_age is intentionally NOT touched — the two ages stay separate.
+        logger.info(
+            "[planner][writeback] adult_age=%s (child_age preserved=%s)",
+            wb_adult, (getattr(lead, "child_age", "") or "").strip() or "—",
+        )
+        try:
+            from app.reasoning import conversation_trace as _trace
+            _trace.set(writebacks={"adult_age": wb_adult})
+        except Exception:  # pragma: no cover — trace must never break a reply
+            pass
+    except Exception:  # pragma: no cover — writeback must never break a reply
+        logger.exception("[planner][writeback] raised — ignored")
+
+
+def _planner_route_decision(plan, current_segment: str):
+    """Return ``(route_segment, persist)`` — which flow handles THIS turn, and
+    whether to flip the sticky ``conversation.segment``.
+
+    A clear domain (adult_event / camp / consultation) is a sticky topic switch
+    (persist=True). A neutral intent the parent flow answers deterministically
+    routes to PARENT for THIS turn without flipping the sticky segment. An
+    ambiguous turn keeps the current segment unchanged."""
+    topic = getattr(plan, "active_topic", "none")
+    intent = getattr(plan, "user_current_intent", "unclear")
+    if topic == "adult_event":
+        return "ADULT", True
+    if topic in ("camp", "consultation"):
+        return "PARENT", True
+    if intent in _PLANNER_PARENT_INTENTS or topic in (
+        "general_state", "sunday_school", "manager_contact",
+    ):
+        return "PARENT", False
+    return current_segment, False
+
+
+def _planner_final_validate(conversation, plan, response: str) -> str:
+    """Central final validator (Class 6) — the LAST safety layer. Enforces the
+    planner's forbidden-response patterns on the FINAL answer regardless of
+    route. Prefers upstream routing/context fixes; this only repairs a leaked
+    violation. Fail-closed (returns the original response on any error)."""
+    try:
+        from app.flows import parent_flow
+        return parent_flow.planner_final_validate(conversation, plan, response)
+    except Exception:  # pragma: no cover — validator must never break a reply
+        return response
+
+
 class SafeFormatter(Formatter):
     def get_value(self, key: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         if isinstance(key, str):
@@ -528,7 +638,59 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
         )
         conversation.segment = "PARENT"
 
-    if conversation.segment == "UNCLEAR":
+    # Conversation Planner (Phase 3) — compute the unified TurnPlan ONCE per turn
+    # and stash it on the conversation so the downstream handlers (parent_flow)
+    # reuse the SAME decision instead of recomputing (no drift). Class 1: this
+    # runs BEFORE every flow handler, so the planner output is available to the
+    # Sunday-School / pending / static handlers. Classes 2 + 5 (topic-routing
+    # authority + state writebacks) apply ONLY in AUTHORITATIVE mode.
+    plan = _maybe_compute_plan(conversation, message_text)
+    conversation._turn_plan = plan          # transient (not persisted)
+    route_segment = conversation.segment
+    if plan is not None:
+        _trace.set(
+            planner_intent=getattr(plan, "user_current_intent", "unclear"),
+            planner_active_topic=getattr(plan, "active_topic", "none"),
+            planner_forbidden=list(
+                getattr(plan, "forbidden_response_patterns", []) or []
+            ),
+        )
+        # Class 3 — record the topic-scoped selected_state in the trace (visible
+        # regardless of slim/giant prompt mode). Never raises.
+        try:
+            from app.reasoning import selected_state as _ss
+            _trace.set(
+                selected_state=_ss.format_selected_state(
+                    _ss.build_selected_state(plan, conversation.lead, conversation),
+                ),
+            )
+        except Exception:  # pragma: no cover — trace must never break a reply
+            pass
+        if _planner_authoritative():
+            # Class 5 — apply state writebacks (adult_age self-correction) BEFORE
+            # routing so the chosen flow sees the corrected state.
+            _planner_apply_writebacks(conversation, plan)
+            # Class 2 — topic-routing authority: the planner's active_topic /
+            # intent decides which flow handles THIS turn. A clear domain switch
+            # (adult_event / camp) is sticky; a neutral intent the parent flow
+            # answers deterministically (state recall / manager phone / decline /
+            # registration) routes to PARENT for THIS turn WITHOUT flipping the
+            # sticky segment.
+            route_segment, persist = _planner_route_decision(
+                plan, conversation.segment,
+            )
+            if route_segment != conversation.segment:
+                logger.info(
+                    "[planner][route] active_topic=%s intent=%s segment=%s→%s "
+                    "persist=%s (sender=%s)",
+                    plan.active_topic, plan.user_current_intent,
+                    conversation.segment, route_segment, persist,
+                    sentry_service.mask_sender(sender_id),
+                )
+                if persist and route_segment in {"PARENT", "ADULT"}:
+                    conversation.segment = route_segment
+
+    if route_segment == "UNCLEAR":
         # Identity-question short-circuit: when the user asks "ბოტი
         # ხარ?" / "AI ხარ?" while still in the unclear-segment menu,
         # answer briefly with the brand identity instead of just
@@ -546,21 +708,35 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
             response = _REGISTRATION_LINK_CLARIFICATION
         else:
             response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
-    elif conversation.segment == "PARENT":
+    elif route_segment == "PARENT":
         _trace.set(route="parent_flow", segment="PARENT")
         response = parent_flow.handle(conversation, message_text)
-    elif conversation.segment == "ADULT":
-        # NOTE: the Conversation Planner is authoritative ONLY inside
-        # parent_flow.handle; the ADULT route does NOT consult it.
+    elif route_segment == "ADULT":
+        # The Conversation Planner is authoritative inside parent_flow.handle;
+        # on the ADULT route the planner's topic decision already steered us
+        # here, the writeback ran above, and the central final validator below
+        # enforces the forbidden-pattern policy on the adult engine's answer.
         _trace.set(
             route="adult_flow", segment="ADULT",
-            planner_applies_on_route=False,
-            note="planner not wired into adult_flow",
+            planner_applies_on_route=bool(plan is not None and _planner_authoritative()),
         )
         response = adult_flow.handle(conversation, message_text)
     else:
-        _trace.set(route="unclear_routing", segment=conversation.segment)
+        _trace.set(route="unclear_routing", segment=route_segment)
         response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
+
+    # Class 6 — central final validator (last safety layer). Enforces the
+    # planner's forbidden-response patterns on the FINAL answer regardless of
+    # route (parent / adult). Prefers upstream routing/context fixes; this only
+    # catches a leaked violation before the reply is sent. Gated on
+    # AUTHORITATIVE mode + a plan; fail-closed (never raises).
+    if plan is not None and _planner_authoritative():
+        _before = response
+        response = _planner_final_validate(conversation, plan, response)
+        _trace.set(
+            final_validator_ran=True,
+            final_validator_changed=(response != _before),
+        )
 
     # Central PII chokepoint (Response Planner Hardening, 2026-06-23) — the
     # user's OWN stored phone must NEVER be echoed back in clear over an

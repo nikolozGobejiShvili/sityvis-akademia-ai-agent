@@ -2190,12 +2190,21 @@ def run_adult_llm_turn(
         )
         return ""
 
-    context_message = _build_context_message(conversation, lead)
-
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt},
-        {"role": "system", "content": context_message},
-    ]
+    if _use_slim_prompts():
+        slim_state, slim_policy = _build_slim_context(conversation, lead)
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": slim_state},
+            {"role": "system", "content": slim_policy},
+        ]
+        _trace_prompt_mode("slim", slim_state)
+    else:
+        context_message = _build_context_message(conversation, lead)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": context_message},
+        ]
+        _trace_prompt_mode("giant", None)
     messages.extend(_recent_history(conversation))
     messages.append({"role": "user", "content": user_message})
 
@@ -2292,10 +2301,42 @@ def run_adult_llm_turn(
 # -- prompt + context assembly -------------------------------------------
 
 
+def _use_slim_prompts() -> bool:
+    """Slim Prompt mode (Class 4) — load `adult_core.md` instead of the 54 KB
+    `system_adult_v1.md` and inject only planner policy + selected_state."""
+    return bool(getattr(settings, "USE_SLIM_PROMPTS", False))
+
+
 def _build_system_prompt() -> str:
-    raw = load_prompt("system_adult_v1")
+    # Class 4: slim mode loads the short core prompt; default loads the giant
+    # prompt exactly as before (do NOT load system_adult_v1.md when slim).
+    prompt_name = "adult_core" if _use_slim_prompts() else "system_adult_v1"
+    raw = load_prompt(prompt_name)
     company_name = settings.COMPANY_NAME or "სიტყვის აკადემია"
     return raw.format(company_name=company_name)
+
+
+def _build_slim_context(conversation, lead) -> tuple[str, str]:
+    """Build (selected_state, planner_policy) system blocks for slim mode from
+    the turn plan stashed on the conversation. Topic-scoped (Class 3): the
+    adult-self flow sees adult_age only — never the child's age. Never raises."""
+    try:
+        from app.reasoning import selected_state as _ss
+        plan = getattr(conversation, "_turn_plan", None)
+        selected = _ss.build_selected_state(plan, lead, conversation)
+        return _ss.format_selected_state(selected), _ss.format_planner_policy(plan)
+    except Exception:  # pragma: no cover — slim context must never break a reply
+        return "SELECTED STATE: (ცარიელია)", "PLANNER POLICY: (none)"
+
+
+def _trace_prompt_mode(mode: str, selected_block) -> None:
+    try:
+        from app.reasoning import conversation_trace as _trace
+        _trace.set(prompt_mode=mode)
+        if selected_block is not None:
+            _trace.set(selected_state=selected_block)
+    except Exception:  # pragma: no cover — trace must never break a reply
+        pass
 
 
 def _build_context_message(conversation: Conversation, lead: Lead) -> str:
