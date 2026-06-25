@@ -25,6 +25,11 @@ from app.flows.parent_turn_router import (
 )
 from app.models.conversation import Conversation
 from app.models.lead import Lead
+from app.reasoning.age_question import (
+    AGE_QUESTION_RE,
+    contains_child_age_question,
+    strip_child_age_questions,
+)
 from app.services import (
     calendar_service,
     messenger_service,
@@ -554,6 +559,10 @@ def handle(conversation: Conversation, message: str) -> str:
             return _sanitise_booking_confirmation(conversation, engine_response)
 
     response = _handle_impl(conversation, message)
+    # Legacy state-machine fallback path also gets the state-driven age-reask
+    # guard (the engine path applies it at line ~528; this mirrors it so the
+    # guard is common to BOTH return paths, planner ON or OFF).
+    response = _strip_redundant_age_question_if_known(conversation, response)
     if _trace is not None:
         _trace.set(answered_by="legacy_state_machine", handler="_handle_impl")
     if _planner_plan is not None and _planner_authoritative():
@@ -957,15 +966,13 @@ def _strip_unwarranted_thanks_in_booking_confirmation(
 
 # PARENT Reschedule State + Segment Override Patch (2026-06-10) — Fix 1.
 # Never re-ask the child's age when it is already known (e.g. after an
-# ADULT→PARENT recovery on a returning lead whose `child_age` is in
-# Redis). Strips a redundant age question; if that was the whole reply,
-# replaces it with a continue-the-flow acknowledgement.
-_AGE_QUESTION_STEMS: tuple[str, ...] = (
-    "რამდენი წლის",
-    "შვილის ასაკი",
-    "ბავშვის ასაკი",
-    "ასაკი მითხ",
-)
+# ADULT→PARENT recovery on a returning lead whose `child_age` is in Redis, OR
+# while answering a camp-fact question). Detection / stripping is delegated to
+# the SHARED helpers (app/reasoning/age_question.py) so EVERY real Georgian
+# phrasing („რა წლისაა", „რამდენ წლისაა", „რომელ კლასში") is caught — the old
+# narrow stem list missed those (live bug 2026-06-25, legacy path). This is the
+# legacy chokepoint: it runs on every engine reply BEFORE the reply is returned,
+# regardless of the planner flag.
 
 
 def _child_age_known(lead: Lead | None) -> bool:
@@ -977,22 +984,21 @@ def _child_age_known(lead: Lead | None) -> bool:
 def _strip_redundant_age_question_if_known(
     conversation: Conversation, response: str,
 ) -> str:
+    """STATE-DRIVEN (reads lead.child_age, not the planner flag). When the child
+    age is known and the answer asks for it again, drop only that sentence and
+    keep the useful answer. If the whole reply was the age question, replace it
+    with a relevant next step that acknowledges the known age."""
     if not response:
         return response
     lead = getattr(conversation, "lead", None)
     if not _child_age_known(lead):
         return response
-    low = response.lower()
-    if not any(stem in low for stem in _AGE_QUESTION_STEMS):
+    if not contains_child_age_question(response):
         return response
-    # Drop the sentence/clause(s) that ask for age; keep the rest.
-    parts = re.split(r"(?<=[.?!])\s+", response)
-    kept = [
-        p for p in parts
-        if not any(stem in p.lower() for stem in _AGE_QUESTION_STEMS)
-    ]
-    out = " ".join(kept).strip()
+    out = strip_child_age_questions(response)
     if not out:
+        # The whole reply was just the age question → keep moving the flow
+        # forward while acknowledging the age we already have.
         age = _extract_age_digits(lead.child_age or "")
         out = (
             f"თქვენი შვილის ასაკი ({age} წელი) უკვე მაქვს. "
@@ -1041,9 +1047,8 @@ def _ensure_camp_age_question(
     # before routing here for camp traffic.
     if getattr(conversation, "segment", "") != "PARENT":
         return response
-    low = response.lower()
-    # Reply already asks for the age → leave it.
-    if any(stem in low for stem in _AGE_QUESTION_STEMS):
+    # Reply already asks for the age (any phrasing) → leave it.
+    if contains_child_age_question(response):
         return response
     # Don't graft the question onto a terminal handoff / adult redirect.
     if any(marker in response for marker in _CAMP_AGE_SKIP_MARKERS):
@@ -3544,11 +3549,10 @@ _CAMP_ELIGIBILITY_MARKERS: tuple[str, ...] = (
     "9-17", "9–17", "9 -17", "9- 17", "ბანაკში მონაწილეობა",
     "ბანაკში ჩაწერა", "ბანაკში ჩასაწერად", "2150",
 )
-# Age-question markers (a registration answer must not append one).
-_AGE_QUESTION_MARKERS: tuple[str, ...] = (
-    "რამდენი წლისაა", "რამდენი წლის არის", "რა ასაკის", "შვილი რამდენი წლის",
-    "ბავშვი რამდენი წლის", "რამდენი წლისაა შვილი",
-)
+# Age-question detection now uses the shared AGE_QUESTION_RE
+# (app/reasoning/age_question.py) — see Fix 1.1. The old narrow tuple missed
+# real model phrasings („რა წლისაა", „რომელ კლასში") and let a redundant
+# child-age question reach the user.
 # Contact-ask markers (must not re-ask when name+phone already known).
 _CONTACT_ASK_MARKERS: tuple[str, ...] = (
     "მომწერეთ თქვენი სახელი", "მომწერეთ სახელი", "9-ნიშნა ნომერი",
@@ -3568,6 +3572,13 @@ def _strip_sentences_matching(response: str, markers: tuple[str, ...]) -> str:
         s for s in _split_sentences(response)
         if not any(m in s.lower() for m in markers)
     ]
+    return " ".join(kept).strip()
+
+
+def _strip_sentences_matching_re(response: str, regex) -> str:
+    """Drop every sentence whose lowercased form matches ``regex``. Used for the
+    shared AGE_QUESTION_RE so any real age-question phrasing is removed."""
+    kept = [s for s in _split_sentences(response) if not regex.search(s.lower())]
     return " ".join(kept).strip()
 
 
@@ -3610,15 +3621,13 @@ def planner_final_validate(conversation, plan, response: str) -> str:
                 logger.info("[planner][validator] forced camp registration link")
                 out = _render_camp_registration_answer()
                 low = out.lower()
-            elif any(m in low for m in _AGE_QUESTION_MARKERS):
-                out = _strip_sentences_matching(out, _AGE_QUESTION_MARKERS)
+            elif AGE_QUESTION_RE.search(low):
+                out = _strip_sentences_matching_re(out, AGE_QUESTION_RE)
                 low = out.lower()
 
         # 3) A registration / recall answer must NOT append an age/date question.
-        if _cp.F_NO_DATE_TIME_QUESTION in forbidden and any(
-            m in low for m in _AGE_QUESTION_MARKERS
-        ):
-            out = _strip_sentences_matching(out, _AGE_QUESTION_MARKERS)
+        if _cp.F_NO_DATE_TIME_QUESTION in forbidden and AGE_QUESTION_RE.search(low):
+            out = _strip_sentences_matching_re(out, AGE_QUESTION_RE)
             low = out.lower()
 
         # 4) child_age must NEVER be presented as the user's (adult) age.
@@ -3659,6 +3668,35 @@ def planner_final_validate(conversation, plan, response: str) -> str:
             if stripped:
                 out = stripped
                 low = out.lower()
+
+        # 8) child_age is already known → NEVER re-ask it. STATE-driven (reads
+        #    the lead, not just the planner flag) so it also covers camp turns
+        #    where the planner may not have set F_NO_REASK_CHILD_AGE (e.g.
+        #    camp_safety / „სტუმრები არიან"). The adult-event topic is excluded:
+        #    asking a child's age in an adult-for-child flow is legitimate.
+        #    This is the missing net from §0-A of the fix plan.
+        child_age_known = (getattr(plan, "child_age", "") or "").strip()
+        if not child_age_known:
+            _lead = getattr(conversation, "lead", None)
+            child_age_known = (
+                (getattr(_lead, "child_age", "") or "").strip() if _lead else ""
+            )
+        topic = getattr(plan, "active_topic", "") or ""
+        if child_age_known and topic != "adult_event" and AGE_QUESTION_RE.search(low):
+            stripped = _strip_sentences_matching_re(out, AGE_QUESTION_RE)
+            if stripped and stripped.strip() and stripped != out:
+                logger.info(
+                    "[planner][validator] stripped redundant child-age question",
+                )
+                out = stripped
+            elif not stripped or not stripped.strip():
+                # The age question was the ONLY sentence → replace with the
+                # next booking step instead of returning an empty reply.
+                out = (
+                    "გასაგებია. კონსულტაციისთვის მომწერეთ თქვენი ნომერი ან "
+                    "სასურველი დღე და საათი."
+                )
+            low = out.lower()
 
         return out or response
     except Exception:  # pragma: no cover — validator must never break a reply

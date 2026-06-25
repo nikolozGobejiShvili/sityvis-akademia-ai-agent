@@ -33,6 +33,11 @@ from app.agent.tools.parent_tools import PARENT_TOOLS
 from app.config import settings
 from app.models.conversation import Conversation
 from app.models.lead import Lead
+from app.reasoning.age_question import (
+    AGE_QUESTION_RE,
+    contains_child_age_question,
+    strip_child_age_questions,
+)
 from app.services import openai_service
 
 logger = logging.getLogger(__name__)
@@ -1706,12 +1711,12 @@ def sanitise_response_wording(text: str) -> str:
 # deterministic safety net for the live „14 წლის არის …" bug so a stochastic
 # model can NEVER ask for the child's age once it is on the lead.
 
-# Unambiguous „please tell me the child's age" QUESTION stems. Kept tight so
-# a CONFIRMATION („თქვენი შვილის ასაკი 14 წელია") never trips the guard.
-_AGE_QUESTION_MARKERS: tuple[str, ...] = (
-    "რამდენი წლის",
-    "რა ასაკის",
-)
+# Real Georgian forms of "what age is the child?" are matched by the shared
+# AGE_QUESTION_RE (app/reasoning/age_question.py). It catches the many ways a
+# live model asks the age („რა წლისაა", „რამდენ წლისაა", „ასაკი მითხარით",
+# „რომელ კლასში") that the old two-substring tuple missed, while leaving a
+# CONFIRMATION („თქვენი შვილის ასაკი 14 წელია") and an ELIGIBILITY statement
+# („9–17 წლის ბავშვებისთვის") untouched.
 
 # Code-level next-step copy (NOT a prompt file) used only when the guard has
 # to replace a redundant age question. Matches the existing booking wording.
@@ -1736,19 +1741,27 @@ def _suppress_redundant_age_question(
     text: str, lead: Lead, conversation: Conversation,
 ) -> str:
     """Anti-repeat guard: if the child's age is already known but the reply
-    still asks for it, replace the reply with the next missing detail. When
-    the age is genuinely unknown the reply is returned untouched (asking is
-    correct then)."""
+    still asks for it, STRIP only the age question (sentence-level) and keep the
+    rest of the answer. When the whole reply was just the age question, replace
+    it with the next missing detail. When the age is genuinely unknown the reply
+    is returned untouched (asking is correct then). Uses the shared
+    AGE_QUESTION_RE so every real phrasing is caught."""
     if not text:
         return text
     if not (lead.child_age or "").strip():
         return text
-    low = text.lower()
-    if not any(marker in low for marker in _AGE_QUESTION_MARKERS):
+    if not contains_child_age_question(text):
         return text
+    stripped = strip_child_age_questions(text)
+    if stripped:
+        logger.info(
+            "[parent_llm_engine] anti-repeat: stripped a redundant child-age "
+            "question, kept the rest (child_age already known)",
+        )
+        return stripped
     logger.info(
-        "[parent_llm_engine] anti-repeat: replaced a redundant child-age "
-        "question (child_age already known)",
+        "[parent_llm_engine] anti-repeat: replaced an age-only reply with the "
+        "next step (child_age already known)",
     )
     return _next_missing_contact_prompt(lead)
 
