@@ -3056,19 +3056,29 @@ def _is_explicit_manager_number_request(message: str) -> bool:
     return True
 
 
-def _render_manager_number_answer(lead: Lead | None = None) -> str:
+def _render_manager_number_answer(
+    lead: Lead | None = None, *, self_call: bool = False,
+) -> str:
     """Disclose the configured manager number. CONTEXT-AWARE: when we ALREADY
     have the parent's phone (e.g. a consultation is booked), we do NOT ask for
     it again — we just give the number and note the manager will reach out.
     When the phone is unknown we additionally offer a callback. The number is
     read from ``admin_config_service.get_manager_phone()`` (company.yaml /
-    admin / env) — never invented."""
+    admin / env) — never invented.
+
+    ``self_call`` — the parent said they will phone the manager THEMSELVES
+    („მე თვითონ დავურეკავ"). In that case we just give the number and never
+    ask for the parent's own number (no callback offer) and never promise an
+    outbound call they did not request (live bug 2026-06-25)."""
     from app.services import admin_config_service
 
     phone_known = bool(lead is not None and (lead.phone or "").strip())
     phone = (admin_config_service.get_manager_phone() or "").strip()
     if phone:
         base = f"მენეჯერის ნომერია: {phone}. შეგიძლიათ პირდაპირ დაუკავშირდეთ."
+        if self_call:
+            # They will call themselves → no callback offer, no „I'll reach out".
+            return base
         if phone_known:
             # Already have their number → never re-ask for it.
             return base + " მენეჯერი ასევე თავად დაგიკავშირდებათ."
@@ -3076,13 +3086,31 @@ def _render_manager_number_answer(lead: Lead | None = None) -> str:
             base + " თუ გირჩევნიათ, დატოვეთ თქვენი ნომერი და მენეჯერი თავად "
             "დაგიკავშირდებათ."
         )
-    # No number configured → graceful fallback, never invents one.
-    if phone_known:
+    # No number configured → graceful fallback, never invents one. Never ask
+    # for the parent's number when they said they will call the manager.
+    if phone_known or self_call:
         return "მენეჯერი თავად დაგიკავშირდებათ."
     return (
         "მენეჯერი სიამოვნებით დაგეხმარებათ — დატოვეთ თქვენი ნომერი და "
         "თავად დაგიკავშირდებათ."
     )
+
+
+# Positive give-me / write-me / send-me request markers. Used to distinguish an
+# explicit request for the manager's number („მენეჯერის ნომერი მომწერეთ") from a
+# refusal of it („მენეჯერის ნომერი არ მინდა") so a decline that names the number
+# is not mistaken for a request.
+_POSITIVE_CONTACT_REQUEST_MARKERS: tuple[str, ...] = (
+    "მომწერ", "მომეც", "გამომიგზავ", "გადმომიგზავ", "გამოგზავ", "მაცნობ",
+    "მიამბ", "მინდა ნომერ", "ნომერი მინდა", "ნომერ მინდა",
+)
+
+
+def _has_positive_contact_request_marker(message: str) -> bool:
+    """True when the message carries a positive 'give me / write me / send me'
+    request marker — a positive ask for contact, not a refusal."""
+    low = (message or "").lower()
+    return any(m in low for m in _POSITIVE_CONTACT_REQUEST_MARKERS)
 
 
 def _maybe_handle_explicit_manager_request(
@@ -3093,17 +3121,16 @@ def _maybe_handle_explicit_manager_request(
     manager/number). Returns None for every other message so booking /
     contact-collection / the engine are untouched. The phone request outranks
     contact collection (this runs before the contact-collection interceptor)."""
-    if not (
-        _is_explicit_manager_number_request(message)
-        or _is_self_call_manager_request(message)
-    ):
+    is_self_call = _is_self_call_manager_request(message)
+    if not (_is_explicit_manager_number_request(message) or is_self_call):
         return None
     lead = _ensure_lead(conversation)
     logger.info(
         "[parent_flow] explicit manager-number request → deterministic "
-        "disclosure (sender=%s)", conversation.sender_id,
+        "disclosure (self_call=%s sender=%s)", is_self_call,
+        conversation.sender_id,
     )
-    return _render_manager_number_answer(lead)
+    return _render_manager_number_answer(lead, self_call=is_self_call)
 
 
 # -- contact correction (phone / name) — live-demo fix (2026-06-22) ---------
@@ -4379,6 +4406,28 @@ def _maybe_handle_decline_engine(
     is_will_think = any(p in text for p in _WILL_THINK_PHRASES)
 
     if not (is_decline or is_will_think):
+        return None
+
+    # Explicit manager-CONTACT request wins over a generic decline (live bug
+    # 2026-06-25). A parent may decline the consultation in the SAME message
+    # while explicitly asking for the manager's number to call directly
+    # („კონსულტაცია არ მინდა, მენეჯერის ნომერი რომ მომწეროთ და მე თვითონ
+    # დავურეკავ"). Defer (return None) so the explicit-manager interceptor that
+    # runs next in handle() discloses the number, instead of cold-closing.
+    # Gated to a POSITIVE request — a self-call intent („…დავურეკავ") OR a
+    # manager-number request with a give-me/write-me marker — so a refusal of
+    # the number itself („მენეჯერის ნომერი არ მინდა") still closes politely.
+    # Uses the SAME detectors as that interceptor, so a deferral here is
+    # guaranteed to land there (never a dead turn).
+    if _is_self_call_manager_request(message) or (
+        _is_explicit_manager_number_request(message)
+        and _has_positive_contact_request_marker(message)
+    ):
+        logger.info(
+            "[parent_flow] decline phrase co-occurs with an explicit "
+            "manager-contact request — deferring to manager disclosure "
+            "(sender=%s)", conversation.sender_id,
+        )
         return None
 
     # Price-objection guard: a decline phrase that co-occurs with an

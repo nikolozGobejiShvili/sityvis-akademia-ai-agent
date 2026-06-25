@@ -29,6 +29,13 @@ _MANAGER_STEMS = ("მენეჯერ", "მენჯერ")          # incl
 _CONTACT_STEMS = ("ნომერ", "ტელეფონ", "კონტაქტ")
 _DECLINE_STEMS = ("არ მინდა", "უარს", "გავაუქმ")
 _SUBSCRIBE_STEMS = ("გამომიწერ", "გამოწერა", "შემატყობინ", "მაცნობ", "სიაში ჩამამატ")
+# Self-call intent — the user will phone the manager THEMSELVES („მე თვითონ
+# დავურეკავ"), so they want the manager's number. Paired with a manager/contact
+# cue this is an EXPLICIT request for the manager's contact, even when a decline
+# („არ მინდა") co-occurs in the same message.
+_SELF_CALL_STEMS = (
+    "დავურეკავ", "დავუკავშირდები", "დავკავშირდები", "თვითონ დავ", "თავად დავ",
+)
 
 # UNAMBIGUOUS link/form/registration markers for the context-aware (no camp
 # keyword) case. Deliberately EXCLUDES the „ჩაწერა/ჩავწერ/ჩავეწერ" enrollment
@@ -43,6 +50,24 @@ _FORM_TOKEN_RE = re.compile(r"(?<![ა-ჰ])ფორმ(?!ატ)")
 
 def _has(low: str, stems) -> bool:
     return any(s in low for s in stems)
+
+
+def _is_manager_contact_request(low: str) -> bool:
+    """True when the message EXPLICITLY asks for the manager's contact details:
+    a manager word + a contact word (number/phone/contact), OR a self-call
+    intent („მე თვითონ დავურეკავ") that targets the manager or a number.
+
+    This is an explicit POSITIVE action and must outrank a generic decline that
+    co-occurs in the SAME message (live bug 2026-06-25: „კონსულტაცია არ მინდა
+    მენეჯერის ნომერი რომ მომწეროთ და მე თვითონ დავურეკავ" — the parent declines
+    the consultation but still wants the manager's number to call directly)."""
+    has_manager = _has(low, _MANAGER_STEMS)
+    has_contact = _has(low, _CONTACT_STEMS)
+    if has_manager and has_contact:
+        return True
+    if _has(low, _SELF_CALL_STEMS) and (has_manager or has_contact):
+        return True
+    return False
 
 
 def _camp_context(conversation) -> bool:
@@ -92,15 +117,27 @@ def detect_legacy_explicit_action(text: str, conversation=None) -> dict:
     has_camp = _has(low, _CAMP_KEYWORDS)
     has_adult = _has(low, _ADULT_KEYWORDS)
 
-    # 0. Decline / stop — highest priority (never search/book on a decline).
+    # 0. Manager-contact request — HIGHEST priority. An explicit request for the
+    #    manager's number/phone (or a self-call intent that needs it) wins over a
+    #    generic decline AND over the „კონსულტ" consultation stem in the SAME
+    #    message. Live bug 2026-06-25: a mixed „decline the consultation + give me
+    #    the manager's number, I'll call myself" message was cold-closed because
+    #    the decline branch below ran first.
+    if _is_manager_contact_request(low):
+        if has_adult and not has_camp:
+            return {"action": "manager_contact", "topic": "adult_event"}
+        return {"action": "camp_manager_contact", "topic": "camp"}
+
+    # 1. Decline / stop — high priority (never search/book on a decline), but
+    #    NOT above an explicit manager-contact request handled at step 0.
     if _has(low, _DECLINE_STEMS):
         return {"action": "stop_or_decline", "topic": None}
 
-    # 1. Consultation booking is its own flow — defer (NOT a registration link).
+    # 2. Consultation booking is its own flow — defer (NOT a registration link).
     if _has(low, _CONSULT_STEMS):
         return {"action": "consultation_request", "topic": "camp"}
 
-    # 2. Camp registration link.
+    # 3. Camp registration link.
     #    * an explicit camp keyword ALWAYS wins (even from a stale adult
     #      context) — reuse parent_flow's canonical detector for fidelity;
     #    * else a clear link/form/registration marker in an established camp
@@ -119,11 +156,7 @@ def detect_legacy_explicit_action(text: str, conversation=None) -> dict:
     ):
         return {"action": "camp_registration_link", "topic": "camp"}
 
-    # 3. Manager contact (number/phone) request.
-    if _has(low, _MANAGER_STEMS) and _has(low, _CONTACT_STEMS):
-        if has_adult and not has_camp:
-            return {"action": "manager_contact", "topic": "adult_event"}
-        return {"action": "camp_manager_contact", "topic": "camp"}
+    # (Manager-contact request is handled at step 0 — highest priority.)
 
     # 4. Adult-event subscription.
     if has_adult and _has(low, _SUBSCRIBE_STEMS):
