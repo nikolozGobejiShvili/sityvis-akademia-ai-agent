@@ -2912,7 +2912,23 @@ def _maybe_handle_camp_registration_link(
     TRANSACTIONAL — the user asked for the enrollment form, so we return the
     configured Admin `registration_url` immediately. Returns None for any
     non-registration message so all other flows are untouched."""
-    if not _is_camp_registration_link_request(message):
+    is_request = _is_camp_registration_link_request(message)
+    if not is_request:
+        # Context-aware (live bug 2026-06-25): a registration link/form request
+        # in an established camp context but WITHOUT an explicit camp keyword
+        # („სარეგისტრაციო ლინკი მინდა" after the camp dialogue) — handled at the
+        # intent level (legacy_actions), never as an exact phrase. The detector
+        # excludes consultation („კონსულტ"/„ჯავშ") and the ჩაწერა enrollment
+        # family, so the booking flow is never hijacked.
+        try:
+            from app.reasoning.legacy_actions import detect_legacy_explicit_action
+            is_request = (
+                detect_legacy_explicit_action(message, conversation).get("action")
+                == "camp_registration_link"
+            )
+        except Exception:  # pragma: no cover — defensive
+            is_request = False
+    if not is_request:
         return None
     _ensure_lead(conversation)
     logger.info(

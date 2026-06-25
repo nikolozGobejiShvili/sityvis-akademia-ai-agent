@@ -734,6 +734,25 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
         )
         conversation.segment = "PARENT"
 
+    # Explicit CAMP ACTION overrides a sticky ADULT segment (live bug
+    # 2026-06-25). After a switch to adult events, „ბანაკის სარეგისტრაციო ლინკი
+    # მომწერე" routed to the adult flow and asked the child's age instead of
+    # returning the camp link, because the sticky ADULT segment is only flipped
+    # for consultation/reschedule above. An EXPLICIT camp registration request
+    # (camp keyword + link/form/registration) must route back to the PARENT
+    # flow, where `_maybe_handle_camp_registration_link` returns the configured
+    # link. Camp-keyword/camp-context gated (see legacy_actions), so a bare
+    # „ლინკი მომწერე" in an adult context still stays ADULT.
+    if conversation.segment == "ADULT":
+        from app.reasoning.legacy_actions import detect_legacy_explicit_action
+        _legacy_act = detect_legacy_explicit_action(message_text, conversation)
+        if _legacy_act.get("action") == "camp_registration_link":
+            logger.info(
+                "[routing] explicit camp registration overrides ADULT → PARENT "
+                "(sender=%s)", sentry_service.mask_sender(sender_id),
+            )
+            conversation.segment = "PARENT"
+
     # Conversation Planner (Phase 3) — compute the unified TurnPlan ONCE per turn
     # and stash it on the conversation so the downstream handlers (parent_flow)
     # reuse the SAME decision instead of recomputing (no drift). Class 1: this
