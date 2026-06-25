@@ -2540,8 +2540,12 @@ def test_patch5_guard_allows_chaginishnet_with_tool_success(
 
     monkeypatch.setattr(openai_service, "chat_with_tools", _chat)
 
+    # Slot-merge fix (2026-06-25): the child age is a required booking slot, so a
+    # complete one-shot booking must include it (previously the age was omitted
+    # and the LLM booked with a fabricated value). The guard-allows-confirmation
+    # behaviour under test is unchanged.
     out = parent_flow.handle(
-        fresh_conversation, "ნიკოლოზი 595999733, 27 მაისს 13:00",
+        fresh_conversation, "ნიკოლოზი 595999733, 14 წლის, 27 მაისს 13:00",
     )
     assert "ჩაგინიშნე" in out, f"legit confirmation rejected: {out!r}"
     assert fresh_conversation.lead.calendly_booked is True

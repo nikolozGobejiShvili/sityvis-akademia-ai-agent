@@ -1718,6 +1718,51 @@ def _missing_booking_fields(lead: Lead) -> list[str]:
     return missing
 
 
+def get_consultation_booking_slots(conversation) -> dict:
+    """Single source of truth for the legacy consultation-booking slots
+    (2026-06-25). Merges ``conversation.lead`` + ``conversation.pending_booking``
+    so a known slot is never asked for twice. Read-only — never mutates state.
+
+    Returns ``{parent_name, phone, child_age, desired_date, desired_time,
+    missing}`` where each value is the captured string or ``None`` and
+    ``missing`` lists the still-empty required slot keys."""
+    lead = getattr(conversation, "lead", None)
+    pending = getattr(conversation, "pending_booking", None) or {}
+
+    name = (getattr(lead, "name", "") or "").strip() if lead else ""
+    # Never treat an invalid stored token (e.g. a confirmation phrase that
+    # leaked into lead.name) as a real name.
+    if name and not is_valid_person_name(name):
+        name = ""
+    phone = (getattr(lead, "phone", "") or "").strip() if lead else ""
+    child_age = _extract_age_digits((getattr(lead, "child_age", "") or "")) if lead else ""
+
+    desired_date = (pending.get("requested_date_text") or "").strip()
+    desired_time = (pending.get("requested_time_text") or "").strip()
+    # Fall back to deriving date/time from a confirmed pending ISO.
+    if (not desired_date or not desired_time) and pending.get("user_confirmed_datetime"):
+        iso = (pending.get("requested_datetime_iso") or "").strip()
+        if iso:
+            try:
+                dt = datetime.fromisoformat(iso)
+                desired_date = desired_date or f"{dt.day} {GEORGIAN_MONTHS_NOM[dt.month]}"
+                desired_time = desired_time or dt.strftime("%H:%M")
+            except Exception:  # pragma: no cover — defensive
+                pass
+
+    slots = {
+        "parent_name": name or None,
+        "phone": phone or None,
+        "child_age": child_age or None,
+        "desired_date": desired_date or None,
+        "desired_time": desired_time or None,
+    }
+    slots["missing"] = [k for k in (
+        "parent_name", "phone", "child_age", "desired_date", "desired_time",
+    ) if not slots[k]]
+    return slots
+
+
 def _record_pending_booking_for_slot(
     conversation: Conversation, lead: Lead, slot: dict,
 ) -> None:
@@ -4827,6 +4872,15 @@ _CONTACT_INVALID_PHONE_ASK: str = (
 _CONTACT_MULTIPLE_PHONES_ASK: str = (
     "ორი ნომერი მომწერეთ. რომელი ნომრით დაგიკავშირდეთ?"
 )
+# Precise single-missing-slot asks for the final booking stage (a slot is
+# already chosen). Used by `_maybe_commit_pending_booking_engine` so a known
+# slot is never re-requested (live bug 2026-06-25 — re-asked name+phone).
+_BOOKING_ASK_PHONE_ONLY: str = (
+    "სახელი მივიღე. მომწერეთ 9-ნიშნა საკონტაქტო ნომერი, რომ კონსულტაცია ჩავნიშნოთ."
+)
+_BOOKING_ASK_CHILD_AGE: str = (
+    "ბავშვის ასაკიც მომწერეთ, რომ კონსულტაცია ჩავნიშნოთ."
+)
 
 
 def _booking_buffer_minutes() -> int:
@@ -4881,6 +4935,17 @@ def _bot_recently_asked_for_contact(conversation: Conversation) -> bool:
             continue
         content = str(turn.get("content") or "").lower()
         return any(marker in content for marker in _CONTACT_REQUEST_MARKERS)
+    return False
+
+
+def _bot_last_reply_asked_for_name(conversation: Conversation) -> bool:
+    """True when the bot's MOST RECENT reply asked for the parent's NAME
+    („…მომწერეთ თქვენი სახელი…"). Used so a name-only reply is captured
+    deterministically instead of relying on the stochastic LLM."""
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        return "სახელ" in str(turn.get("content") or "")
     return False
 
 
@@ -4952,6 +5017,23 @@ def _maybe_handle_contact_collection(
         cand_name, cand_phone = _parse_name_phone(text)
     except Exception:
         cand_name, cand_phone = ("", "")
+
+    # Name-only turn (live bug 2026-06-25): after the bot asked for the NAME, a
+    # name-only reply („ნიკოლოზი") carries no phone, so the phone-gated capture
+    # below would skip it and the parent name would rely on the stochastic LLM.
+    # Capture it deterministically when the bot's last reply asked for the name
+    # and the message is a clean person name, then ask for the next missing slot.
+    if not cand_phone and _bot_last_reply_asked_for_name(conversation):
+        lead = _ensure_lead(conversation)
+        name_ok = bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
+        if not name_ok and cand_name and _is_storable_person_name(cand_name, text):
+            lead.name = cand_name
+            logger.info(
+                "[parent_flow] contact-collection: captured name-only=%r", cand_name,
+            )
+            if not (lead.phone or "").strip():
+                return _BOOKING_ASK_PHONE_ONLY
+            return _CONTACT_GOT_NUMBER_ASK_TIME
 
     # A volunteered phone is the unambiguous trigger. Without a phone we
     # leave the turn to the engine (avoids eating bare acks as a name).
@@ -5296,6 +5378,16 @@ def _maybe_commit_pending_booking_engine(
         try:
             from app.flows.parent_turn_router import _parse_booking_datetime
             inline_iso = _parse_booking_datetime(message)
+            if not inline_iso:
+                # All-in-one message („ნიკოლოზი 595999733, … 14 წლის … 26
+                # ივნისს 12:00") — the phone + age digits confuse the date
+                # parser. Retry on a phone+age-stripped copy so the date/time
+                # is still captured (live bug 2026-06-25).
+                from app.agent.llm.parent_llm_engine import _strip_phone_numbers
+                cleaned = re.sub(
+                    r"\d+\s*წ(?:ლ|ელ)\w*", " ", _strip_phone_numbers(message),
+                )
+                inline_iso = _parse_booking_datetime(cleaned)
         except Exception:
             inline_iso = None
         inline_phone = ""
@@ -5364,22 +5456,47 @@ def _maybe_commit_pending_booking_engine(
             _phone_log_mask(candidate_phone),
         )
 
-    # Recalculate which fields are still missing.
-    missing: list[str] = []
-    if not (lead.name or "").strip():
-        missing.append("name")
-    if not (lead.phone or "").strip():
-        missing.append("phone")
-    if not _extract_age_digits(lead.child_age or ""):
-        missing.append("child_age")
+    # Capture child_age volunteered in THIS turn (live bug 2026-06-25). When the
+    # user gives the age together with the slot („ჩემი შვილი 14 წლის … 12:00
+    # მაწყობს") the age must be merged HERE — otherwise the commit defers to the
+    # stochastic LLM, which then re-asks the already-known name + phone.
+    # Conservative no-op when the age is already set / not clearly present.
+    try:
+        from app.agent.llm.parent_llm_engine import (
+            _bot_recently_asked_child_age,
+            maybe_capture_child_age_fallback,
+        )
+        maybe_capture_child_age_fallback(
+            lead, message,
+            age_question_pending=_bot_recently_asked_child_age(conversation),
+        )
+    except Exception:
+        logger.exception(
+            "[parent_flow] pending commit: child_age capture raised — ignored",
+        )
+
+    # Recalculate which slots are still missing via the single source of truth.
+    slots = get_consultation_booking_slots(conversation)
+    _key_map = {"parent_name": "name", "phone": "phone", "child_age": "child_age"}
+    missing = [_key_map[k] for k in slots["missing"] if k in _key_map]
 
     pending = dict(conversation.pending_booking or {})
     pending["missing_fields"] = [f for f in missing if f != "child_age"]
     conversation.pending_booking = pending
 
     if missing:
-        # Still waiting on something — let the engine ask for it. The
-        # LLM sees the pending_booking via the engine context block.
+        # When the user EXPLICITLY chose one of the OFFERED slots (matched_slot)
+        # and exactly ONE detail is still missing, ask only for that one
+        # deterministically — never re-ask a known slot. For the compound /
+        # rambling all-in-one path (no offered slot), a name embedded in prose
+        # („…ჩამიწერე სახელია ნინო ნომერია…") is best extracted by the LLM, so
+        # defer rather than re-ask. A bare question (no slot pick) also defers.
+        if matched_slot is not None and missing == ["name"]:
+            return _CONTACT_GOT_NUMBER_ASK_NAME
+        if matched_slot is not None and missing == ["phone"]:
+            return _BOOKING_ASK_PHONE_ONLY
+        if matched_slot is not None and missing == ["child_age"]:
+            return _BOOKING_ASK_CHILD_AGE
         logger.info(
             "[parent_flow] pending commit: still missing=%s — deferring to engine",
             missing,
@@ -6154,6 +6271,9 @@ _NAME_REJECT_STEMS: tuple[str, ...] = (
     # booking / intent / change words
     "კონსულტაც", "რეგისტრაც",
     "ჩაწერ", "ჩამწერ", "ჩავეწერ", "ჩაგვწერ", "ჩანიშვ", "ჩავნიშნ",
+    # Booking-confirmation tokens („კი ჩანიშნეთ" / „ჩაგინიშნეთ") — a
+    # confirmation is never a name (live bug 2026-06-25: name=„ჩანიშნეთ").
+    "ჩანიშნ", "ჩაგინიშ", "დაგინიშ",
     "გადატან", "გადამიტ", "გადაიტ", "გადმიტ", "გადანიშ",
     "დაჯავშ", "ჯავშნ", "ჯავშან", "შემიცვ", "შეცვალ", "შეცვლ",
     # F-D6 (2026-06-12) — „დამირეკეთ" / „დარეკეთ" („call me") are booking
