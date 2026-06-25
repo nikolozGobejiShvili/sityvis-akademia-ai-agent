@@ -14,13 +14,13 @@
   engine runs (giant prompt + tools); the Conversation Planner and slim prompts
   are **disabled by operator decision** because live responses were better in
   legacy mode than in planner/slim mode.
-- **Four production-risk legacy bugs were fixed and accepted** this session
+- **Five production-risk legacy bugs were fixed and accepted** this session
   (contact-name extraction, child-age re-ask, topic-switch/action priority,
-  consultation slot-merge). See §3.
+  consultation slot-merge, manager-contact-vs-decline priority). See §3.
 - The planner/slim stack (Classes 1–6, selected-state, response_policy, Stage-3)
   remains in the codebase but **gated OFF**; do not re-enable it casually
   (see §8).
-- HEAD after this session's accepted work: **`a2dcc5b`**.
+- HEAD after this session's accepted work: **`97a2d66`**.
 
 ---
 
@@ -47,7 +47,7 @@ USE_PARENT_LLM_ENGINE=true
 
 ## 3. Accepted fixes (this session)
 
-All four are LEGACY-path fixes (planner/slim OFF). Deterministic, no
+All five are LEGACY-path fixes (planner/slim OFF). Deterministic, no
 phrase-specific input handlers, no `.env`/data changes.
 
 ### 1. `9dd0b84` — `fix: prevent Georgian relationship words from being saved as contact names`
@@ -108,13 +108,48 @@ phrase-specific input handlers, no `.env`/data changes.
   updated (a one-shot complete booking now includes the age — the age is a
   required slot).
 
+### 5. `97a2d66` — `fix: prioritize manager contact request over decline in legacy flow`
+- If a user says `"კონსულტაცია არ მინდა"` but **also** explicitly asks for the
+  manager's phone in the same message, the manager-phone request **wins** over the
+  generic decline.
+- Example:
+  `"კონსულტაცია არ მინდა მენეჯერის ნომერი რომ მომწეროთ და მეთვითონ დავურეკავ"`
+  now returns:
+  `"მენეჯერის ნომერია: 558 67 47 33. შეგიძლიათ პირდაპირ დაუკავშირდეთ."`
+- Decline-only behaviour is **unchanged** (`"კონსულტაცია არ მინდა"` →
+  `"გასაგებია. თუ რამე შეიცვლება ან კითხვა გაგიჩნდებათ, მომწერეთ."`).
+- Self-call wording (`"მე თვითონ დავურეკავ"`) no longer asks the user to leave
+  their own number — it just gives the manager's number.
+- The public manager phone is shown **only when explicitly requested**; the user's
+  private phone is never exposed. `"მენეჯერის ნომერი არ მინდა"` (refusing the
+  number) still closes politely.
+- Root cause: in `parent_flow.handle()` the deterministic decline interceptor
+  (`_maybe_handle_decline_engine`) ran BEFORE the explicit-manager interceptor
+  (`_maybe_handle_explicit_manager_request`), so `"არ მინდა"` cold-closed the turn
+  and swallowed the manager request.
+- Where: `parent_flow._maybe_handle_decline_engine` now defers (returns `None`) on
+  a POSITIVE manager-contact request (self-call intent OR manager+number with a
+  give-me/write-me marker) so the existing manager interceptor discloses the
+  number — using the SAME detectors, so the deferral always lands there;
+  `_render_manager_number_answer(self_call=...)` suppresses the callback offer on
+  a self-call; new `_has_positive_contact_request_marker`; and
+  `legacy_actions.detect_legacy_explicit_action` promotes `manager_contact` /
+  `camp_manager_contact` above the generic decline + consultation stems.
+  Manager number source: `admin_config_service.get_manager_phone()` (never
+  hard-coded). Intent/action-level — no phrase-specific handler.
+- Tests: `tests/test_legacy_manager_contact_priority_2026_06_25.py` (+17).
+- Smoke: full-suite **3125 passed / 28 skipped / 5 failed** (same 5 pre-existing
+  failures as §4; +17 = the new file). Planner/slim stayed OFF; `sections.yaml`
+  not committed.
+
 ---
 
 ## 4. Known remaining full-suite failures (do NOT hide these)
 
-`pytest tests/ -q` → **3108 passed / 28 skipped / 5 failed**. All 5 are
-**pre-existing and unrelated to the four legacy fixes** (each verified failing on
-HEAD with the legacy changes reverted):
+`pytest tests/ -q` → **3125 passed / 28 skipped / 5 failed** (was 3108 before the
+`97a2d66` fix; +17 = `tests/test_legacy_manager_contact_priority_2026_06_25.py`).
+All 5 are **pre-existing and unrelated to the five legacy fixes** (each verified
+failing on HEAD with the legacy changes reverted, and unchanged after `97a2d66`):
 
 - **2× `tests/test_p1_live_polish_2026_06_16.py`**
   (`test_b2_unknown_named_event_no_invention`,
@@ -235,6 +270,7 @@ prompt.
 | `68b0004` | child-age no re-ask | `app/reasoning/age_question.py`, `app/flows/parent_flow.py`, `app/agent/llm/parent_llm_engine.py`, `app/agent/prompts/parent_core.md` |
 | `a3c5c17` | topic-switch / action priority | `app/reasoning/legacy_actions.py`, `app/services/conversation_service.py`, `app/flows/parent_flow.py` |
 | `a2dcc5b` | consultation slot-merge | `app/flows/parent_flow.py`, `tests/...` |
+| `97a2d66` | manager-contact-vs-decline priority | `app/flows/parent_flow.py`, `app/reasoning/legacy_actions.py`, `tests/test_legacy_manager_contact_priority_2026_06_25.py` |
 
 New shared modules this stabilization arc: `app/reasoning/age_question.py`,
 `app/reasoning/legacy_actions.py`. Both are deterministic, dependency-free of the

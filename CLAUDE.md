@@ -1,7 +1,7 @@
 # AI Sales Agent — სიტყვის აკადემია
 
 ## ⚠️ CURRENT STATUS (2026-06-25) — READ FIRST (LEGACY MODE)
-**Newest handoff:** [`docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md`](docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md). HEAD = `a2dcc5b`.
+**Newest handoff:** [`docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md`](docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md). HEAD = `97a2d66`.
 
 **Operating mode = legacy/giant-prompt.** By operator decision the Conversation
 Planner and slim prompts are **OFF** (live answers were better in legacy mode).
@@ -14,7 +14,7 @@ The planner/slim stack (Classes 1–6 etc., below) is preserved but **dormant**.
 ⚠️ This **supersedes** the "operator `.env` has all four flags LIVE" line further
 down (that claim is now stale).
 
-**Four accepted legacy fixes this session** (deterministic, no phrase-specific
+**Five accepted legacy fixes this session** (deterministic, no phrase-specific
 handlers, no `.env`/data change): `9dd0b84` Georgian relationship words never
 saved as contact names; `68b0004` known `child_age` never re-asked (shared
 [`app/reasoning/age_question.py`](app/reasoning/age_question.py)); `a3c5c17`
@@ -22,7 +22,14 @@ explicit camp action after adult context returns the registration link / switche
 topic back (new [`app/reasoning/legacy_actions.py`](app/reasoning/legacy_actions.py));
 `a2dcc5b` consultation booking slot-merge — known slots never re-asked,
 `„კი ჩანიშნეთ"` is confirmation not a name
-([`parent_flow.get_consultation_booking_slots`](app/flows/parent_flow.py)).
+([`parent_flow.get_consultation_booking_slots`](app/flows/parent_flow.py));
+`97a2d66` mixed decline + explicit manager-contact request — the manager-phone
+request outranks the generic decline
+([`parent_flow._maybe_handle_decline_engine`](app/flows/parent_flow.py) defers to
+[`_maybe_handle_explicit_manager_request`](app/flows/parent_flow.py); `legacy_actions`
+promotes `manager_contact` above decline). `„კონსულტაცია არ მინდა მენეჯერის ნომერი…"`
+→ `558 67 47 33`; decline-only unchanged; self-call never asks for the user's own
+number.
 
 **Status:** production NOT green. `pytest tests/` = **3108 passed / 28 skipped /
 5 failed** — all 5 pre-existing & unrelated (2× `test_p1_live_polish` = operator
