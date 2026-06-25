@@ -1,6 +1,39 @@
 # AI Sales Agent — სიტყვის აკადემია
 
-## ⚠️ CURRENT STATUS (2026-06-24) — READ FIRST
+## ⚠️ CURRENT STATUS (2026-06-25) — READ FIRST (LEGACY MODE)
+**Newest handoff:** [`docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md`](docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md). HEAD = `a2dcc5b`.
+
+**Operating mode = legacy/giant-prompt.** By operator decision the Conversation
+Planner and slim prompts are **OFF** (live answers were better in legacy mode).
+The planner/slim stack (Classes 1–6 etc., below) is preserved but **dormant**.
+**Do NOT re-enable planner/slim unless a future task explicitly requests it.**
+
+**Live `.env` flags (legacy):** `USE_CONVERSATION_PLANNER=false` ·
+`CONVERSATION_PLANNER_AUTHORITATIVE=false` · `CONVERSATION_TRACE_DEBUG=false` ·
+`USE_SLIM_PROMPTS=false` · `USE_PARENT_LLM_ENGINE=true`.
+⚠️ This **supersedes** the "operator `.env` has all four flags LIVE" line further
+down (that claim is now stale).
+
+**Four accepted legacy fixes this session** (deterministic, no phrase-specific
+handlers, no `.env`/data change): `9dd0b84` Georgian relationship words never
+saved as contact names; `68b0004` known `child_age` never re-asked (shared
+[`app/reasoning/age_question.py`](app/reasoning/age_question.py)); `a3c5c17`
+explicit camp action after adult context returns the registration link / switches
+topic back (new [`app/reasoning/legacy_actions.py`](app/reasoning/legacy_actions.py));
+`a2dcc5b` consultation booking slot-merge — known slots never re-asked,
+`„კი ჩანიშნეთ"` is confirmation not a name
+([`parent_flow.get_consultation_booking_slots`](app/flows/parent_flow.py)).
+
+**Status:** production NOT green. `pytest tests/` = **3108 passed / 28 skipped /
+5 failed** — all 5 pre-existing & unrelated (2× `test_p1_live_polish` = operator
+`sections.yaml` has 0 active adult events; 3× `test_conversation_planner_authoritative`
+= date-bomb hardcoded `2026-06-25T12:00`, planner-path only). CRITICAL **22/22**
+on committed data. **Next step = ONE full real legacy smoke** (see the handoff),
+NOT another patch. ⚠️ `data/admin_config/sections.yaml` is an uncommitted
+operator edit (0 active events) — never commit it; seed a real active event
+before adult-event smoke.
+
+## ⚠️ CURRENT STATUS (2026-06-24) — superseded for operating mode by the 2026-06-25 banner above
 **Authoritative status:** [`docs/CURRENT_STATUS_AND_LIVE_REGRESSION_2026_06_24.md`](docs/CURRENT_STATUS_AND_LIVE_REGRESSION_2026_06_24.md). Where any statement below (in the historical „ცნობილი პრობლემები" / Priority logs) disagrees with that file, **that file wins.**
 
 **LATEST handoff (newest first) — at commit `70b2d8b`:** [`docs/HANDOFF_PLANNER_STABILIZATION_2026_06_24.md`](docs/HANDOFF_PLANNER_STABILIZATION_2026_06_24.md) covers THREE flag-gated batches on top of the `e67b1ab` trace-only baseline:

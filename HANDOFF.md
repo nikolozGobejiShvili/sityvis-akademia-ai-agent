@@ -2,7 +2,20 @@
 
 ---
 
-## ⚠️ CURRENT STATUS (2026-06-24) — READ THIS FIRST (supersedes the 2026-06-23 state below)
+## ⚠️ CURRENT STATUS (2026-06-25) — READ THIS FIRST (LEGACY MODE)
+
+**Newest handoff:** [`docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md`](docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md). **HEAD = `a2dcc5b`.**
+
+- **Operating mode = legacy/giant-prompt** by operator decision (live answers were better than planner/slim). **Planner + slim are OFF and must stay OFF unless a future task explicitly requests otherwise.** The planner stack below is preserved but **dormant**.
+- **Live `.env` flags (legacy):** `USE_CONVERSATION_PLANNER=false` · `CONVERSATION_PLANNER_AUTHORITATIVE=false` · `CONVERSATION_TRACE_DEBUG=false` · `USE_SLIM_PROMPTS=false` · `USE_PARENT_LLM_ENGINE=true`. ⚠️ This supersedes any "all four flags LIVE" claim in the 2026-06-24 sections below.
+- **Four accepted legacy fixes this session** (deterministic; no phrase-specific handlers; no `.env`/data change): `9dd0b84` Georgian relationship words never saved as contact names; `68b0004` known `child_age` never re-asked (shared `app/reasoning/age_question.py`); `a3c5c17` explicit camp action after adult context → registration link / topic switch back (new `app/reasoning/legacy_actions.py`); `a2dcc5b` consultation booking slot-merge — known slots never re-asked, „კი ჩანიშნეთ" = confirmation, not a name.
+- **Production NOT green.** `pytest tests/` = **3108 passed / 28 skipped / 5 failed** — all 5 pre-existing & unrelated (2× `test_p1_live_polish` = operator `sections.yaml` has 0 active adult events; 3× `test_conversation_planner_authoritative` = date-bomb `2026-06-25T12:00`, planner-path only). CRITICAL **22/22** on committed data. Do NOT hide these — production not fully green until resolved/isolated.
+- **Next step = ONE full real legacy smoke (10-turn transcript in the handoff), NOT another patch.** After it passes, the next likely fix is factual grounding for camp-safety / child-contact answers (source from admin_config/tools; never invent).
+- ⚠️ **`data/admin_config/sections.yaml` is an uncommitted operator edit (0 active adult events) — never commit it; seed a real active event before adult-event smoke.**
+
+---
+
+## ⚠️ CURRENT STATUS (2026-06-24) — superseded for operating mode by the 2026-06-25 banner above
 
 **LATEST handoff (read after the status doc):** [`docs/HANDOFF_LIVE_PLANNER_TRACE_2026_06_24.md`](docs/HANDOFF_LIVE_PLANNER_TRACE_2026_06_24.md) — Live Planner/Route Trace root-cause + the planner-first / topic-routing / selected-state / slim-prompt / validator fix plan (Classes 1–6). The Conversation Planner Stage 1+2 (commits `b402834`/`284b60b`) + live trace diagnostics (`b703e22`) are in; **authoritative planner controls only 4 intents and runs after the Sunday-School/pending handlers, so live answers still mix.** Diagnostic only — no behaviour patched.
 
