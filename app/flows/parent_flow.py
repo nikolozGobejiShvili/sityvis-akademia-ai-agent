@@ -488,6 +488,24 @@ def handle(conversation: Conversation, message: str) -> str:
                 conversation, repeat_price_response,
             )
 
+        # Structured camp TOPIC facts (2026-06-28): a camp-related QUESTION about
+        # a SPECIFIC concern (safety / food / gadgets / confidence / …) is
+        # answered with ONLY the 1 relevant focused block — never the whole camp
+        # description. Runs LAST among the deterministic interceptors, AFTER every
+        # canonical handler (Sunday School, adult events, booking day/time,
+        # registration link, manager phone, repeat price) — so it never overrides
+        # them and never interrupts an active consultation booking (a daypart /
+        # contact reply is consumed earlier; only an explicit NEW camp-topic
+        # question reaches here). Returns None for non-topic messages → the LLM
+        # engine answers as before.
+        camp_topic_response = _maybe_handle_camp_topic_facts(
+            conversation, message,
+        )
+        if camp_topic_response is not None:
+            return _sanitise_booking_confirmation(
+                conversation, camp_topic_response,
+            )
+
         engine_response = _run_llm_engine_safely(conversation, message)
         if engine_response:
             # PARENT Reschedule State + Segment Override Patch (2026-06-10)
@@ -2407,6 +2425,50 @@ def _maybe_handle_repeat_camp_price(
         conversation.sender_id,
     )
     return _camp_price_short_answer()
+
+
+# ── Structured camp TOPIC facts (live bug 2026-06-28) ────────────────────────
+#
+# A camp-related QUESTION about a specific concern was answered with the whole
+# camp description. Fix: deterministically classify the parent's concern into ONE
+# of ~16 camp topics (safety / parent_communication / food / gadgets /
+# confidence_motivation / communication_socialization / bullying_empathy /
+# emotional_intelligence / thinking_expression / independence_responsibility /
+# interests_orientation / values_identity / sports_health / activities_creativity
+# / rest_environment / general_overview) and return ONLY that single focused
+# block. Triggers + answers live in app/agent/knowledge/camp_topic_facts.yaml;
+# detection/rendering in app/reasoning/camp_topic_facts.py (NO LLM, NO blob).
+#
+# Canonical flows are NEVER overridden: the classifier excludes camp price /
+# dates / registration-link / Sunday-School / adult-event messages up front, and
+# this interceptor runs AFTER all those handlers in handle(). It is ADULT-segment
+# aware and defers (None) inside a consultation booking unless the message is an
+# explicit NEW camp-topic question (a daypart/contact reply has no topic trigger
+# and is consumed by the earlier booking handlers, so it never reaches here).
+
+
+def _maybe_handle_camp_topic_facts(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Return a single focused camp-topic block for an explicit camp-topic
+    question, or None (engine answers) for everything else."""
+    # ADULT segment owns its own flow — never answer camp topics there.
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    try:
+        from app.reasoning import camp_topic_facts as _ctf
+
+        answer = _ctf.resolve_camp_answer(message)
+    except Exception as exc:  # pragma: no cover — defensive, never break a reply
+        logger.warning("[parent_flow] camp_topic_facts failed (%s)", exc)
+        return None
+    if not answer:
+        return None
+    logger.info(
+        "[parent_flow] camp topic fact answered deterministically (sender=%s)",
+        conversation.sender_id,
+    )
+    return answer
 
 
 # ---------------------------------------------------------------------------

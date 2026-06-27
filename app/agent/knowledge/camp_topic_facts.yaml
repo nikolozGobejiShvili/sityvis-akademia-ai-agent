@@ -1,0 +1,326 @@
+# Structured camp TOPIC facts (2026-06-28).
+#
+# Purpose: let the agent answer a camp-related QUESTION with ONLY the 1–2
+# relevant topic blocks (safety, food, gadgets, …) instead of dumping the
+# whole camp description into every reply.
+#
+# This is NOT a single long text. Each entry under `camp_topic_facts` is one
+# focused topic with:
+#   * triggers — deterministic Georgian keyword stems (lowercased substring
+#     match) used by app/reasoning/camp_topic_facts.py to classify the user's
+#     concern. NOT phrase-specific; stem-based.
+#   * answer   — the focused Georgian answer block for that single topic.
+#
+# Selection (deterministic, NO LLM): the highest-scoring topic wins; ties break
+# by the order below (earlier = higher priority). Canonical flows are NEVER
+# overridden — price / dates / registration link / Sunday School / adult events
+# are excluded BEFORE topic selection (see the module's exclusion lists and the
+# `_maybe_handle_camp_topic_facts` interceptor in parent_flow.py).
+#
+# Conventions honoured here:
+#   * Pure Georgian only — NEVER mixed-script (no Cyrillic letters inside
+#     Georgian words, e.g. never „сბალანსებული" with a Cyrillic „с").
+#   * Use „გაჯეტებისგან განტვირთვა", NEVER the old „ეკრანისგან დისტანცია".
+#   * No CRM/internal wording (no „დაგიტოვებთ ინტერესს" / „ინტერესი
+#     დაფიქსირდა" / „lead" / „ლიდი").
+#   * Do not invent unspecified details — defer those to the manager.
+#   * general_overview templates {price}/{duration}/{age_min}/{age_max} from the
+#     canonical admin_config get_camp_facts() at render time (never hard-coded).
+
+camp_topic_facts:
+
+  # 1. Safety / supervision
+  safety:
+    triggers:
+      - უსაფრთხო
+      - კამერ
+      - მონიტორინგ
+      - ვიდეომონიტ
+      - მეთვალყურე
+      - ვინ უყურებ
+      - ვინ უვლი
+      - ექიმ
+      - სამედიცინო
+      - ექთან
+      - სტაფ
+      - ღამე ვინ
+      - დაცულ
+      - დაცვა
+    answer: |-
+      დიახ, უსაფრთხოების ნაწილს დიდი ყურადღება ეთმობა. ბანაკის დეტალები დაგეგმილია ევროპული საბანაკე სტანდარტების შესაბამისად.
+
+      ადგილზე ბავშვებთან მუშაობს მაღალკვალიფიციური, პასუხისმგებლიანი და საბანაკე გამოცდილების მქონე სტაფი. ასევე არის სამედიცინო პერსონალი 24/7 და 24-საათიანი ვიდეომონიტორინგი.
+
+      ლიდერთა გუნდი ინდივიდუალურად იცნობს თითოეული ბავშვის ხასიათს და ზრუნავს მათ ფიზიკურ და ემოციურ უსაფრთხოებაზე.
+
+  # 2. Parent communication / daily updates
+  parent_communication:
+    triggers:
+      - მშობლებთან
+      - მშობელთან
+      - მშობლებს გ
+      - ფოტო
+      - გამოგვიგზავ
+      - გვიგზავ
+      - გამოგზავ
+      - დღის პროგრამ
+      - ამბებს
+      - ბავშვის ამბ
+      - ბავშვთან კონტაქტ
+      - კონტაქტი მექ
+      - ბავშვთან კავშირ
+    answer: |-
+      გუნდის წევრები მუდმივ კომუნიკაციაში არიან მონაწილეების მშობლებთან.
+
+      მშობლებს ყოველდღიურად გაეგზავნებათ დღის პროგრამა და ფოტო-ვიდეო მასალა ბანაკიდან, რომ იცოდნენ, როგორ გადის ბავშვის დღე და რა აქტივობებში მონაწილეობს.
+
+      თუ ბავშვის პირდაპირი კონტაქტის წესები გაინტერესებთ, ამ დეტალს მენეჯერი ზუსტად აგიხსნით.
+
+  # 3. Food / menu
+  food:
+    triggers:
+      - კვება
+      - კვებით
+      - საჭმელ
+      - მენიუ
+      - აჭმევ
+      - ალერგი
+      - დიეტ
+    answer: |-
+      კვება შედის ბანაკის ღირებულებაში და ბავშვებისთვის ორგანიზებულად არის გათვალისწინებული.
+
+      თუ ბავშვს აქვს ალერგია, კვებითი შეზღუდვა ან განსაკუთრებული საჭიროება, ამ დეტალს მენეჯერი ინდივიდუალურად დაგიზუსტებთ, რომ წინასწარ სწორად გადაეცეს გუნდს.
+
+  # 4. Gadgets / screen time
+  gadgets:
+    triggers:
+      - ტელეფონ
+      - ეკრან
+      - გაჯეტ
+      - სმარტფონ
+      - მობილ
+    answer: |-
+      ბანაკის ერთ-ერთი მნიშვნელოვანი მიმართულებაა გაჯეტებისგან განტვირთვა და ცოცხალ ურთიერთობებში სრულფასოვანი ჩართვა.
+
+      ბავშვები მონაწილეობენ გუნდურ, შემოქმედებით, სპორტულ და ინდივიდუალურ აქტივობებში, რაც ეხმარებათ ყურადღების გადატანაში რეალურ კომუნიკაციაზე, მეგობრობაზე და გამოცდილებაზე.
+
+  # 5. Confidence / motivation
+  confidence_motivation:
+    triggers:
+      - თავდაჯერებ
+      - თავის დაჯერებ
+      - მოტივაცი
+      - გაბედ
+      - საკუთარ შესაძლებლ
+      - თავის შესაძლებლ
+    answer: |-
+      ბანაკის პროგრამა ეხმარება ბავშვებს მოტივაციის ამაღლებაში, თავდაჯერებულობის გაძლიერებაში და საკუთარი ინტერესებისა და უნარების უკეთ აღმოჩენაში.
+
+      აქტივობები ისეა დაგეგმილი, რომ ბავშვმა უკეთ დაინახოს საკუთარი შესაძლებლობები, ისწავლოს მიზნების დასახვა და უფრო გაბედულად გამოხატოს საკუთარი თავი.
+
+  # 6. Communication / socialization
+  communication_socialization:
+    triggers:
+      - კომუნიკაცი
+      - სოციალიზაცი
+      - ჩაკეტ
+      - თანატოლ
+      - მეგობრების გაჩ
+      - გახსნილ
+      - უფრო გახსნ
+    answer: |-
+      ბანაკის ერთ-ერთი მთავარი მიმართულებაა ბავშვების კომუნიკაციისა და სოციალიზაციის უნარების განვითარება.
+
+      პროგრამა ეხმარება ბავშვს მშობლებთან, მასწავლებლებთან და თანატოლებთან უფრო ჯანსაღი და ეფექტური კომუნიკაციის ჩამოყალიბებაში. გუნდური აქტივობები კი ხელს უწყობს გახსნილობას, თანამშრომლობას და ახალი მეგობრების შეძენას.
+
+  # 7. Bullying / empathy / respectful relationships
+  bullying_empathy:
+    triggers:
+      - ბულინგ
+      - ემპათ
+      - კონფლიქტ
+      - პატივისცემ
+      - ურთიერთპატივ
+      - ჩაგვრ
+    answer: |-
+      პროგრამაში დიდი ყურადღება ეთმობა ჯანსაღ ურთიერთობებს, ურთიერთპატივისცემას, ემპათიას და ბულინგის პრევენციას.
+
+      ბავშვები სწავლობენ, როგორ დაამყარონ უფრო მშვიდი, პატივისცემაზე დაფუძნებული ურთიერთობები თანატოლებთან და როგორ გამოხატონ საკუთარი აზრი ისე, რომ სხვებსაც მოუსმინონ.
+
+  # 8. Emotional intelligence / emotion regulation
+  emotional_intelligence:
+    triggers:
+      - ემოცი
+      - ბრაზ
+      - მორცხვ
+      - მგრძნობიარ
+      - ემოციურ ინტელექ
+    answer: |-
+      ბანაკის პროგრამა ეხმარება ბავშვებს ემოციური ინტელექტის განვითარებაში — საკუთარი ემოციების უკეთ გაგებაში, სახელდებაში და ჯანსაღად გამოხატვაში.
+
+      ეს მნიშვნელოვანია როგორც ურთიერთობებისთვის, ისე თავდაჯერებულობისა და პიროვნული განვითარებისთვის.
+
+  # 9. Thinking / self-expression
+  thinking_expression:
+    triggers:
+      - აზრის გამოხატ
+      - აზრს ვერ
+      - საკუთარი აზრის
+      - არგუმენტირებ
+      - პრეზენტაცი
+      - კრიტიკული აზროვნ
+      - ანალიტიკურ აზროვნ
+      - მკაფიოდ ილაპარაკ
+      - მკაფიოდ ისაუბრ
+    answer: |-
+      ბანაკში ბავშვები მუშაობენ ანალიტიკურ აზროვნებაზე და საკუთარი აზრის მკაფიოდ, არგუმენტირებულად გამოხატვაზე.
+
+      აქტივობები ეხმარებათ, უკეთ ჩამოაყალიბონ საკუთარი პოზიცია, ისწავლონ მსჯელობა და უფრო თავდაჯერებულად ისაუბრონ სხვების წინაშე.
+
+  # 10. Independence / responsibility
+  independence_responsibility:
+    triggers:
+      - დამოუკიდებ
+      - პასუხისმგებლ
+      - გადაწყვეტილებ
+      - თავისით
+    answer: |-
+      ბანაკი ბავშვს ეხმარება დამოუკიდებელი ცხოვრებისთვის საჭირო უნარების განვითარებაში.
+
+      სხვადასხვა აქტივობისა და ჯგუფური გამოცდილების საშუალებით ბავშვი სწავლობს პასუხისმგებლობის აღებას, გადაწყვეტილებების მიღებას და საკუთარ ქცევაზე დაკვირვებას უსაფრთხო გარემოში.
+
+  # 11. Interests / abilities / orientation
+  interests_orientation:
+    triggers:
+      - რა აინტერესებ
+      - არ იცის რა
+      - უნარების აღმოჩ
+      - ინტერესების აღმოჩ
+      - პროფესიულ ორიენტ
+      - მიზნების დასახ
+      - რა გამოსდი
+    answer: |-
+      პროგრამა ეხმარება ბავშვებს საკუთარი ინტერესებისა და უნარების აღმოჩენაში.
+
+      ბავშვები სხვადასხვა ტიპის აქტივობაში ერთვებიან, რაც ეხმარებათ უკეთ დაინახონ, რა გამოსდით, რა აინტერესებთ და როგორ შეიძლება სწორად დასახონ მიზნები მომავალისთვის.
+
+  # 12. Values / identity / personal development
+  values_identity:
+    triggers:
+      - ფასეულობ
+      - იდენტობ
+      - ეროვნულ იდენტ
+      - პიროვნულად რას
+      - ღირებულებებზე მუშა
+      - ღირებულებათა სისტ
+    answer: |-
+      ბანაკი მხოლოდ დასვენება არ არის — პროგრამა ბავშვის პიროვნულ განვითარებაზეც არის ორიენტირებული.
+
+      ერთ-ერთი მიმართულებაა პიროვნული ღირებულებების, ჯანსაღი ფასეულობათა სისტემისა და ეროვნული იდენტობის მნიშვნელობის გააზრება ბავშვის ასაკისა და გამოცდილების შესაბამისად.
+
+  # 13. Sports / healthy lifestyle  (checked BEFORE activities so „სპორტული
+  # აქტივობები" routes to sports, not activities)
+  sports_health:
+    triggers:
+      - სპორტ
+      - ფიზიკურად აქტ
+      - ფიზიკური აქტ
+      - მოძრაობ
+      - მოძრაო
+      - ჯანსაღი ცხოვრებ
+      - იმოძრა
+    answer: |-
+      დიახ, პროგრამაში გათვალისწინებულია სპორტული აქტივობები და ჯანსაღი ცხოვრების წესთან დაკავშირებული გამოცდილებები.
+
+      ბანაკის მიზანია, ბავშვებმა არა მხოლოდ ისწავლონ და განვითარდნენ, არამედ დაისვენონ, იმოძრაონ, გაერთონ და ენერგია ჯანსაღ გარემოში დახარჯონ.
+
+  # 14. Activities / creativity / performances
+  activities_creativity:
+    triggers:
+      - აქტივობ
+      - გართობ
+      - შემოქმედებ
+      - პერფორმანს
+      - მხატვრულ
+      - მუსიკალურ
+      - გასართობ
+    # Context-gated: „რას აკეთებენ ბავშვები" is activities ONLY when the message
+    # also names the camp („ბანაკ"/„საზაფხულო"/„ლაგერ"). Without camp context the
+    # generic „კიდევ რას აკეთებენ ბავშვები?" follow-up stays with the engine (so
+    # the CTA-preservation flow is never hijacked).
+    context_triggers:
+      - რას აკეთებ
+    answer: |-
+      ბავშვები მონაწილეობენ შემოქმედებით, სახალისო, გუნდურ და ინდივიდუალურ აქტივობებში.
+
+      პროგრამაში შედის პერფორმანსები, მუსიკალური და მხატვრული საღამოები, გუნდური დავალებები და ისეთი აქტივობები, რომლებიც ბავშვებს ეხმარებათ თვითგამოხატვაში, ურთიერთობაში და ახალი გამოცდილებების მიღებაში.
+
+  # 15. Rest / environment / balance
+  rest_environment:
+    triggers:
+      - გარემო როგ
+      - გარემოა
+      - დაისვენ
+      - დასვენ
+      - დატვირთ
+      - ბალანს
+    answer: |-
+      ბანაკი აერთიანებს განვითარებას, აქტივობებსა და დასვენებას.
+
+      პროგრამა ისეა დაგეგმილი, რომ ბავშვმა მიიღოს ახალი გამოცდილება, ჩაერთოს საინტერესო აქტივობებში და ამავე დროს დაისვენოს საუკეთესო გარემოში.
+
+  # 16. General camp overview (LOWEST priority — only for explicit „describe the
+  # camp / general info" requests; specific topics always win). Facts templated
+  # from canonical get_camp_facts() at render time.
+  general_overview:
+    # NARROW: explicit „detailed / general overview" requests only. Deliberately
+    # NOT „ბანაკზე ინფორმაცია" / „ბანაკის შესახებ" — those are the existing
+    # camp-DISCOVERY openers that must reach the engine (qualify-by-age sales
+    # flow); intercepting them would override that canonical discovery flow.
+    triggers:
+      - დეტალური ინფორმაცი
+      - ბანაკზე დეტალ
+      - რას მოიცავს ბანაკ
+      - რა ხდება ბანაკ
+      - ზოგადად მომიყევ
+      - ზოგადი ინფორმაცი
+    answer: |-
+      სიტყვის აკადემიის ბანაკი {duration}-დღიანი პროგრამაა {age_min}-დან {age_max} წლამდე ბავშვებისა და მოზარდებისთვის.
+
+      პროგრამა აერთიანებს განვითარებაზე, კომუნიკაციაზე, თავდაჯერებულობაზე, გაჯეტებისგან განტვირთვაზე, გუნდურ აქტივობებზე, შემოქმედებასა და დასვენებაზე ორიენტირებულ შეხვედრებს.
+
+      ბანაკის ღირებულებაა {price}₾ და მასში შედის ტრანსპორტი, განთავსება, კვება და სრული პროგრამა.
+
+      თუ გსურთ, შემიძლია გითხრათ თარიღები, პირობები ან კონსულტაციაზე ჩაგწეროთ.
+
+# ── Unknown operational detail → honest defer (NEVER invent) ──────────────────
+# Fires ONLY when (a) the message is NOT a canonical flow (price/dates/link/SS/
+# adult) AND (b) it does NOT match any known topic block above AND (c) it asks
+# about a specific operational detail we do not have approved facts for — an
+# operational NOUN (room occupancy / bed distribution / leader ratio) PLUS an
+# interrogative/arrangement CUE. The noun+cue pairing is deliberate so a parent
+# DESCRIBING the child („ერთ ოთახში გამოიკეტება") is never mistaken for a
+# question about the camp's rooms. NEVER invents „რამდენიმე ბავშვი" / „2–3
+# ბავშვი" / „კომფორტული განაწილება" and never adds a discovery question.
+camp_unknown_detail:
+  noun_markers:
+    - ოთახ
+    - საწოლ
+    - თანაფარდობ
+  cue_markers:
+    - რამდენი
+    - რამდენ
+    - ანაწილებ
+    - განაწილებ
+    - როგორ
+    - ვინ
+    - რა პრინციპ
+    - რა წესით
+  answer: |-
+    ამ საკითხზე ზუსტი ინფორმაცია არ მაქვს. მენეჯერი დაგიზუსტებთ დეტალებს.
+
+    თუ გსურთ, მენეჯერთან დაგაკავშირებთ.
+
+# Appended (as a new paragraph) to the food block for an EXACT-menu question
+# („ზუსტად რა მენიუ ექნებათ?") — food inclusion is known, the exact menu is not.
+camp_menu_clarification: "ზუსტი მენიუ მენეჯერთან დაზუსტდება."
