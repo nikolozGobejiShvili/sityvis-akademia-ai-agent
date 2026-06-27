@@ -162,12 +162,17 @@ def test_request_manager_callback_success_on_real_dispatch(monkeypatch):
 # ===========================================================================
 
 
-def test_interest_asks_name_and_phone_no_invented_details():        # (#1)
+def test_interest_coming_soon_no_details_offers_manager(monkeypatch):   # (#1, updated 2026-06-27)
+    # Coming-soon contract: NO launch detail revealed, NO name/phone demand —
+    # just say details are being finalised and OFFER a manager connection.
+    _set_ss_config(monkeypatch, status="coming_soon",
+                   availability_text="საკვირაო სკოლა ივლისში დაემატება.",
+                   details_text="დეტალები ზუსტდება", handoff_enabled=True)
     conv = _conv()
     out = _step(conv, "საკვირაო სკოლა მაინტერესებს")
     assert out is not None
-    assert "ივლის" in out                  # planned July — the only date stated
-    assert "სახელი" in out and "ნომერ" in out
+    assert "ივლის" not in out              # launch month NOT revealed
+    assert "მენეჯერ" in out                # offers a manager connection
     # must NOT invent camp facts
     assert "2150" not in out
     assert "ამბასადორ" not in out
@@ -312,7 +317,8 @@ def test_transcript_end_to_end(engine_on, monkeypatch):             # (#2,#3 e2e
         return reply
 
     out1 = _turn("საკვირაო სკოლა მაინტერესებს")
-    assert "ივლის" in out1 and "სახელი" in out1 and "ნომერ" in out1
+    # Coming-soon contract (2026-06-27): no launch detail, offers manager.
+    assert "ივლის" not in out1 and "მენეჯერ" in out1
     assert "2150" not in out1
 
     out2 = _turn("595999733")
@@ -505,15 +511,18 @@ def test_handoff_disabled_omits_contact_ask(monkeypatch):
     assert "სახელი" not in out and "მენეჯერს გადავცე" not in out
 
 
-def test_real_default_config_drives_july_answer():
-    """The shipped sections.yaml sunday_school section supplies the July text
-    (no monkeypatch) — proves the handler reads real Admin Config."""
+def test_real_default_config_coming_soon_hides_july_in_render():
+    """The shipped sections.yaml HOLDS the July availability text (data), and its
+    status is `coming_soon` — so the RENDERED answer hides the month and offers
+    the manager instead (coming_soon contract, 2026-06-27)."""
     from app.services import admin_config_service
     st = admin_config_service.get_sunday_school_status()
-    assert "ივლის" in st["availability_text"]
+    assert "ივლის" in st["availability_text"]            # data still present
+    assert st["status"] == "coming_soon"
     assert st["handoff_enabled"] is True and st["lead_type"] == "sunday_school"
     out = parent_flow._render_sunday_school_answer()
-    assert "ივლის" in out and "სახელი" in out and "ნომერ" in out
+    assert "ივლის" not in out                            # coming_soon hides the month
+    assert "მენეჯერ" in out                               # offers the manager
 
 
 def test_no_hardcoded_july_in_parent_flow_source():

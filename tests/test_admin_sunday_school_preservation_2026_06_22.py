@@ -203,12 +203,13 @@ def test_saving_adult_events_does_not_drop_sunday_school(admin_enabled, isolated
 def test_handler_reads_config_after_admin_save(admin_enabled, isolated_yaml):
     client = TestClient(app)
     assert _save(client, "sunday_school", _ss_form_payload()).status_code == 303
-    # status reader sees the preserved July text
+    # status reader sees the preserved July text (config data survives the save)
     st = admin_config_service.get_sunday_school_status()
     assert "ივლის" in st["availability_text"] and st["handoff_enabled"] is True
-    # and the deterministic handler renders it (reads the same isolated YAML)
+    # coming_soon render contract (2026-06-27): the handler reads the same
+    # isolated YAML but HIDES the launch month and offers the manager.
     out = parent_flow._render_sunday_school_answer()
-    assert "ივლის" in out and "სახელი" in out and "ნომერ" in out
+    assert "ივლის" not in out and "მენეჯერ" in out
 
 
 def test_changed_config_month_then_save_reflects_new_month(admin_enabled, isolated_yaml):
@@ -219,8 +220,12 @@ def test_changed_config_month_then_save_reflects_new_month(admin_enabled, isolat
         "sunday_school", {"availability_text": "საკვირაო სკოლა სექტემბერში დაიწყება."},
     )
     assert _save(client, "sunday_school", _ss_form_payload()).status_code == 303
+    # The new month survives in config (preservation) …
+    st = admin_config_service.get_sunday_school_status()
+    assert "სექტემბერ" in st["availability_text"] and "ივლის" not in st["availability_text"]
+    # … and the coming_soon render hides it + offers the manager (2026-06-27).
     out = parent_flow._render_sunday_school_answer()
-    assert "სექტემბერ" in out and "ივლის" not in out
+    assert "ივლის" not in out and "მენეჯერ" in out
 
 
 # ===========================================================================

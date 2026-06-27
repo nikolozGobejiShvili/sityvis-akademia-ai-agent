@@ -438,6 +438,18 @@ def handle(conversation: Conversation, message: str) -> str:
                 conversation, contact_correction_response,
             )
 
+        # Out-of-range child age (live bug 2026-06-27): a disclosed age below the
+        # camp minimum („6 წლის არის…") must yield the eligibility + manager
+        # message — NOT be mis-stored as a name by the contact collector below.
+        # Runs before contact collection; eligible/over-age/no-age → None.
+        out_of_range_age_response = _maybe_handle_out_of_range_age(
+            conversation, message,
+        )
+        if out_of_range_age_response is not None:
+            return _sanitise_booking_confirmation(
+                conversation, out_of_range_age_response,
+            )
+
         contact_response = _maybe_handle_contact_collection(
             conversation, message,
         )
@@ -461,6 +473,19 @@ def handle(conversation: Conversation, message: str) -> str:
         if intent_contact_response is not None:
             return _sanitise_booking_confirmation(
                 conversation, intent_contact_response,
+            )
+
+        # Duplicate camp-price question (live bug 2026-06-27): the FIRST camp
+        # price question keeps its full answer (the engine, below); a SUBSEQUENT
+        # same-intent camp_price question gets a short repeat instead of the full
+        # duplicate block. New questions / payment-method / dates / SS+adult
+        # price are never suppressed.
+        repeat_price_response = _maybe_handle_repeat_camp_price(
+            conversation, message,
+        )
+        if repeat_price_response is not None:
+            return _sanitise_booking_confirmation(
+                conversation, repeat_price_response,
             )
 
         engine_response = _run_llm_engine_safely(conversation, message)
@@ -2221,6 +2246,169 @@ def _ensure_ineligible_young_age_message(
     )
 
 
+# ── Out-of-range child age MUST NOT become a name (live bug 2026-06-27) ────────
+#
+# „6 წლის არის მაგრამ 10 წლის ბავშვივით აზროვნებს" was parsed as a NAME
+# („მაგრამ აზროვნებს") and the agent replied „სახელი მივიღე…" — because the
+# contact-collection handler ran before the age/eligibility logic. This handler
+# captures the disclosed age FIRST; when it is below the camp minimum it returns
+# the eligibility + manager-consultation message (so the sentence is never stored
+# as a name). Eligible ages are captured and pass through (None).
+
+# Digit (1–2) adjacent to the „წლ" age stem — a child-age expression. Used both
+# here and as a name-capture guard so an age/description sentence is not a name.
+_CHILD_AGE_EXPR_RE = re.compile(r"(?<!\d)\d{1,2}\s*წ(?:ლ|ელ)")
+
+_OUT_OF_RANGE_AGE_MESSAGE: str = (
+    "ბანაკი განკუთვნილია {lo}–{hi} წლის ბავშვებისთვის. {age} წლის ასაკზე "
+    "ჯობია მენეჯერმა ინდივიდუალურად გაგიწიოთ კონსულტაცია და გითხრათ, "
+    "რამდენად შესაბამისია პროგრამა.\n\n"
+    "თუ გსურთ, მომწერეთ თქვენი სახელი და 9-ნიშნა საკონტაქტო ნომერი, რომ "
+    "მენეჯერი დაგიკავშირდეთ."
+)
+
+
+def _message_has_child_age_expression(message: str) -> bool:
+    """True when the message states a child age („6 წლის", „14 წლისაა"). Used so
+    an age/description sentence is never stored as the parent's name."""
+    return bool(_CHILD_AGE_EXPR_RE.search((message or "").lower()))
+
+
+def _maybe_handle_out_of_range_age(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Capture a disclosed child age and, when it is BELOW the camp minimum,
+    return the eligibility + manager-consultation message — BEFORE the
+    contact-collection handler can mis-store the sentence as a name. Eligible
+    (or over-age / no-age) turns return None so the normal flow continues.
+
+    Disclosure-turn scoped: fires only when the age is in the CURRENT message,
+    so later contact turns on an under-age lead are left to the under-age
+    handoff / contact flow."""
+    if not _message_has_child_age_expression(message):
+        return None
+    lead = _ensure_lead(conversation)
+    # Reuse the engine's conservative extractor (range/time/date/phone-safe).
+    try:
+        from app.agent.llm.parent_llm_engine import maybe_capture_child_age_fallback
+        maybe_capture_child_age_fallback(lead, message)
+    except Exception:  # pragma: no cover — defensive
+        pass
+    age_digits = _extract_age_digits(lead.child_age or "")
+    if not age_digits:
+        return None
+    # Only act on the turn that actually disclosed THIS age.
+    if _extract_age_digits(message or "") != age_digits:
+        return None
+    if _age_status_for_lead(lead) != "ineligible":
+        return None
+    lo, hi = _camp_age_bounds()
+    try:
+        age = int(age_digits)
+    except ValueError:
+        return None
+    if age >= lo:
+        # Over-age (18+) — leave to the adult-switch / over-17 path.
+        return None
+    logger.info(
+        "[parent_flow] out-of-range child age=%d (bounds=%d-%d) → eligibility "
+        "message, not a name (sender=%s)", age, lo, hi, conversation.sender_id,
+    )
+    return _format_handoff_paragraphs(
+        _OUT_OF_RANGE_AGE_MESSAGE.format(lo=lo, hi=hi, age=age),
+    )
+
+
+# ── Duplicate CAMP-PRICE question → short repeat (live bug 2026-06-27) ─────────
+#
+# „ღირებულება რომ მომწეროთ" got the full price+transport+discount+installment
+# block; the immediate follow-up „რა ღირს?" (same semantic intent) got the EXACT
+# same full block again. The first camp_price question keeps its full answer
+# (the LLM engine); a SUBSEQUENT same-intent camp_price question gets a short
+# repeat instead of the full duplicate. NOT phrase-specific — normalized intent
+# detection. Sunday-School and adult-event price questions are explicitly NOT
+# camp_price (separated below).
+#
+# Webhook event-id dedupe: there is NO message-id/event-id dedupe for DMs today
+# (only `processed_comment:{id}` for comments), so an identical re-delivered
+# webhook event cannot be suppressed at the transport layer here. This handler
+# implements SEMANTIC duplicate shortening only; transport-level dedupe is
+# deferred (see report).
+
+_CAMP_PRICE_MARKERS: tuple[str, ...] = (
+    "ფასი", "ღირებულება", "ღირს", "გადასახად",
+)
+# Words that make a price question belong to Sunday-School or adult events,
+# NOT the camp — so those price questions are never treated as camp_price.
+_CAMP_PRICE_OTHER_DOMAIN: tuple[str, ...] = (
+    "საკვირაო", "სკოლ", "ღონისძიებ", "ზრდასრულ", "საღამო", "კონცერ", "ბილეთ",
+)
+
+
+def _is_camp_price_intent(message: str) -> bool:
+    """True when the message is a CAMP price question. False for a Sunday-School
+    or adult-event price question (those have their own price wording)."""
+    low = (message or "").lower()
+    if not any(p in low for p in _CAMP_PRICE_MARKERS):
+        return False
+    if any(w in low for w in _CAMP_PRICE_OTHER_DOMAIN):
+        return False
+    return True
+
+
+def _camp_price_value() -> str:
+    """Canonical camp price (admin_config / camp_2026), never hard-coded."""
+    try:
+        from app.services import admin_config_service
+        facts = admin_config_service.get_camp_facts() or {}
+        price = facts.get("price_gel") or facts.get("price_text")
+        if price:
+            return str(price).strip()
+    except Exception:  # pragma: no cover — defensive
+        pass
+    try:
+        return str(settings.CAMP_PRICE).strip()
+    except Exception:  # pragma: no cover — defensive
+        return "2150"
+
+
+def _camp_price_short_answer() -> str:
+    return f"როგორც ზემოთ მოგწერეთ, ბანაკის ღირებულებაა {_camp_price_value()}₾."
+
+
+def _camp_price_question_count(conversation: Conversation) -> int:
+    """How many USER turns in this conversation were camp_price questions.
+    History-based (no module state — survives a Redis reload, never leaks across
+    conversations/tests). `conversation_service` appends the inbound user message
+    to history BEFORE the flow runs, so the CURRENT camp_price question is already
+    counted; a REPEAT is therefore ``>= 2`` (current + at least one prior)."""
+    return sum(
+        1 for t in (getattr(conversation, "history", []) or [])
+        if isinstance(t, dict) and t.get("role") == "user"
+        and _is_camp_price_intent(str(t.get("content") or ""))
+    )
+
+
+def _maybe_handle_repeat_camp_price(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """First camp_price question → None (the engine sends the full answer); a
+    SUBSEQUENT same-intent camp_price question → a short repeat instead of the
+    full duplicate block. Counts camp_price USER turns: a single occurrence (the
+    first ask, or a one-shot handle() call where the message is not yet in
+    history) is never suppressed. Returns None for any non-camp-price message
+    (new questions / payment-method / dates / SS + adult price)."""
+    if not _is_camp_price_intent(message):
+        return None
+    if _camp_price_question_count(conversation) < 2:
+        return None
+    logger.info(
+        "[parent_flow] repeat camp_price → short answer (sender=%s)",
+        conversation.sender_id,
+    )
+    return _camp_price_short_answer()
+
+
 # ---------------------------------------------------------------------------
 # Live P0/P1 Hotfix BUG A (2026-06-15) — under-age manager handoff MUST
 # actually dispatch an operator notification.
@@ -2567,6 +2755,15 @@ _SUNDAY_SCHOOL_ALREADY: str = (
     "თქვენი მონაცემები საკვირაო სკოლის თაობაზე მენეჯერს უკვე გადავეცი. "
     "მალე დაგიკავშირდებიან."
 )
+# Coming-soon response (live bug 2026-06-27). When the Sunday-School status is
+# `coming_soon` we MUST NOT reveal details (launch month / program / price /
+# link) and MUST NOT demand the parent's contact — just say the details are
+# being finalised and OFFER a manager connection. Carries the „საკვირაო სკოლ"
+# collection marker so a follow-up that volunteers contact still routes to the
+# handoff. Never says „დაგიტოვებთ ინტერესს" / „lead" / „ლიდი".
+_SUNDAY_SCHOOL_COMING_SOON: str = (
+    "საკვირაო სკოლის დეტალები ჯერ ზუსტდება. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
+)
 
 # In-memory idempotency (low volume; a double email on a process restart is
 # harmless). Tests clear this directly.
@@ -2599,12 +2796,20 @@ def _render_sunday_school_answer() -> str:
     editable), never from a hardcoded month. `availability_text` +
     `details_text` are the status facts (from `sections.yaml`); the OFFER tail
     is fixed handoff mechanics. When `handoff_enabled` is False we return the
-    status only (no contact ask). On missing config → a no-date safe line."""
+    status only (no contact ask). On missing config → a no-date safe line.
+
+    Coming-soon gate (live bug 2026-06-27): when the configured status is
+    `coming_soon` we return the fixed no-details coming-soon line (offer the
+    manager, never reveal the launch month / program / price / link, never
+    demand contact). Any OTHER status (active, or unset in a config override)
+    keeps the existing config-reflection behaviour."""
     try:
         from app.services import admin_config_service
         st = admin_config_service.get_sunday_school_status() or {}
     except Exception:  # pragma: no cover — defensive
         st = {}
+    if (st.get("status") or "").strip() == "coming_soon":
+        return _SUNDAY_SCHOOL_COMING_SOON
     avail = (st.get("availability_text") or "").strip() or _SUNDAY_SCHOOL_FALLBACK_AVAILABILITY
     details = (st.get("details_text") or "").strip()
     handoff = bool(st.get("handoff_enabled", True))
@@ -5194,6 +5399,12 @@ def _maybe_handle_contact_collection(
 
     # A question is a discussion turn — never hijack it (BUG 4 boundary).
     if "?" in text:
+        return None
+    # An age / description sentence is NOT a contact disclosure (live bug
+    # 2026-06-27: „6 წლის არის მაგრამ 10 წლის ბავშვივით აზროვნებს" was stored as
+    # the name „მაგრამ აზროვნებს"). A child-age expression with no phone is an
+    # age turn — never store its words as a name.
+    if _message_has_child_age_expression(text) and not _distinct_valid_phones(text):
         return None
     # A time-change / explicit datetime is a booking turn, not contact-only.
     if _has_time_change_signal(text):
