@@ -320,6 +320,16 @@ def handle(conversation: Conversation, message: str) -> str:
         if event_response is not None:
             return event_response
 
+    # Consultation booking date/time reply (live bug 2026-06-27): a day / date /
+    # daypart reply to the bot's „რომელი დღე და დრო..." question must continue the
+    # booking flow, never fall through to the adult-event fallback. A broad
+    # daypart with no exact time → deterministically ask for the exact hour; an
+    # exact time defers (None) to the existing booking commit / engine. Runs on
+    # both engine and legacy paths; fires only IN consultation booking context.
+    booking_dt_response = _maybe_handle_booking_datetime_reply(conversation, message)
+    if booking_dt_response is not None:
+        return _sanitise_booking_confirmation(conversation, booking_dt_response)
+
     # Live mismatch fix (2026-06-19) — a clear camp REGISTRATION / link /
     # form / sign-up request is TRANSACTIONAL: return the configured Admin
     # `registration_url` IMMEDIATELY, BEFORE the LLM engine's age-first
@@ -3960,6 +3970,152 @@ def _render_name_not_found(active: list[dict]) -> str:
     )
 
 
+# ── Consultation booking date/time context (live bug 2026-06-27) ──────────────
+#
+# A day / date / time / daypart reply to the bot's „რომელი დღე და დრო გირჩევნიათ
+# კონსულტაციისთვის?" question is a BOOKING answer — it must NEVER fall through to
+# the adult-event fallback. The collision was „საღამოს" (evening daypart) matching
+# the „საღამო" adult-event word inside `_maybe_handle_event_inquiry`, which then
+# returned „აქტიური ღონისძიება სიაში არ მაქვს". These helpers keep such replies in
+# the consultation booking flow (GENERAL day/time-in-booking-context detection —
+# NOT a phrase-specific handler).
+
+# Weekday names (stem-matched; „შაბათ" already covers ორ/სამ/ოთხ/ხუთ-შაბათ).
+_BOOKING_WEEKDAY_STEMS: tuple[str, ...] = (
+    "ორშაბათ", "სამშაბათ", "ოთხშაბათ", "ხუთშაბათ", "პარასკევ", "შაბათ", "კვირა",
+)
+# Relative-day words.
+_BOOKING_RELATIVE_DAY_STEMS: tuple[str, ...] = (
+    "ხვალ", "ზეგ", "მაზეგ", "დღეს", "ხვალინდ", "დღევანდ",
+)
+# Daypart words.
+_BOOKING_EVENING_MARKERS: tuple[str, ...] = ("საღამო",)
+_BOOKING_MORNING_MARKERS: tuple[str, ...] = ("დილ",)
+_BOOKING_AFTERNOON_MARKERS: tuple[str, ...] = (
+    "შუადღ", "ნაშუადღ", "დღის მეორე ნახევარ", "მეორე ნახევარ",
+)
+_BOOKING_DAYPART_STEMS: tuple[str, ...] = (
+    _BOOKING_EVENING_MARKERS + _BOOKING_MORNING_MARKERS + _BOOKING_AFTERNOON_MARKERS
+    + ("ღამ",)
+)
+# Explicit adult-event-domain words → an adult-event query, NOT a booking reply,
+# even mid-booking. „საღამო" is deliberately NOT here (it is the evening daypart).
+_BOOKING_EVENT_DOMAIN_WORDS: tuple[str, ...] = (
+    "ღონისძიებ", "ზრდასრულ", "კონცერ", "ბილეთ",
+)
+# The bot's consultation date/time question markers.
+_BOOKING_DATETIME_ASK_MARKERS: tuple[str, ...] = (
+    "რომელი დღე და დრო", "დღე და დრო გირჩევნიათ", "ახალი დღე და დრო",
+)
+
+_BOOKING_ASK_TIME_EVENING: str = (
+    "საღამოს რომელი საათი გირჩევნიათ კონსულტაციისთვის — მაგალითად 18:00, 19:00 "
+    "ან 20:00?"
+)
+_BOOKING_ASK_TIME_MORNING: str = (
+    "დილის რომელი საათი გირჩევნიათ კონსულტაციისთვის — მაგალითად 10:00, 11:00 "
+    "ან 12:00?"
+)
+_BOOKING_ASK_TIME_AFTERNOON: str = (
+    "დღის რომელ საათზე გირჩევნიათ კონსულტაცია — მაგალითად 14:00, 15:00 ან 16:00?"
+)
+_BOOKING_ASK_TIME_GENERIC: str = (
+    "კონსულტაციისთვის რომელ საათზე გირჩევნიათ — მაგალითად 12:00, 15:00 ან 18:00?"
+)
+
+
+def _bot_recently_asked_booking_datetime(conversation: Conversation) -> bool:
+    """True when the bot's MOST RECENT reply asked for the consultation date/
+    time („…რომელი დღე და დრო გირჩევნიათ კონსულტაციისთვის?")."""
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "")
+        return any(m in content for m in _BOOKING_DATETIME_ASK_MARKERS)
+    return False
+
+
+def _in_consultation_booking_context(conversation: Conversation) -> bool:
+    """True when the conversation is already in the consultation booking flow:
+    a pending booking exists, OR the bot just asked for the date/time, OR we are
+    in a slot-selection state with the parent's phone already known. Scoped so an
+    out-of-context message is never treated as a booking reply."""
+    if getattr(conversation, "pending_booking", None):
+        return True
+    if _bot_recently_asked_booking_datetime(conversation):
+        return True
+    lead = getattr(conversation, "lead", None)
+    if (
+        getattr(conversation, "state", "") in {"OFFER_BOOKING", "PRESENT_VALUE"}
+        and lead is not None
+        and bool((getattr(lead, "phone", "") or "").strip())
+    ):
+        return True
+    return False
+
+
+def _looks_like_booking_datetime_reply(message: str) -> bool:
+    """True when the message reads like a day / date / time / daypart reply
+    (GENERAL detection, not a phrase match). Returns False for an explicit
+    adult-event query so „ზრდასრულთა ღონისძიებები რა გაქვთ?" still routes to the
+    adult flow even mid-booking."""
+    low = (message or "").lower().strip()
+    if not low:
+        return False
+    if any(w in low for w in _BOOKING_EVENT_DOMAIN_WORDS):
+        return False
+    if any(s in low for s in _BOOKING_WEEKDAY_STEMS):
+        return True
+    if any(s in low for s in _BOOKING_RELATIVE_DAY_STEMS):
+        return True
+    if any(s in low for s in _BOOKING_DAYPART_STEMS):
+        return True
+    try:
+        from app.agent.services.timestamps import extract_colloquial_hour
+        if extract_colloquial_hour(message) is not None:
+            return True
+    except Exception:  # pragma: no cover — defensive
+        pass
+    # Numeric day + Georgian month („26 ივნისს").
+    if re.search(r"\d", low) and any(stem in low for stem in GEORGIAN_MONTH_STEMS):
+        return True
+    return False
+
+
+def _maybe_handle_booking_datetime_reply(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """In consultation booking context, keep a day/date/time/daypart reply in the
+    booking flow. For a broad daypart WITH NO exact time, ask for the exact hour
+    (daypart-aware). For a reply that already carries an exact time, defer (None)
+    so the existing booking commit / engine resolves & books it. Returns None for
+    everything outside booking context (general detection, not phrase-specific)."""
+    if not _in_consultation_booking_context(conversation):
+        return None
+    if not _looks_like_booking_datetime_reply(message):
+        return None
+    # An exact time is present → let the existing booking flow book/confirm it.
+    try:
+        from app.agent.services.timestamps import extract_colloquial_hour
+        if extract_colloquial_hour(message) is not None:
+            return None
+    except Exception:  # pragma: no cover — defensive
+        pass
+    _ensure_lead(conversation)
+    low = (message or "").lower()
+    logger.info(
+        "[parent_flow] booking daypart reply (no exact time) → ask exact hour "
+        "(sender=%s)", conversation.sender_id,
+    )
+    if any(s in low for s in _BOOKING_EVENING_MARKERS):
+        return _BOOKING_ASK_TIME_EVENING
+    if any(s in low for s in _BOOKING_MORNING_MARKERS):
+        return _BOOKING_ASK_TIME_MORNING
+    if any(s in low for s in _BOOKING_AFTERNOON_MARKERS):
+        return _BOOKING_ASK_TIME_AFTERNOON
+    return _BOOKING_ASK_TIME_GENERIC
+
+
 def _maybe_handle_event_inquiry(
     conversation: Conversation, message: str, gateway=None,
 ) -> str | None:
@@ -3975,6 +4131,19 @@ def _maybe_handle_event_inquiry(
     calendar date still resolves normally."""
     text = (message or "").lower()
     if not text:
+        return None
+    # Consultation booking date/time reply (live bug 2026-06-27): a day / date /
+    # time / daypart answer to „რომელი დღე და დრო..." is a BOOKING reply, not an
+    # adult-event query — „საღამოს" (evening) must never be read as „საღამო"
+    # (event). Step aside so the booking flow handles it.
+    if (
+        _in_consultation_booking_context(conversation)
+        and _looks_like_booking_datetime_reply(message)
+    ):
+        logger.info(
+            "[parent_flow] event inquiry suppressed — consultation booking "
+            "date/time reply (sender=%s)", conversation.sender_id,
+        )
         return None
     if gateway is not None and getattr(gateway, "block_event_inquiry", False):
         logger.info(
