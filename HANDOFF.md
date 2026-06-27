@@ -2,6 +2,21 @@
 
 ---
 
+## ⚠️ CURRENT STATUS (2026-06-28) — READ THIS FIRST (LEGACY MODE)
+
+**Newest handoff:** [`docs/HANDOFF_LEGACY_STABILIZATION_2026_06_28.md`](docs/HANDOFF_LEGACY_STABILIZATION_2026_06_28.md). **HEAD = `01b0d2a`** (branch `master`). Supersedes the 2026-06-25 banner below for current status; older sections are preserved as history.
+
+- **Operating mode = legacy/giant-prompt.** Planner + slim **OFF and must stay OFF** unless a separate explicit migration task is created. The planner/slim stack is preserved but **dormant / not the active live path**.
+- **Live `.env` flags (legacy):** `USE_PARENT_LLM_ENGINE=true` · `USE_CONVERSATION_PLANNER=false` · `CONVERSATION_PLANNER_AUTHORITATIVE=false` · `USE_SLIM_PROMPTS=false`. `CONVERSATION_TRACE_DEBUG=true` is **observability-only** (no behaviour change).
+- **Seven accepted legacy fixes this arc** (deterministic; no phrase-specific handlers; no `.env`/data change): `9dd0b84` relationship/name extraction; `68b0004` child-age no re-ask; `a3c5c17` topic-switch / explicit-action priority; `a2dcc5b` consultation slot-merge; `97a2d66` manager-contact outranks decline (`„კონსულტაცია არ მინდა მენეჯერის ნომერი…"` → `558 67 47 33`); `bd368b2` booking day/time reply (`„ორშაბათს, საღამოს საათებში"`) stays in booking, never falls into adult events; `01b0d2a` Sunday-School `coming_soon` answer hides details + offers manager, out-of-range child age (e.g. 6) → 9–17 eligibility/manager wording (never a name), and repeated camp-price question → short repeat (`2150₾`), not the full duplicate.
+- **Production NOT green.** `pytest tests/` = **3147 passed / 28 skipped / 14 failed** (2026-06-28) — all 14 pre-existing & unrelated date/data-bombs: 3× `test_conversation_planner_authoritative` (`2026-06-25T12:00` date-bomb, planner-path OFF), 5× `test_legacy_consultation_slot_merge` (hardcoded `2026-06-26` past date), 4× adult-event + 2× `test_p1_live_polish` (operator `sections.yaml` 0 active adult events). **None caused by the legacy fixes; planner path is OFF.**
+- **Sunday School status = `coming_soon`.** While coming_soon the agent must HIDE the 195₾ monthly price, 4 meetings, 1h45 duration, locations, the Google Form registration link, and full program — answer only `„საკვირაო სკოლის დეტალები ჯერ ზუსტდება. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."`. Do NOT add full Sunday-School facts until a separate active-status task is approved.
+- **NEXT TASK after `/clear`:** `Structured Camp Topic Facts by Question Category` — answer only the relevant camp category (safety / food / gadgets / socialization / …), max 1–2 topic blocks per answer, never overriding canonical flows (price / dates / registration link / booking / manager phone / adult events / Sunday School). Already prepared; run after the new session reads the 2026-06-28 handoff.
+- **Wording rules:** never `„დაგიტოვებთ ინტერესს"` / `„ინტერესი დაფიქსირდა"` / `„lead"` / `„ლიდი"` / `„ლიდი შეიქმნა"`; use `„მენეჯერთან დაგაკავშირებთ"` / `„მენეჯერი დაგიკავშირდებათ"` / `„მენეჯერის ნომერია: 558 67 47 33"`. Gadgets: use `„გაჯეტებისგან განტვირთვა"`, not `„ეკრანისგან დისტანცია"`.
+- ⚠️ **`data/admin_config/sections.yaml` is an uncommitted operator edit (0 active adult events) — never stage/commit it; seed a real active event before adult-event smoke (do not commit that seed).**
+
+---
+
 ## ⚠️ CURRENT STATUS (2026-06-25) — READ THIS FIRST (LEGACY MODE)
 
 **Newest handoff:** [`docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md`](docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md). **HEAD = `a2dcc5b`.**

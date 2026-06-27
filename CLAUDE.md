@@ -1,7 +1,7 @@
 # AI Sales Agent — სიტყვის აკადემია
 
-## ⚠️ CURRENT STATUS (2026-06-25) — READ FIRST (LEGACY MODE)
-**Newest handoff:** [`docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md`](docs/HANDOFF_LEGACY_STABILIZATION_2026_06_25.md). HEAD = `97a2d66`.
+## ⚠️ CURRENT STATUS (2026-06-28) — READ FIRST (LEGACY MODE)
+**Newest handoff:** [`docs/HANDOFF_LEGACY_STABILIZATION_2026_06_28.md`](docs/HANDOFF_LEGACY_STABILIZATION_2026_06_28.md) (supersedes the 2026-06-25 handoff for current status). HEAD = `01b0d2a`.
 
 **Operating mode = legacy/giant-prompt.** By operator decision the Conversation
 Planner and slim prompts are **OFF** (live answers were better in legacy mode).
@@ -14,7 +14,7 @@ The planner/slim stack (Classes 1–6 etc., below) is preserved but **dormant**.
 ⚠️ This **supersedes** the "operator `.env` has all four flags LIVE" line further
 down (that claim is now stale).
 
-**Five accepted legacy fixes this session** (deterministic, no phrase-specific
+**Seven accepted legacy fixes this arc** (deterministic, no phrase-specific
 handlers, no `.env`/data change): `9dd0b84` Georgian relationship words never
 saved as contact names; `68b0004` known `child_age` never re-asked (shared
 [`app/reasoning/age_question.py`](app/reasoning/age_question.py)); `a3c5c17`
@@ -29,13 +29,26 @@ request outranks the generic decline
 [`_maybe_handle_explicit_manager_request`](app/flows/parent_flow.py); `legacy_actions`
 promotes `manager_contact` above decline). `„კონსულტაცია არ მინდა მენეჯერის ნომერი…"`
 → `558 67 47 33`; decline-only unchanged; self-call never asks for the user's own
-number.
+number; `bd368b2` consultation booking day/time reply (`„ორშაბათს, საღამოს საათებში"`)
+stays in booking, never falls into adult events (`„აქტიური ღონისძიება სიაში არ
+მაქვს"`) — broad daypart asks the exact hour
+([`parent_flow._maybe_handle_booking_datetime_reply`](app/flows/parent_flow.py));
+`01b0d2a` Sunday-School `coming_soon` answer hides details + offers manager
+(`„საკვირაო სკოლის დეტალები ჯერ ზუსტდება. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."`),
+out-of-range child age (e.g. 6) → 9–17 eligibility/manager wording and never saved
+as a name, and a repeated camp-price question gives a short repeat (`2150₾`) not the
+full duplicate
+([`parent_flow._render_sunday_school_answer`](app/flows/parent_flow.py) /
+[`_maybe_handle_out_of_range_age`](app/flows/parent_flow.py) /
+[`_maybe_handle_repeat_camp_price`](app/flows/parent_flow.py)).
 
-**Status:** production NOT green. `pytest tests/` = **3108 passed / 28 skipped /
-5 failed** — all 5 pre-existing & unrelated (2× `test_p1_live_polish` = operator
-`sections.yaml` has 0 active adult events; 3× `test_conversation_planner_authoritative`
-= date-bomb hardcoded `2026-06-25T12:00`, planner-path only). CRITICAL **22/22**
-on committed data. **Next step = ONE full real legacy smoke** (see the handoff),
+**Status:** production NOT green. `pytest tests/` = **3147 passed / 28 skipped /
+14 failed** (today 2026-06-28) — all 14 pre-existing & unrelated date/data-bombs
+(2× `test_p1_live_polish` + 4× adult-event = operator `sections.yaml` 0 active adult
+events; 3× `test_conversation_planner_authoritative` = date-bomb hardcoded
+`2026-06-25T12:00`, planner-path only; 5× `test_legacy_consultation_slot_merge` =
+hardcoded `2026-06-26` past date). Planner path OFF; none caused by the legacy fixes.
+**Next step = ONE full real legacy smoke** (see the handoff),
 NOT another patch. ⚠️ `data/admin_config/sections.yaml` is an uncommitted
 operator edit (0 active events) — never commit it; seed a real active event
 before adult-event smoke.

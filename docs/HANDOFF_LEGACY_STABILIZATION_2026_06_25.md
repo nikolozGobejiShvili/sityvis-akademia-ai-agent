@@ -1,6 +1,12 @@
 # HANDOFF — Legacy/Giant-Prompt Stabilization (2026-06-25)
 
-> Newest handoff. Read this FIRST. It supersedes the planner-focused
+> ⚠️ **SUPERSEDED for current status by
+> [`HANDOFF_LEGACY_STABILIZATION_2026_06_28.md`](HANDOFF_LEGACY_STABILIZATION_2026_06_28.md)
+> (HEAD `01b0d2a`).** This file is kept for history; two more accepted legacy
+> fixes (`bd368b2` booking-daypart, `01b0d2a` SS coming_soon + out-of-range age +
+> duplicate price) landed after it — see the 2026-06-28 handoff and §3 below.
+>
+> Read the 2026-06-28 handoff FIRST. It supersedes the planner-focused
 > 2026-06-24 handoffs **for the operating-mode decision**: we are deliberately
 > running the **legacy/giant-prompt** path, with planner/slim **OFF**, because
 > live answers were better there. The planner work is preserved but dormant.
@@ -142,6 +148,35 @@ phrase-specific input handlers, no `.env`/data changes.
   failures as §4; +17 = the new file). Planner/slim stayed OFF; `sections.yaml`
   not committed.
 
+### 6. `bd368b2` — booking day/time reply must not fall into adult events (2026-06-27)
+- When the agent asks the consultation day/time and the user replies
+  `„ორშაბათს, საღამოს საათებში"`, the conversation STAYS in consultation booking
+  — it no longer returns `„ამ ეტაპზე აქტიური ღონისძიება სიაში არ მაქვს."`.
+- Root cause: `„საღამოს"` (evening daypart) matched the `„საღამო"` adult-event
+  word in `_maybe_handle_event_inquiry`. Fix: that interceptor steps aside in
+  consultation-booking context for a date/time/daypart reply; a broad daypart
+  with no exact time asks for the exact hour (daypart-aware), an exact time
+  defers to the booking commit/engine. General detection, not phrase-specific.
+- Where: `parent_flow._maybe_handle_booking_datetime_reply` +
+  `_in_consultation_booking_context` + `_looks_like_booking_datetime_reply`.
+- Tests: `tests/test_legacy_booking_daypart_not_adult_events_2026_06_27.py` (+12).
+
+### 7. `01b0d2a` — Sunday-School coming_soon + out-of-range age + duplicate camp-price (2026-06-27)
+- **Sunday-School** intent routes to Sunday-School, not camp. While
+  `status == coming_soon` the answer is
+  `„საკვირაო სკოლის დეტალები ჯერ ზუსტდება. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."`
+  — no month / price / link / locations / program, no name+phone demand
+  (`_render_sunday_school_answer` gated on coming_soon).
+- **Out-of-range child age** (`<9`, e.g. 6) → 9–17 eligibility + manager wording,
+  never saved as a name (`_maybe_handle_out_of_range_age`).
+- **Duplicate camp price** — first question full (`2150₾`), second same-intent
+  question short repeat; a different question (dates / payment) is not
+  suppressed; SS/adult price are not camp_price
+  (`_maybe_handle_repeat_camp_price`, history-based; webhook event-id dedupe
+  deferred — see the 2026-06-28 handoff).
+- Tests: `tests/test_legacy_sunday_school_and_duplicate_age_guard_2026_06_27.py`
+  (+19); 3 existing SS tests + 2 admin SS tests updated to the coming_soon contract.
+
 ---
 
 ## 4. Known remaining full-suite failures (do NOT hide these)
@@ -271,6 +306,8 @@ prompt.
 | `a3c5c17` | topic-switch / action priority | `app/reasoning/legacy_actions.py`, `app/services/conversation_service.py`, `app/flows/parent_flow.py` |
 | `a2dcc5b` | consultation slot-merge | `app/flows/parent_flow.py`, `tests/...` |
 | `97a2d66` | manager-contact-vs-decline priority | `app/flows/parent_flow.py`, `app/reasoning/legacy_actions.py`, `tests/test_legacy_manager_contact_priority_2026_06_25.py` |
+| `bd368b2` | booking daypart not adult-event fallback | `app/flows/parent_flow.py`, `tests/test_legacy_booking_daypart_not_adult_events_2026_06_27.py` |
+| `01b0d2a` | SS coming_soon + out-of-range age + duplicate price | `app/flows/parent_flow.py`, `tests/test_legacy_sunday_school_and_duplicate_age_guard_2026_06_27.py`, `tests/test_sunday_school_handoff_2026_06_22.py`, `tests/test_admin_sunday_school_preservation_2026_06_22.py` |
 
 New shared modules this stabilization arc: `app/reasoning/age_question.py`,
 `app/reasoning/legacy_actions.py`. Both are deterministic, dependency-free of the
