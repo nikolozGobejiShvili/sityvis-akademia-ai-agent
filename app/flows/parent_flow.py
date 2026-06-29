@@ -124,7 +124,121 @@ def _reasoning_defers_decline(analysis) -> bool:
     )
 
 
+# ── Client output polish (2026-06-28) ────────────────────────────────────────
+# Deterministic, NEVER LLM-driven, applied ONCE in the `handle` wrapper:
+#   1. mid-conversation greeting-leak strip — a leading „მადლობა, რომ
+#      დაგვიკავშირდით" / „მოგესალმებით" / „გამარჯობა" is only valid on the FIRST
+#      reply or when the user greeted this turn; otherwise it is a scripted reset
+#      and is removed (a normal user-initiated thank-you reply is never touched).
+#   2. one-❤️ emoji policy — EXACTLY one heart in three moments only: a confirmed
+#      booking, a thank-you, the first greeting reply. NEVER on a manager /
+#      consultation CTA, a contact-detail ask, or medical facts. Gated by
+#      `_CLIENT_EMOJI_ENABLED` (default ON for live; pinned OFF in
+#      tests/conftest.py so the ~40 greeting/booking tests stay byte-identical;
+#      the emoji tests opt back in).
+_CLIENT_EMOJI_ENABLED: bool = True
+_HEART: str = "❤️"
+_GREETING_WORDS: tuple[str, ...] = (
+    "გამარჯობა", "გამარჯობათ", "სალამი", "მოგესალმებით", "გაგიმარჯ",
+)
+_MIDCONVO_INTRO_LEAK_PATTERNS: tuple[str, ...] = (
+    "მადლობა, რომ დაგვიკავშირდით",
+    "მადლობა რომ დაგვიკავშირდით",
+    "გმადლობთ, რომ დაგვიკავშირდით",
+    "გმადლობთ რომ დაგვიკავშირდით",
+    "მოგესალმებით",
+    "გამარჯობათ",
+    "გამარჯობა",
+    "სალამი",
+)
+
+
+def _user_greeted(message: str) -> bool:
+    low = (message or "").lower()
+    return any(g in low for g in _GREETING_WORDS)
+
+
+def _user_is_pure_thanks(message: str) -> bool:
+    """True only when the message is PRIMARILY a thank-you (so we warm-close with
+    one ❤️) — not a thanks tacked onto a real question/objection."""
+    raw = message or ""
+    t = raw.lower().strip().strip(".,!?…")
+    if not t or "?" in raw:
+        return False
+    if not any(tok in t for tok in _USER_THANKS_TOKENS):
+        return False
+    return len(t.split()) <= 3
+
+
+def _strip_midconvo_intro_leak(
+    conversation: Conversation, message: str, response: str,
+) -> str:
+    """Strip a leading greeting / „thank you for contacting us" opener from a
+    MID-conversation reply (no-op on the first reply or when the user greeted)."""
+    if not response or not _bot_has_replied(conversation):
+        return response
+    if _user_greeted(message):
+        return response
+    out = response.lstrip()
+    low = out.lower()
+    for pat in _MIDCONVO_INTRO_LEAK_PATTERNS:
+        if low.startswith(pat):
+            rest = out[len(pat):].lstrip(" ,.!?:—-\n")
+            if rest:
+                logger.info("[parent_flow] stripped mid-conversation intro leak")
+                return rest
+    return response
+
+
+def _add_heart_after_first_sentence(text: str) -> str:
+    parts = re.split(r"([.?!]\s+|\n+)", text, maxsplit=1)
+    if len(parts) >= 3 and parts[0].strip():
+        return f"{parts[0].rstrip()} {_HEART}{parts[1]}{parts[2]}"
+    return f"{text.rstrip()} {_HEART}"
+
+
+def _add_heart_after_greeting(text: str) -> str:
+    low = text.lower()
+    for g in _GREETING_WORDS:
+        idx = low.find(g)
+        if idx != -1:
+            end = idx + len(g)
+            return f"{text[:end]} {_HEART}{text[end:]}"
+    return _add_heart_after_first_sentence(text)
+
+
+def _apply_client_emoji_policy(
+    conversation: Conversation, message: str, response: str,
+) -> str:
+    """Add EXACTLY ONE ❤️ in three moments only (booking confirmed / thank-you /
+    first greeting). No emoji anywhere else. Deterministic, flag-gated."""
+    if not _CLIENT_EMOJI_ENABLED:
+        return response
+    if not response or _HEART in response:
+        return response
+    # 1. Booking confirmed THIS turn — executor signal, not an LLM guess.
+    if _booking_success_this_turn(conversation):
+        return _add_heart_after_first_sentence(response)
+    # 2. User thanked → warm close.
+    if _user_is_pure_thanks(message):
+        return _add_heart_after_first_sentence(response)
+    # 3. First assistant reply AND the user greeted.
+    if not _bot_has_replied(conversation) and _user_greeted(message):
+        return _add_heart_after_greeting(response)
+    return response
+
+
 def handle(conversation: Conversation, message: str) -> str:
+    """Public entry — runs the core handler, then applies the deterministic
+    client output polish (mid-conversation greeting-leak strip + one-❤️ emoji
+    policy). Both are deterministic and never LLM-driven."""
+    result = _handle_core(conversation, message)
+    result = _strip_midconvo_intro_leak(conversation, message, result)
+    result = _apply_client_emoji_policy(conversation, message, result)
+    return result
+
+
+def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
 

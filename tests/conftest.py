@@ -94,6 +94,10 @@ def _force_parent_llm_engine_off(monkeypatch):
     monkeypatch.setattr(_cs, "settings", swapped)
     monkeypatch.setattr(_ple, "settings", swapped)
     monkeypatch.setattr(_ale, "settings", swapped)
+    # Client ❤️ emoji policy (2026-06-28) defaults ON for live; pin it OFF for
+    # every test so the existing greeting/booking/thanks assertions stay
+    # byte-identical. The emoji test file opts back in on top of this stack.
+    monkeypatch.setattr(parent_flow, "_CLIENT_EMOJI_ENABLED", False, raising=False)
     yield
 
 
