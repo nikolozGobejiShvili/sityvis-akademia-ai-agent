@@ -382,7 +382,7 @@ def test_22_no_full_dump_per_topic():
 def test_22b_handler_returns_single_block(engine_on):
     # Each specific question's reply equals exactly the one expected block.
     cases = [
-        ("ექიმი იქნება?", "safety"),
+        ("კამერები არის?", "safety"),
         ("კვება შედის?", "food"),
         ("ბავშვი სულ ტელეფონშია", "gadgets"),
         ("ბულინგის თემაზე მუშაობთ?", "bullying_empathy"),
@@ -436,7 +436,10 @@ def test_adult_segment_never_gets_camp_topic(engine_on):
 def test_detect_is_self_contained_unit():
     assert ctf.detect_camp_topic("") is None
     assert ctf.detect_camp_topic("გამარჯობა") is None        # no topic
-    assert ctf.detect_camp_topic("ექიმი იქნება?") == "safety"
+    assert ctf.detect_camp_topic("კამერები არის?") == "safety"
+    # Doctor/medical now routes to the dedicated safe medical block (2026-06-28),
+    # not the general safety topic.
+    assert ctf.resolve_camp_answer("ექიმი იქნება?") == ctf.medical_answer()
 
 
 # =====================================================================

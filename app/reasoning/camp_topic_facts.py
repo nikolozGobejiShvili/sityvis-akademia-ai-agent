@@ -179,6 +179,56 @@ def _is_exact_menu_question(low: str) -> bool:
     return "მენიუ" in low and any(x in low for x in ("ზუსტ", "კონკრეტ"))
 
 
+# ── Doctor / medical / medication ────────────────────────────────────────────
+def _is_medical(low: str) -> bool:
+    cfg = _load_data().get("camp_medical")
+    if not isinstance(cfg, Mapping):
+        return False
+    return _count(low, cfg.get("triggers")) > 0
+
+
+def medical_answer() -> str | None:
+    cfg = _load_data().get("camp_medical")
+    if isinstance(cfg, Mapping):
+        ans = str(cfg.get("answer") or "").strip()
+        if ans:
+            return ans
+    return None
+
+
+# ── Parent → child CONTACT during camp (vs the child's own social skills) ─────
+# „მე როგორ დავუკავშირდები ბავშვს?", „ბავშვთან კონტაქტი როგორ მექნება?",
+# „დღის განმავლობაში ბავშვთან კომუნიკაციას შევძლებ?" → the PARENT communication /
+# daily-updates block. A child word PLUS a parent-reaches-child intent, and NOT a
+# skill-DEFICIT word — so „კომუნიკაცია უჭირს" / „სოციალიზაცია სჭირდება" still go
+# to communication_socialization (they carry no child word + a deficit cue).
+_CHILD_WORDS: tuple[str, ...] = ("ბავშვ", "ბავსშვ", "ბავშვტ", "შვილ")  # incl. typos
+_PARENT_CONTACT_INTENT: tuple[str, ...] = (
+    "კავშირ",        # კავშირი / დაკავშირება / დავუკავშირდები / დაგიკავშირდები
+    "კონტაქტ", "კონატაქტ",  # contact (+ typo)
+    "ურეკ", "დარეკ", "რეკვ",  # call
+    "ლაპარაკ",       # talk
+    "ნახვა",         # see
+    "ამბავ", "ამბებ",  # news about the child
+    "კომუნიკაცი",    # communication WITH the child
+)
+# A skill-deficit cue means the question is about the CHILD's development, not
+# parent→child contact → keep it with communication_socialization.
+_CONTACT_DEFICIT_GUARD: tuple[str, ...] = (
+    "უჭირ", "სჭირდება", "ჩაკეტ", "სოციალიზ", "მეგობრ", "თანატოლ", "გახსნ",
+)
+
+
+def _is_parent_child_contact(low: str) -> bool:
+    if not any(c in low for c in _CHILD_WORDS):
+        return False
+    if not any(v in low for v in _PARENT_CONTACT_INTENT):
+        return False
+    if any(d in low for d in _CONTACT_DEFICIT_GUARD):
+        return False
+    return True
+
+
 def _is_unknown_camp_detail(low: str) -> bool:
     """True for a camp question that asks about a specific OPERATIONAL detail we
     have no approved fact for — an operational noun PLUS an interrogative /
@@ -218,6 +268,19 @@ def resolve_camp_answer(message: str) -> str | None:
         return None
     if _is_excluded(low):
         return None
+
+    # Pre-checks (before generic topic scoring):
+    # 1. Doctor / medical / medication → safe medical block (never overpromise).
+    if _is_medical(low):
+        med = medical_answer()
+        if med:
+            return med
+    # 2. Parent→child CONTACT during camp → the parent-communication block
+    #    (beats consultation phone/video flow AND communication_socialization).
+    if _is_parent_child_contact(low):
+        pc = answer_for_topic("parent_communication")
+        if pc:
+            return pc
 
     topic = detect_camp_topic(message)
     if topic:

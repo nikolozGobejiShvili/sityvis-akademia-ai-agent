@@ -31,6 +31,9 @@ camp_topic_facts:
 
   # 1. Safety / supervision
   safety:
+    # Doctor / medical / medication words are handled by the dedicated
+    # `camp_medical` block (see below) — NOT here — so a medical question gets
+    # the safe „clarify with manager in advance, no overpromise" answer.
     triggers:
       - უსაფრთხო
       - კამერ
@@ -39,9 +42,6 @@ camp_topic_facts:
       - მეთვალყურე
       - ვინ უყურებ
       - ვინ უვლი
-      - ექიმ
-      - სამედიცინო
-      - ექთან
       - სტაფ
       - ღამე ვინ
       - დაცულ
@@ -324,3 +324,26 @@ camp_unknown_detail:
 # Appended (as a new paragraph) to the food block for an EXACT-menu question
 # („ზუსტად რა მენიუ ექნებათ?") — food inclusion is known, the exact menu is not.
 camp_menu_clarification: "ზუსტი მენიუ მენეჯერთან დაზუსტდება."
+
+# ── Doctor / medical / medication → SAFE answer (NEVER overpromise) ───────────
+# Mentions the known fact (medical personnel 24/7) but NEVER guarantees that a
+# specific medication will be administered („აუცილებლად გააკონტროლებენ" /
+# „ექიმი მისცემს წამალს" / „გარანტირებულად დალევს"). Concrete schedule + control
+# must be clarified with the manager in advance and passed to the responsible
+# team. Routed as safety/medical (a pre-check in resolve_camp_answer), NOT the
+# generic unknown-detail fallback.
+camp_medical:
+  triggers:
+    - ექიმ
+    - სამედიცინო
+    - ექთან
+    - მედიკამენტ
+    - მედიც
+    - წამალ
+    - წამლ
+  answer: |-
+    ბანაკში არის სამედიცინო პერსონალი 24/7.
+
+    კონკრეტული მედიკამენტის მიღების გრაფიკი და კონტროლის წესი წინასწარ მენეჯერთან უნდა დაზუსტდეს, რომ ინფორმაცია სწორად გადაეცეს პასუხისმგებელ გუნდს.
+
+    თუ გსურთ, მენეჯერთან დაგაკავშირებთ.
