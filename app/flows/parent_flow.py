@@ -620,6 +620,21 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                 conversation, camp_topic_response,
             )
 
+        # Today-first consultation availability (hotfix 2026-06-28): a „nearest
+        # free time" / „is today free?" question is answered deterministically
+        # in Asia/Tbilisi local time, checking TODAY's remaining free slots
+        # FIRST and only then the next day(s). Prevents the live bug where the
+        # agent jumped to tomorrow and falsely claimed today's working hours
+        # were over. A specific-hour request („დღეს 16:00-ზე?") defers (None)
+        # to the exact-slot check; non-availability messages defer to the LLM.
+        availability_response = _maybe_handle_availability_question(
+            conversation, message,
+        )
+        if availability_response is not None:
+            return _sanitise_booking_confirmation(
+                conversation, availability_response,
+            )
+
         engine_response = _run_llm_engine_safely(conversation, message)
         if engine_response:
             # PARENT Reschedule State + Segment Override Patch (2026-06-10)
@@ -4416,6 +4431,197 @@ def _bot_recently_asked_booking_datetime(conversation: Conversation) -> bool:
     return False
 
 
+# ── Today-first consultation availability (hotfix 2026-06-28) ────────────────
+# Live bug: „უახლოესი თავისუფალი დრო რაც არის" was answered with TOMORROW's
+# slots (30 ივნისი 10:00/11:00/12:00) and the follow-up „დღეს არ არის
+# თავისუფალი?" with „დღეს უკვე გადაცილებულია სამუშაო საათები" — even though it
+# was ~15:00 Asia/Tbilisi and today (work hours 10:00–21:00) still had free
+# afternoon slots. Root cause: the no-date slot loader started the search at
+# TOMORROW (`range(1, 8)`), so today's remaining slots were never considered,
+# and the LLM then rationalised „today is over".
+#
+# This deterministic interceptor answers a „nearest free time" / „is today
+# free?" question in Asia/Tbilisi LOCAL time: it checks TODAY first and offers
+# today's remaining free slots whenever any exist; only when today has none
+# does it move to the next day(s). A „today's hours are over" message is
+# produced ONLY when the local time is genuinely past the booking cutoff
+# (Sunday, or now + lead-time buffer leaves no whole-hour slot before close) —
+# never just because the first search jumped to tomorrow.
+#
+# Minimum lead time: the existing today-only `SLOT_BUFFER`
+# (`business_hours.yaml` `slot.buffer_minutes` = 120) is PRESERVED — a today
+# slot must start ≥ now + 2 h. So at 15:00 the earliest offered today slot is
+# 17:00. `get_free_slots(today)` applies that buffer; this handler never offers
+# a past or within-buffer slot.
+_AVAILABILITY_FREE_STEM = "თავისუფ"      # თავისუფალი / თავისუფალია / თავისუფ. დრო
+_AVAILABILITY_TODAY_STEM = "დღეს"
+_AVAILABILITY_NEAREST_STEM = "უახლოეს"
+
+
+def _looks_like_availability_question(message: str) -> bool:
+    """True for a GENERAL „is today free?" / „what's the nearest free time?"
+    consultation-availability question.
+
+    Requires the „free" stem plus either „today" or „nearest". Defers (False)
+    when an explicit clock hour is named so a specific-slot request
+    („დღეს 16:00-ზე შეიძლება?") still flows to the exact-slot check instead of
+    the generic availability answer."""
+    low = (message or "").lower()
+    if _AVAILABILITY_FREE_STEM not in low:
+        return False
+    if (
+        _AVAILABILITY_TODAY_STEM not in low
+        and _AVAILABILITY_NEAREST_STEM not in low
+    ):
+        return False
+    try:
+        from app.agent.services.timestamps import extract_colloquial_hour
+        if extract_colloquial_hour(message) is not None:
+            return False
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return True
+
+
+def _join_georgian(items: list[str]) -> str:
+    """Join a short list with Georgian „და" before the last item."""
+    items = [i for i in items if i]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return f"{', '.join(items[:-1])} და {items[-1]}"
+
+
+def _format_next_free_slots(slots: list[dict], limit: int = 3) -> str:
+    """Render up to `limit` next-day slots as „30 ივნისი, 10:00" joined for a
+    Georgian sentence (last item preceded by „ან")."""
+    parts = [
+        f"{s.get('date', '')}, {s.get('time', '')}".strip(", ")
+        for s in slots[:limit]
+        if s.get("time")
+    ]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return f"{'; '.join(parts[:-1])}; ან {parts[-1]}"
+
+
+def _remaining_today_free_slots(now: datetime) -> list[dict]:
+    """Today's remaining free consultation slots in Asia/Tbilisi (already
+    filtered by the today-only buffer + business hours inside
+    `get_free_slots`). Empty on a closed booking day or any Calendar error."""
+    if calendar_service.is_closed_booking_day(now):
+        return []
+    try:
+        return calendar_service.get_free_slots(now.date())
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception(
+            "[parent_flow] today free-slot lookup failed: %s", exc,
+        )
+        return []
+
+
+def _next_days_free_slots(now: datetime, *, limit: int = 3) -> list[dict]:
+    """Free slots on the next booking days (tomorrow onward), up to `limit`."""
+    collected: list[dict] = []
+    for offset in range(1, 8):
+        day = (now + timedelta(days=offset)).date()
+        try:
+            day_slots = calendar_service.get_free_slots(day)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.exception(
+                "[parent_flow] next-day free-slot lookup failed for %s: %s",
+                day, exc,
+            )
+            day_slots = []
+        collected.extend(day_slots)
+        if len(collected) >= limit:
+            break
+    return collected[:limit]
+
+
+def _today_consultation_closed(now: datetime) -> bool:
+    """True when TODAY can no longer take a consultation booking in Asia/Tbilisi
+    LOCAL time — either it is a closed booking day (Sunday) OR the current local
+    time is past the booking cutoff (now + lead-time buffer leaves no whole-hour
+    slot before close). Time-based only; independent of how busy the calendar
+    is — so a busy-but-still-open today is NOT reported as „hours over"."""
+    if calendar_service.is_closed_booking_day(now):
+        return True
+    last_slot_start = (
+        datetime.combine(
+            now.date(), calendar_service.BUSINESS_HOUR_END,
+            tzinfo=calendar_service.TIMEZONE,
+        )
+        - calendar_service.SLOT_DURATION
+    )
+    return now + calendar_service.SLOT_BUFFER > last_slot_start
+
+
+def _maybe_handle_availability_question(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Deterministically answer a „nearest free time" / „is today free?"
+    question in Asia/Tbilisi local time, checking TODAY first.
+
+    Returns None for any non-availability message (so normal flow / the engine
+    continues) and when there are no free slots anywhere in the next week (let
+    the engine handle that edge)."""
+    if not _looks_like_availability_question(message):
+        return None
+
+    # Age-eligibility gate: never deterministically offer consultation slots to
+    # a lead whose child age is outside the camp band (under-age OR over-age) —
+    # they cannot book. Defer to the engine, which applies the ineligible-age
+    # guards (`_strip_consultation_cta_if_ineligible` /
+    # `_ensure_ineligible_young_age_message`). Unknown / eligible ages proceed
+    # (the bug scenario is a parent asking about free time before/while
+    # qualifying).
+    if _age_status_for_lead(getattr(conversation, "lead", None)) == "ineligible":
+        logger.info(
+            "[parent_flow] availability: ineligible child age — deferring to "
+            "engine for the ineligible-age guards",
+        )
+        return None
+
+    now = calendar_service.now_tbilisi()
+    today_slots = _remaining_today_free_slots(now)
+    if today_slots:
+        times = _join_georgian([s.get("time", "") for s in today_slots[:3]])
+        logger.info(
+            "[parent_flow] availability: offering %d today slot(s) "
+            "(now=%s Tbilisi)",
+            len(today_slots), now.isoformat(),
+        )
+        return f"დღეს თავისუფალია {times}. რომელი დრო გირჩევნიათ?"
+
+    next_slots = _next_days_free_slots(now)
+    if not next_slots:
+        # Nothing free in the next week — let the engine compose the answer.
+        return None
+
+    nearest = _format_next_free_slots(next_slots)
+    if _today_consultation_closed(now):
+        logger.info(
+            "[parent_flow] availability: today closed (now=%s Tbilisi) — "
+            "offering nearest next-day slots", now.isoformat(),
+        )
+        return (
+            "დღეს კონსულტაციის მიღების საათები დასრულდა. "
+            f"უახლოესი თავისუფალი დროებია: {nearest}. რომელი დრო გსურთ?"
+        )
+    logger.info(
+        "[parent_flow] availability: today within hours but no free slot "
+        "(now=%s Tbilisi) — offering nearest next-day slots", now.isoformat(),
+    )
+    return (
+        "დღეს თავისუფალი დრო აღარ ჩანს. "
+        f"უახლოესი თავისუფალი დროებია: {nearest}. რომელი დრო გსურთ?"
+    )
+
+
 def _in_consultation_booking_context(conversation: Conversation) -> bool:
     """True when the conversation is already in the consultation booking flow:
     a pending booking exists, OR the bot just asked for the date/time, OR we are
@@ -6691,9 +6897,16 @@ def _end_with_consultation_offer(response: str, sender_id: str | None = None) ->
 
 
 def _load_available_slots(sender_id: str) -> list[dict]:
-    now = datetime.now(TBILISI_TZ)
+    # Today-first availability (hotfix 2026-06-28). Start the search at offset
+    # 0 (TODAY) — not offset 1 (tomorrow) — so today's remaining free slots
+    # (filtered by the today-only `SLOT_BUFFER` inside `get_free_slots`) are
+    # offered before next-day slots. The previous `range(1, 8)` skipped today
+    # entirely, so the engine offered tomorrow even mid-afternoon when today
+    # still had free hours. `now` resolves through `calendar_service.now_tbilisi`
+    # so it stays in lock-step with the slot generator's Asia/Tbilisi clock.
+    now = calendar_service.now_tbilisi()
     collected: list[dict] = []
-    for offset in range(1, 8):
+    for offset in range(0, 8):
         target_date = (now + timedelta(days=offset)).date()
         try:
             day_slots = calendar_service.get_free_slots(target_date)

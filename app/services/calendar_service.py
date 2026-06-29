@@ -56,6 +56,19 @@ def is_closed_booking_day(day) -> bool:
     """
     return day.weekday() in CLOSED_WEEKDAYS
 
+
+def now_tbilisi() -> datetime:
+    """Current time as a TZ-aware Asia/Tbilisi datetime.
+
+    Single now-source for callers (e.g. the today-availability handler in
+    ``parent_flow``) that must stay in lock-step with slot generation: it
+    resolves through this module's ``datetime`` so tests that pin the clock
+    (``_pin_now`` → patches ``calendar_service.datetime``) freeze both the
+    slot buffer/business-hours math AND the caller's "today / now" reasoning
+    from a single point.
+    """
+    return datetime.now(TIMEZONE)
+
 # Georgian month names for display ("15 მაისი") — sourced from
 # app/agent/knowledge/i18n/ka_months.yaml. Cast keys to int because YAML
 # integer-keyed mappings are loaded as int but we want to be explicit.
