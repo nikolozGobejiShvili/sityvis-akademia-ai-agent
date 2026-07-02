@@ -1054,6 +1054,105 @@ async def determine_segment_from_post(post_id: str, platform: str) -> str:
     return segment
 
 
+# ── Sunday School comment DM (2026-07-02) — Camp-DM leak fix ─────────────────
+# A comment on a Sunday-School post must NEVER receive the Summer-Camp rich DM.
+# SS sections carry `type=kids_program`, which previously fell into the shared
+# camp/kids_program branch of `send_dm_from_comment` → `_build_parent_rich_dm()`
+# (hardcoded summer_camp). These status-aware, SS-specific strings carry NO camp
+# price / registration link / stream dates. Deterministic (mirrors the chat
+# Sunday-School handoff wording in `parent_flow`); NOT sales copy.
+_SS_COMMENT_COMING_SOON = (
+    "საკვირაო სკოლის დეტალები ჯერ ზუსტდება. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
+)
+_SS_COMMENT_INACTIVE = (
+    "საკვირაო სკოლა ამ ეტაპზე აქტიური არ არის. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
+)
+_SS_COMMENT_FULL = (
+    "საკვირაო სკოლაზე ადგილები ამ ეტაპზე შევსებულია. თუ გსურთ, მენეჯერთან "
+    "დაგაკავშირებთ."
+)
+_SS_COMMENT_ACTIVE_HANDOFF = (
+    "საკვირაო სკოლით დაინტერესებისთვის მადლობა. დეტალებს მენეჯერი გაგაცნობთ — "
+    "თუ გსურთ, დაგაკავშირებთ."
+)
+
+
+def _is_sunday_school_section(section: dict | None) -> bool:
+    """True when the resolved comment section is the Sunday-School program.
+
+    Detected by id / lead_type / auto_dm_template_id so it is independent of the
+    shared ``kids_program`` type (which previously grouped Sunday School with the
+    camp DM branch). Camp (`id=summer_camp`, `type=camp`) never matches.
+    """
+    if not section:
+        return False
+    sid = (section.get("id") or "").strip().lower()
+    lead_type = (section.get("lead_type") or "").strip().lower()
+    tmpl = (section.get("auto_dm_template_id") or "").strip().lower()
+    return (
+        sid == "sunday_school"
+        or lead_type == "sunday_school"
+        or "sunday_school" in tmpl
+    )
+
+
+def _build_ss_active_comment_dm(section: dict | None) -> str:
+    """Active Sunday-School comment DM built ONLY from populated operator fields
+    (never invented), always ending with a safe manager-handoff offer. Empty
+    fields are skipped so no blank „ფასი: " labels appear. Never Camp content."""
+    section = section or {}
+
+    def _f(key: str) -> str:
+        v = section.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    parts: list[str] = []
+    desc = _f("description_short")
+    if desc:
+        parts.append(desc)
+    facts: list[str] = []
+    if _f("price_text"):
+        facts.append(f"ფასი: {_f('price_text')}")
+    if _f("schedule_text"):
+        facts.append(f"გრაფიკი: {_f('schedule_text')}")
+    if _f("location"):
+        facts.append(f"ლოკაცია: {_f('location')}")
+    if facts:
+        parts.append("\n".join(facts))
+    if _f("registration_url"):
+        parts.append(f"რეგისტრაციის ბმული: {_f('registration_url')}")
+    parts.append(_SS_COMMENT_ACTIVE_HANDOFF)
+    return "\n\n".join(parts)
+
+
+def _build_sunday_school_comment_dm(section: dict | None) -> str:
+    """Status-aware Sunday-School comment DM. NEVER returns Camp content.
+
+    coming_soon → details-being-clarified + manager offer.
+    hidden / ended → inactive + manager offer.
+    full → seats-filled + manager offer.
+    active → operator-provided SS fields (populated only) + safe handoff.
+    any other / unknown / unreadable status → safe SS manager-handoff (fail-safe).
+    """
+    try:
+        status = (
+            (admin_config_service.get_sunday_school_status() or {}).get("status")
+            or "coming_soon"
+        )
+    except Exception:  # pragma: no cover — defensive: never fall through to camp
+        status = "coming_soon"
+    status = str(status).strip().lower()
+    if status == "coming_soon":
+        return _SS_COMMENT_COMING_SOON
+    if status in {"hidden", "ended"}:
+        return _SS_COMMENT_INACTIVE
+    if status == "full":
+        return _SS_COMMENT_FULL
+    if status == "active":
+        return _build_ss_active_comment_dm(section)
+    return _SS_COMMENT_ACTIVE_HANDOFF
+
+
 async def send_dm_from_comment(
     sender_id: str,
     platform: str,
@@ -1160,7 +1259,13 @@ async def send_dm_from_comment(
 
     if admin_section and not message:
         section_type = (admin_section.get("type") or "").strip().lower()
-        if section_type in {"camp", "kids_program"} and segment == "PARENT":
+        if _is_sunday_school_section(admin_section):
+            # Sunday School leak fix (2026-07-02): SS posts are `type=kids_program`
+            # and previously fell into the camp/kids_program branch below, sending
+            # the Summer-Camp rich DM. Route SS to its own status-aware DM builder
+            # (never Camp content). Camp (`type=camp`) is unaffected.
+            message = _build_sunday_school_comment_dm(admin_section)
+        elif section_type in {"camp", "kids_program"} and segment == "PARENT":
             # Existing PARENT path covers summer_camp via admin_config
             # (rich-DM builder calls admin_config_service first).
             message = _build_parent_rich_dm()
