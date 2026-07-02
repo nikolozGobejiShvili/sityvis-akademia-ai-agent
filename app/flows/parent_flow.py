@@ -324,6 +324,153 @@ def _normalise_agixsnit_wording(text: str) -> str:
     return text
 
 
+# ── Camp admin-status gate (2026-07-01) ──────────────────────────────────────
+# The operator can turn the camp off from Admin Config (`summer_camp.status`,
+# read via `admin_config_service.get_camp_status()` which defaults to "active").
+# When the status is NOT active, a CAMP-related question is intercepted here —
+# BEFORE the static welcome / camp intro / child-age question / price / payment /
+# dates / registration / camp topic facts / unknown-detail fallback / seats
+# fallback / consultation / manager handoff / LLM camp answer — and answered with
+# the status message. Non-camp flows (Sunday School, adult events, manager phone,
+# off-topic, greetings) are NEVER intercepted, so they keep working. When the
+# status is "active" the gate is a no-op → existing behaviour is byte-identical.
+_CAMP_OFF_ALT: str = (
+    "ამ ეტაპზე შეგიძლიათ დაინტერესდეთ საკვირაო სკოლით ან ზრდასრულთა "
+    "ღონისძიებებით.\nრომელი მიმართულება გაინტერესებთ?"
+)
+# hidden and ended share the "streams completed" wording.
+_CAMP_MSG_ENDED: str = "ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n" + _CAMP_OFF_ALT
+_CAMP_MSG_FULL: str = "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია.\n\n" + _CAMP_OFF_ALT
+_CAMP_MSG_COMING_SOON: str = "ბანაკის დეტალები ჯერ ზუსტდება.\n\n" + _CAMP_OFF_ALT
+_CAMP_SHORT_ENDED: str = "ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია."
+_CAMP_SHORT_FULL: str = "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია."
+_CAMP_SHORT_COMING_SOON: str = "ბანაკის დეტალები ჯერ ზუსტდება."
+_CAMP_ENDED_DIRECT: str = (
+    "დიახ, ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n"
+    "ამ ეტაპზე შეგიძლიათ დაინტერესდეთ საკვირაო სკოლით ან ზრდასრულთა ღონისძიებებით."
+)
+_CAMP_OFF_CHILD_PREFIX: str = "ამ ეტაპზე ბანაკის მიმდინარე ნაკადები აქტიური არ არის."
+_CAMP_OFF_ADULT_POINTER: str = "რაც შეეხება ზრდასრულთა ღონისძიებებს — რომელი გაინტერესებთ?"
+
+_CAMP_STATUS_KEYWORDS: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ", "ნაკად")
+_CAMP_ENDED_Q_MARKERS: tuple[str, ...] = (
+    "დასრულ", "აღარ არის", "აღარ ტარდ", "ჩატარდ", "დამთავრ", "აღარ იქნებ",
+    "უკვე ჩავიდ", "უკვე გავიდ", "გასულია",
+)
+_CAMP_CHILD_OFFERING_MARKERS: tuple[str, ...] = (
+    "ბავშვისთვის რა", "შვილისთვის რა", "ბავშვისთვის რას", "შვილისთვის რას",
+    "ბავშვს რას", "შვილს რას", "ბავშვისთვის გაქვთ", "შვილისთვის გაქვთ",
+)
+_CAMP_ADULT_MARKERS: tuple[str, ...] = ("ზრდასრულ", "კულტურულ")
+
+
+def _camp_status_message(status: str) -> str:
+    if status == "full":
+        return _CAMP_MSG_FULL
+    if status == "coming_soon":
+        return _CAMP_MSG_COMING_SOON
+    return _CAMP_MSG_ENDED  # hidden / ended (+ defensive default)
+
+
+def _camp_status_short(status: str) -> str:
+    if status == "full":
+        return _CAMP_SHORT_FULL
+    if status == "coming_soon":
+        return _CAMP_SHORT_COMING_SOON
+    return _CAMP_SHORT_ENDED
+
+
+def _msg_has_camp_intent(message: str) -> bool:
+    """True when the message is a CAMP question — via a camp keyword OR any of the
+    existing camp detectors (price / registration / topic facts / operational
+    unknown-detail / exact-detail). Reuses the shipped camp detection so nothing
+    camp-related slips past when the camp is off."""
+    low = (message or "").lower()
+    if any(k in low for k in _CAMP_STATUS_KEYWORDS):
+        return True
+    try:
+        if _is_camp_price_intent(message):
+            return True
+        if _is_camp_registration_link_request(message):
+            return True
+        from app.reasoning import camp_topic_facts as _ctf
+        if _ctf.detect_camp_topic(message) is not None:
+            return True
+        if _ctf.resolve_operational(message) is not None:
+            return True
+        if _ctf.resolve_exact_detail(message) is not None:
+            return True
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return False
+
+
+def _msg_is_child_offering(message: str) -> bool:
+    """„ბავშვისთვის რა გაქვთ?" — a generic child-offering question with no explicit
+    camp keyword that would otherwise default to the camp sales funnel."""
+    low = (message or "").lower()
+    return any(m in low for m in _CAMP_CHILD_OFFERING_MARKERS)
+
+
+def _msg_has_adult_intent(message: str) -> bool:
+    low = (message or "").lower()
+    if any(m in low for m in _CAMP_ADULT_MARKERS):
+        return True
+    # „ღონისძიებ" only counts as adult when NO camp keyword is present (mirrors
+    # camp_topic_facts) so „ბანაკში რა ღონისძიებებია" is not read as adult.
+    if "ღონისძიებ" in low and not any(k in low for k in _CAMP_STATUS_KEYWORDS):
+        return True
+    return False
+
+
+def _msg_is_camp_ended_question(message: str) -> bool:
+    low = (message or "").lower()
+    return "ბანაკ" in low and any(m in low for m in _CAMP_ENDED_Q_MARKERS)
+
+
+def _maybe_handle_camp_status(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Admin camp-status gate. Returns the status message for a CAMP question when
+    the camp is not `active`, else None.
+
+    None is returned (a) whenever the status is `active` (ZERO behaviour change —
+    the regression guarantee) and (b) for every non-camp message (Sunday School /
+    adult / manager phone / greeting / political / off-topic) so those flows are
+    untouched. Fail-open: any error → None (camp is never disabled by a fault)."""
+    try:
+        from app.services import admin_config_service
+        status = admin_config_service.get_camp_status()
+    except Exception:  # pragma: no cover — never disable camp on error
+        return None
+    if status == "active":
+        return None
+
+    has_camp = _msg_has_camp_intent(message)
+    is_child_offering = _msg_is_child_offering(message)
+
+    # Pure non-camp message → let the normal flow (SS / adult / manager …) run.
+    if not has_camp and not is_child_offering:
+        return None
+
+    # „ბავშვისთვის რა გაქვთ?" with no explicit camp → do NOT sell camp; point to
+    # Sunday School per its OWN current status (routes to SS when SS is active).
+    if is_child_offering and not has_camp:
+        return _CAMP_OFF_CHILD_PREFIX + "\n\n" + _render_sunday_school_answer()
+
+    # Combined camp + Sunday School → camp line + the current Sunday-School answer.
+    if _is_sunday_school_intent(message):
+        return _camp_status_short(status) + "\n\n" + _render_sunday_school_answer()
+    # Combined camp + adult → camp line + adult pointer (adult is never blocked).
+    if _msg_has_adult_intent(message):
+        return _camp_status_short(status) + "\n\n" + _CAMP_OFF_ADULT_POINTER
+    # Direct „ბანაკი დასრულდა?" question (hidden / ended only).
+    if status in ("hidden", "ended") and _msg_is_camp_ended_question(message):
+        return _CAMP_ENDED_DIRECT
+    # Camp-only question → the full status message.
+    return _camp_status_message(status)
+
+
 def handle(conversation: Conversation, message: str) -> str:
     """Public entry — runs the core handler, then applies the deterministic
     client output polish (mid-conversation greeting-leak strip + one-❤️ emoji
@@ -385,6 +532,18 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             except Exception:  # pragma: no cover — trace must never break a reply
                 pass
             return _sanitise_booking_confirmation(conversation, protected)
+
+    # Camp admin-status gate (2026-07-01) — when the operator turns the camp off
+    # (`summer_camp.status` != active), a CAMP question is answered with the
+    # status message HERE, before the static welcome / camp intro / price /
+    # registration / topic-facts / unknown-detail fallbacks / consultation. Runs
+    # BEFORE the Sunday-School handler so a combined „ბანაკი და საკვირაო სკოლა"
+    # message gets BOTH the camp line and the Sunday-School answer; a PURE
+    # Sunday-School / adult / manager message is not intercepted (returns None).
+    # No-op when status == active → existing behaviour is byte-identical.
+    camp_status_response = _maybe_handle_camp_status(conversation, message)
+    if camp_status_response is not None:
+        return camp_status_response
 
     # Sunday School (planned July) — deterministic EMAIL-ONLY manager handoff.
     # Runs FIRST (before the static welcome / engine / camp contact-collection)

@@ -64,7 +64,10 @@ BUSINESS_HOURS_PATH: Path = ADMIN_CONFIG_DIR / "business_hours.yaml"
 MANAGER_CONTACTS_PATH: Path = ADMIN_CONFIG_DIR / "manager_contacts.yaml"
 
 
-VALID_STATUSES = ("active", "hidden", "full", "coming_soon")
+VALID_STATUSES = ("active", "hidden", "full", "coming_soon", "ended")
+# Camp (summer_camp) status values the live agent understands. "ended" (2026-07-01)
+# lets the operator turn the camp off after the last stream without a code change.
+CAMP_STATUSES = ("active", "hidden", "full", "coming_soon", "ended")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_]*$")
 
 
@@ -192,6 +195,29 @@ def get_section(section_id: str) -> dict[str, Any] | None:
 
 def get_active_sections() -> list[dict[str, Any]]:
     return [s for s in load_sections() if s.get("status") == "active"]
+
+
+def get_camp_status() -> str:
+    """Return the operator-configured ``summer_camp.status``, normalised to
+    lower-case and validated against :data:`CAMP_STATUSES`.
+
+    Defaults to ``"active"`` when the field is missing, empty, unknown/invalid,
+    or unreadable — so a bad/absent value can NEVER accidentally turn the camp
+    off. Never raises. This is the single source of truth the live agent reads
+    to decide whether the camp is being sold (see
+    ``parent_flow._maybe_handle_camp_status``)."""
+    try:
+        section = get_section("summer_camp") or {}
+        raw = (section.get("status") or "").strip().lower()
+    except Exception:  # pragma: no cover — defensive: never disable camp on error
+        return "active"
+    return raw if raw in CAMP_STATUSES else "active"
+
+
+def is_camp_active() -> bool:
+    """True when the camp is being sold (status ``active``); False for
+    ``hidden`` / ``full`` / ``coming_soon`` / ``ended``. Missing/invalid → True."""
+    return get_camp_status() == "active"
 
 
 def get_sunday_school_status() -> dict[str, Any]:
