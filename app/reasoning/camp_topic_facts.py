@@ -404,6 +404,19 @@ def menu_clarification() -> str:
     return str(_load_data().get("camp_menu_clarification") or "").strip()
 
 
+def direct_call_fallback() -> str:
+    """The direct-call manager defer („რაც შეეხება ბავშვთან პირდაპირი კონტაქტის
+    წესებს, …") built from the YAML `direct_call` category — public so the
+    parent_flow multi-question combiner can reuse the exact approved wording for a
+    bare call clause („დარეკვა როგორ იქნება") a cue-gated category would miss."""
+    for cat in _unknown_categories():
+        if str(cat.get("key") or "") == "direct_call":
+            topic = str(cat.get("topic") or "").strip()
+            if topic:
+                return _fallback_for(topic)
+    return _fallback_for("ბავშვთან პირდაპირი კონტაქტის წესებს")
+
+
 # ── EXACT-DETAIL split: KNOWN general answer + exact-unknown defer ───────────
 # (client follow-up 2026-06-30). Returns (general_part, fallback_part). The
 # general part uses only the FIRST approved paragraph/line — never invents the

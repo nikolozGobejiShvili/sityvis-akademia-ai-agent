@@ -266,6 +266,17 @@ def _apply_client_emoji_policy(
     # the same turn („გამარჯობა, ოთახში რამდენი ბავშვი?"). The defer carries no
     # emoji (its own contract) and must not gain a „გამარჯობა 💙" opener either.
     if _UNKNOWN_DETAIL_ENDING in response:
+        # Live hotfix (2026-07-02): a FIRST-TURN greeting + remaining-seats
+        # question is a legitimate camp answer, so it earns the „გამარჯობა 💙"
+        # opener („გამარჯობა 💙\n\nრაც შეეხება კონკრეტულ ნაკადზე დარჩენილ
+        # ადგილებს …"). EVERY OTHER unknown-detail defer (room / towels /
+        # organizer / …) stays heart-free, per the existing defer contract.
+        if (
+            "დარჩენილ ადგილებს" in response
+            and not _bot_has_replied(conversation)
+            and _user_greeted(message)
+        ):
+            return _strip_period_after_heart(_add_heart_after_greeting(response))
         return response
     # 1. Booking confirmed THIS turn — executor signal, not an LLM guess.
     if _booking_success_this_turn(conversation):
@@ -3082,9 +3093,22 @@ def _answer_camp_part(conversation: Conversation, clause: str) -> str | None:
             return op
         ca = _ctf.resolve_camp_answer(clause)
         if ca:
-            # For multi-question conciseness, use the FIRST approved paragraph of
-            # a topic block (operational defers are single-paragraph already).
+            # The parent-communication block is returned IN FULL — its paragraphs
+            # (daily program + photo/video updates + the direct-call manager defer)
+            # are all essential (live hotfix 2026-07-02: the direct-call fallback
+            # was being dropped by the trim below). Every OTHER topic block is
+            # trimmed to its FIRST approved paragraph for multi-question conciseness
+            # (operational defers are single-paragraph already).
+            pc = _ctf.answer_for_topic("parent_communication")
+            if pc and ca.strip() == pc.strip():
+                return ca.strip()
             return ca.split("\n\n", 1)[0].strip()
+        # A bare call clause a cue-gated category misses in a split („დარეკვა
+        # როგორ იქნება", „ზარი იქნება?") → the direct-call manager defer. Never
+        # invents a call schedule.
+        low = clause.lower()
+        if any(w in low for w in ("დარეკ", "დაურეკ", "ვურეკ", "ზარი", "ზარის")):
+            return _ctf.direct_call_fallback()
     except Exception:  # pragma: no cover — defensive
         return None
     return None
