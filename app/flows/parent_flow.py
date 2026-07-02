@@ -137,7 +137,7 @@ def _reasoning_defers_decline(analysis) -> bool:
 #      tests/conftest.py so the ~40 greeting/booking tests stay byte-identical;
 #      the emoji tests opt back in).
 _CLIENT_EMOJI_ENABLED: bool = True
-_HEART: str = "❤️"
+_HEART: str = "💙"  # Client wording fix (2026-06-29): blue heart, never red ❤️.
 _GREETING_WORDS: tuple[str, ...] = (
     "გამარჯობა", "გამარჯობათ", "სალამი", "მოგესალმებით", "გაგიმარჯ",
 )
@@ -170,6 +170,26 @@ def _user_is_pure_thanks(message: str) -> bool:
     return len(t.split()) <= 3
 
 
+# Unambiguous farewell words that ALSO earn a single closing 💙 (client fix
+# 2026-06-29). „კარგად" is excluded (ambiguous acknowledgement) and „ხვალამდე"
+# is excluded (client-review: „ხვალამდე უნდა გადავიხადო" = a payment question,
+# not a farewell) — both still warm-close via `_maybe_handle_thanks_farewell`
+# where applicable, just without the heart.
+_FAREWELL_HEART_WORDS: tuple[str, ...] = ("ნახვამდის", "მშვიდობით")
+
+
+def _user_is_farewell(message: str) -> bool:
+    """True for a SHORT bare farewell („ნახვამდის" / „მშვიდობით") — a closing
+    moment where a single 💙 is allowed."""
+    raw = message or ""
+    if "?" in raw:
+        return False
+    t = raw.lower().strip().strip(".,!?…")
+    if not t:
+        return False
+    return any(w in t for w in _FAREWELL_HEART_WORDS) and len(t.split()) <= 3
+
+
 def _strip_midconvo_intro_leak(
     conversation: Conversation, message: str, response: str,
 ) -> str:
@@ -190,51 +210,133 @@ def _strip_midconvo_intro_leak(
     return response
 
 
+def _strip_period_after_heart(text: str) -> str:
+    """Guard: never a period / „!" immediately after 💙 (a paragraph break or a
+    single space may follow, but not sentence punctuation)."""
+    return re.sub(r"(" + _HEART + r")(\s*)[.!]+", r"\1\2", text)
+
+
 def _add_heart_after_first_sentence(text: str) -> str:
     parts = re.split(r"([.?!]\s+|\n+)", text, maxsplit=1)
     if len(parts) >= 3 and parts[0].strip():
-        return f"{parts[0].rstrip()} {_HEART}{parts[1]}{parts[2]}"
-    return f"{text.rstrip()} {_HEART}"
+        # Drop the sentence punctuation so no „." sits right after the heart;
+        # preserve the following whitespace (a paragraph break stays a break).
+        ws = parts[1].lstrip(".?!") or " "
+        return f"{parts[0].rstrip()} {_HEART}{ws}{parts[2]}"
+    base = text.rstrip()
+    if base and base[-1] in ".!":
+        base = base[:-1].rstrip()
+    return f"{base} {_HEART}"
 
 
 def _add_heart_after_greeting(text: str) -> str:
-    low = text.lower()
-    for g in _GREETING_WORDS:
-        idx = low.find(g)
-        if idx != -1:
-            end = idx + len(g)
-            return f"{text[:end]} {_HEART}{text[end:]}"
-    return _add_heart_after_first_sentence(text)
+    """Put exactly one blue heart right after the opening greeting, on its OWN
+    line: „გამარჯობა 💙\n\n<rest>".
+
+    Client follow-up hotfix (2026-06-29, hardened after adversarial review):
+    - If the reply OPENS with a greeting word, that word + its trailing
+      punctuation is consumed and replaced by the canonical „გამარჯობა 💙"
+      opener. Greeting words are matched LONGEST-first so the shorter
+      „გამარჯობა" never splits the longer „გამარჯობათ" („გამარჯობა 💙 თ…" bug).
+    - If the reply has NO greeting word (the engine intro), the opener is
+      prepended.
+    Either way the heart is on its own opening line, never mid-sentence, never a
+    „💙.", and the REST of the reply (paragraph breaks, the welcome menu lines)
+    is preserved verbatim — no collapsing „\n\n" into a single space."""
+    stripped = text.lstrip()
+    low = stripped.lower()
+    for g in sorted(_GREETING_WORDS, key=len, reverse=True):
+        if low.startswith(g):
+            rest = stripped[len(g):].lstrip(" .,!\n\t")
+            return f"გამარჯობა {_HEART}\n\n{rest}" if rest else f"გამარჯობა {_HEART}"
+    return f"გამარჯობა {_HEART}\n\n{stripped}"
 
 
 def _apply_client_emoji_policy(
     conversation: Conversation, message: str, response: str,
 ) -> str:
-    """Add EXACTLY ONE ❤️ in three moments only (booking confirmed / thank-you /
+    """Add EXACTLY ONE 💙 in three moments only (booking confirmed / thank-you /
     first greeting). No emoji anywhere else. Deterministic, flag-gated."""
     if not _CLIENT_EMOJI_ENABLED:
         return response
     if not response or _HEART in response:
         return response
+    # Client follow-up hotfix (2026-06-29, hardened) — NEVER put a heart on an
+    # unsupported-detail / organizer manager defer, even when the user greeted in
+    # the same turn („გამარჯობა, ოთახში რამდენი ბავშვი?"). The defer carries no
+    # emoji (its own contract) and must not gain a „გამარჯობა 💙" opener either.
+    if _UNKNOWN_DETAIL_ENDING in response:
+        return response
     # 1. Booking confirmed THIS turn — executor signal, not an LLM guess.
     if _booking_success_this_turn(conversation):
-        return _add_heart_after_first_sentence(response)
-    # 2. User thanked → warm close.
-    if _user_is_pure_thanks(message):
-        return _add_heart_after_first_sentence(response)
+        return _strip_period_after_heart(_add_heart_after_first_sentence(response))
+    # 2. User thanked / farewelled → warm close.
+    if _user_is_pure_thanks(message) or _user_is_farewell(message):
+        return _strip_period_after_heart(_add_heart_after_first_sentence(response))
     # 3. First assistant reply AND the user greeted.
     if not _bot_has_replied(conversation) and _user_greeted(message):
-        return _add_heart_after_greeting(response)
+        return _strip_period_after_heart(_add_heart_after_greeting(response))
     return response
+
+
+# ── Client wording guarantee (2026-07-01) — no „აგიხსნით" in live output ──────
+# The client wording rule bans „აგიხსნით". The deterministic camp-topic blocks
+# and unknown-detail defers never emit it, but the LLM engine (and the legacy
+# fallback + its `_build_premium_*` answers) can still compose a consultation CTA
+# with „აგიხსნით" because the giant prompt historically promoted it as the
+# natural verb for „explain". This final deterministic pass runs on EVERY reply
+# returned by handle() and rewrites any residual „აგიხსნით" form into the
+# approved „გაგაცნობთ" wording — so no live/deterministic response can output
+# „აგიხსნით", regardless of what the model produced. Ordered longest→shortest so
+# a full CTA maps to the exact approved sentence before the bare catch-all fires.
+_AGIXSNIT_REWRITES: tuple[tuple[str, str], ...] = (
+    ("კონსულტაციაზე ჩაგწერთ და მენეჯერი დეტალურად აგიხსნით პროცესს",
+     "კონსულტაციაზე ჩაგწერთ, სადაც დეტალებს მენეჯერი გაგაცნობთ"),
+    ("კონსულტაციაზე ჩაგწერთ და მენეჯერი დეტალურად აგიხსნით",
+     "კონსულტაციაზე ჩაგწერთ, სადაც დეტალებს მენეჯერი გაგაცნობთ"),
+    ("კონსულტაციაზე ჩაგწერთ და მენეჯერი დეტალებს აგიხსნით",
+     "კონსულტაციაზე ჩაგწერთ, სადაც დეტალებს მენეჯერი გაგაცნობთ"),
+    ("კონსულტაციაზეც ჩაგწერთ და დეტალებს მენეჯერი აგიხსნით",
+     "კონსულტაციაზე ჩაგწერთ, სადაც დეტალებს მენეჯერი გაგაცნობთ"),
+    ("კონსულტაციაზეც ჩაგწერთ და მენეჯერი დეტალებს აგიხსნით",
+     "კონსულტაციაზე ჩაგწერთ, სადაც დეტალებს მენეჯერი გაგაცნობთ"),
+    ("მენეჯერი დეტალურად აგიხსნით პროცესს", "დეტალებს მენეჯერი გაგაცნობთ"),
+    ("მენეჯერი დეტალურად აგიხსნით", "დეტალებს მენეჯერი გაგაცნობთ"),
+    ("დეტალებს მენეჯერი აგიხსნით", "დეტალებს მენეჯერი გაგაცნობთ"),
+    ("მენეჯერი დეტალებს აგიხსნით", "დეტალებს მენეჯერი გაგაცნობთ"),
+    ("დეტალურად აგიხსნით პროგრამას", "დეტალებს გაგაცნობთ"),
+    ("დეტალურად აგიხსნით", "დეტალებს გაგაცნობთ"),
+    ("დეტალებს აგიხსნით", "დეტალებს გაგაცნობთ"),
+    ("პროგრამას აგიხსნით", "პროგრამას გაგაცნობთ"),
+    ("აგიხსნით პროგრამას", "დეტალებს გაგაცნობთ"),
+    ("აგიხსნით", "გაგაცნობთ"),  # bare catch-all — MUST stay last
+)
+
+
+def _normalise_agixsnit_wording(text: str) -> str:
+    """Final client-wording guarantee: rewrite any „აგიხსნით" the engine/legacy
+    path may have produced into the approved „გაგაცნობთ" wording. No-op for the
+    deterministic blocks/defers (which never contain „აგიხსნით")."""
+    if not text or "აგიხსნით" not in text:
+        return text
+    for old, new in _AGIXSNIT_REWRITES:
+        text = text.replace(old, new)
+    return text
 
 
 def handle(conversation: Conversation, message: str) -> str:
     """Public entry — runs the core handler, then applies the deterministic
     client output polish (mid-conversation greeting-leak strip + one-❤️ emoji
-    policy). Both are deterministic and never LLM-driven."""
+    policy + „აგიხსნით"→„გაგაცნობთ" wording guarantee). All deterministic,
+    never LLM-driven."""
     result = _handle_core(conversation, message)
+    # Client follow-up hotfix (2026-06-30) — an unknown-detail defer must never
+    # carry a trailing child-age question or a consultation CTA / „აგიხსნით".
+    result = _strip_extras_after_unknown_fallback(result)
     result = _strip_midconvo_intro_leak(conversation, message, result)
     result = _apply_client_emoji_policy(conversation, message, result)
+    # Final wording guarantee (2026-07-01): never let „აგიხსნით" reach the client.
+    result = _normalise_agixsnit_wording(result)
     return result
 
 
@@ -312,6 +414,42 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     injection_response = _maybe_handle_offtopic_injection(conversation, message)
     if injection_response is not None:
         return injection_response
+
+    # Client follow-up hotfix (2026-06-30) — LIMITED multi-question FIRST: a
+    # message with TWO distinct camp parts (price + sports, safety +
+    # parent-contact, price + seats/stadium) answers BOTH. Runs before the
+    # single-topic operational / seats / repeat-price interceptors so
+    # „ფასი … და ადგილები" is not collapsed to just the seats defer. A
+    # single-topic message returns None (unchanged flow).
+    multi_response = _maybe_handle_multi_question(conversation, message)
+    if multi_response is not None:
+        return _sanitise_booking_confirmation(conversation, multi_response)
+
+    # Client follow-up hotfix (2026-06-29) — GLOBAL anti-invention defer FIRST.
+    # An unsupported OPERATIONAL detail question (seats / room count / towels /
+    # hotel / transport / day schedule / direct-call rules / organizer / generic)
+    # must NEVER show the camp intro or ask the child's age — not even on the
+    # first turn. It runs BEFORE the static welcome so a fresh
+    # „ოთახში რამდენი ბავშვი იქნება?" gets the honest manager defer, not the
+    # menu/age question. Returns None for everything else (unchanged behaviour).
+    early_operational_response = _maybe_handle_unknown_operational_early(
+        conversation, message,
+    )
+    if early_operational_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, early_operational_response,
+        )
+
+    # Client follow-up hotfix (2026-06-30) — political / party-identity bait →
+    # neutral redirect; an unclear Georgian phrase → polished clarification. Both
+    # run before the static welcome / engine so they preempt the funnel (no
+    # child-age question, no consultation offer).
+    political_response = _maybe_handle_political(conversation, message)
+    if political_response is not None:
+        return political_response
+    unclear_response = _maybe_handle_unclear_phrase(conversation, message)
+    if unclear_response is not None:
+        return unclear_response
 
     # Static welcome bypass.
     # On the bot's first reply at state=START, return the static
@@ -498,6 +636,19 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if decline_response is not None and not _reasoning_defers_decline(_reasoning):
             return _sanitise_booking_confirmation(conversation, decline_response)
 
+        # Client follow-up hotfix (2026-06-29) — thanks / farewell / soft-close.
+        # Runs AFTER the decline handler (which owns explicit declines like
+        # „მადლობა არ მინდა" → „გასაგებია …"). A PURE thanks / farewell /
+        # „მერე მოგწერთ" close must NOT continue the funnel: no child-age
+        # question (the live bug where „მადლობა" got „…რამდენი წლისაა?"
+        # appended), no phone request, no consultation offer. Deferred inside an
+        # active booking so a „კი, მადლობა" after a slot offer still books.
+        thanks_close_response = _maybe_handle_thanks_farewell(conversation, message)
+        if thanks_close_response is not None:
+            return _sanitise_booking_confirmation(
+                conversation, thanks_close_response,
+            )
+
         # BUG 2 (2026-06-11) — deterministic reschedule entry. A clear
         # reschedule request (no new datetime yet) on a lead with an
         # existing booking reuses the known PARENT state and asks only for
@@ -587,6 +738,17 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if intent_contact_response is not None:
             return _sanitise_booking_confirmation(
                 conversation, intent_contact_response,
+            )
+
+        # Client follow-up hotfix (2026-06-30) — EXACT-DETAIL split: a KNOWN
+        # general answer + an exact-unknown manager defer (food frequency / exact
+        # menu / staff count / peer presence / age-group count). Immediate repeat
+        # → defer only. Runs before repeat-price/camp-topic so the exact detail
+        # is never answered with only the general block.
+        exact_detail_response = _maybe_handle_exact_detail(conversation, message)
+        if exact_detail_response is not None:
+            return _sanitise_booking_confirmation(
+                conversation, exact_detail_response,
             )
 
         # Duplicate camp-price question (live bug 2026-06-27): the FIRST camp
@@ -719,9 +881,19 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             # reply didn't ask for it, append the age question. Runs after
             # the redundant-age stripper (they are mutually exclusive on
             # child_age state).
+            # Client follow-up hotfix (2026-06-29) — a SIMPLE price answer must
+            # not carry payment / installment / upfront terms (TBC / Bank of
+            # Georgia / განვადება / წინასწარ). Strip a leaked payment sentence;
+            # a payment question keeps the approved payment wording.
+            engine_response = _strip_payment_terms_from_simple_price(
+                message, engine_response,
+            )
             engine_response = _ensure_camp_age_question(
                 conversation, message, engine_response,
             )
+            # Client follow-up hotfix (2026-06-29) — never leave TWO child-age
+            # questions in one reply (keep the first, drop the rest).
+            engine_response = _dedupe_child_age_questions(engine_response)
             # P0 Live Demo UX — ISSUE 3/6: split a dense multi-point camp
             # price / price-objection answer into paragraphs (runs last so
             # the appended age question becomes its own paragraph too).
@@ -745,6 +917,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # guard (the engine path applies it at line ~528; this mirrors it so the
     # guard is common to BOTH return paths, planner ON or OFF).
     response = _strip_redundant_age_question_if_known(conversation, response)
+    response = _dedupe_child_age_questions(response)
     if _trace is not None:
         _trace.set(answered_by="legacy_state_machine", handler="_handle_impl")
     if _planner_plan is not None and _planner_authoritative():
@@ -1202,6 +1375,26 @@ def _strip_redundant_age_question_if_known(
 # based, never user-specific.
 _CAMP_AGE_QUESTION: str = "თქვენი შვილი რამდენი წლისაა?"
 
+# The exact approved ending of the unsupported-detail / organizer manager defer
+# (client fix). When a reply carries it, no camp age question is grafted on.
+_UNKNOWN_DETAIL_ENDING: str = "ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"
+
+# Extra child-age-question forms the shared AGE_QUESTION_RE misses —
+# „ასაკი რამდენია?" and „(როგორია) თქვენი შვილის ასაკი" (client-review): the
+# shared regex needs a word boundary after „რა"/specific verbs that these forms
+# defeat. Used by the duplicate-age dedup, the age-question append guard, AND the
+# final unknown-fallback guard so all these forms are recognised as age
+# questions. „შვილის ასაკ" is a child-age reference (the eligibility line uses
+# „<N> წლის ასაკი", never „შვილის ასაკი", so it is not caught here).
+_CHILD_AGE_Q_EXTRA_RE = re.compile(r"ასაკ\w*\s*რამდენ|შვილის\s*ასაკ")
+
+
+def _has_any_child_age_question(text: str) -> bool:
+    """True if the text contains a child-age question in ANY recognised form —
+    the shared AGE_QUESTION_RE forms OR the „ასაკი რამდენია?" form it misses."""
+    low = (text or "").lower()
+    return bool(contains_child_age_question(low) or _CHILD_AGE_Q_EXTRA_RE.search(low))
+
 # When the reply is a terminal handoff / adult redirect, do NOT append a
 # camp age question onto it.
 _CAMP_AGE_SKIP_MARKERS: tuple[str, ...] = (
@@ -1224,13 +1417,24 @@ def _ensure_camp_age_question(
     # Age already known → nothing to qualify.
     if _child_age_known(lead):
         return response
+    # Client follow-up hotfix (2026-06-29) — NEVER append the age question to a
+    # thanks / farewell / soft-close reply (the live bug: „მადლობა" →
+    # „…რამდენი წლისაა?"). The dedicated close handler owns those turns; this is
+    # a belt-and-braces guard for any close that still reaches the engine.
+    if _is_thanks_or_farewell_close(message):
+        return response
+    # Don't append the age question when the reply is itself the unsupported-
+    # detail / organizer manager defer („…მენეჯერი გაგაცნობთ : 558 67 47 33").
+    if _UNKNOWN_DETAIL_ENDING in response:
+        return response
     # Only in an explicit camp (PARENT) context — not adult events, not
     # an unclassified turn. conversation_service sets segment=PARENT
     # before routing here for camp traffic.
     if getattr(conversation, "segment", "") != "PARENT":
         return response
-    # Reply already asks for the age (any phrasing) → leave it.
-    if contains_child_age_question(response):
+    # Reply already asks for the age (any phrasing, incl. „ასაკი რამდენია?") →
+    # leave it (never append a second age question).
+    if _has_any_child_age_question(response):
         return response
     # Don't graft the question onto a terminal handoff / adult redirect.
     if any(marker in response for marker in _CAMP_AGE_SKIP_MARKERS):
@@ -1240,6 +1444,33 @@ def _ensure_camp_age_question(
         "[parent_flow] FIX2 appended camp age question (child_age unknown)",
     )
     return f"{response.rstrip()}{sep}{_CAMP_AGE_QUESTION}"
+
+
+def _dedupe_child_age_questions(response: str) -> str:
+    """Client follow-up hotfix (2026-06-29) — keep AT MOST ONE child-age question
+    in a reply. Live bug: an organization answer carried TWO („თქვენი შვილის
+    ასაკი რამდენია?" AND „თქვენი შვილი რამდენი წლისაა?"). Keeps the FIRST age
+    question and drops the rest. No-op unless 2+ are present (so normal single-
+    question replies keep their exact structure)."""
+    if not response:
+        return response
+    from app.reasoning.age_question import AGE_QUESTION_RE
+
+    parts = re.split(r"(?<=[.?!])\s+", response.strip())
+    age_idx = [
+        i for i, s in enumerate(parts)
+        if s.strip() and (
+            AGE_QUESTION_RE.search(s.lower()) or _CHILD_AGE_Q_EXTRA_RE.search(s.lower())
+        )
+    ]
+    if len(age_idx) < 2:
+        return response
+    drop = set(age_idx[1:])
+    kept = [s for i, s in enumerate(parts) if i not in drop and s.strip()]
+    logger.info(
+        "[parent_flow] deduped %d duplicate child-age questions", len(age_idx) - 1,
+    )
+    return " ".join(kept).strip()
 
 
 # P0 Live Demo UX — ISSUE 3 / 6 (2026-06-13): paragraph formatting for a
@@ -2503,6 +2734,74 @@ def _is_camp_price_intent(message: str) -> bool:
     return True
 
 
+# ── Simple price vs payment separation (client follow-up hotfix 2026-06-29) ──
+# A SIMPLE price question („ფასი?" / „რა ღირს?" / „ბანაკის ფასი რა არის?") must
+# answer ONLY: price + inclusions + consultation CTA. Payment / installment /
+# upfront details (TBC / Bank of Georgia / განვადება / წინასწარ / ხელშეკრულებ /
+# ჯავშნის საფასურ) belong to a PAYMENT question, never a simple price answer.
+# The system prompt already instructs this; this deterministic post-engine
+# sanitizer is the safety net that strips a leaked payment SENTENCE.
+# „ერთიანად" intentionally NOT a standalone marker — it is ambiguous („all at
+# once" in a payment question vs „in total" in a price question). A real payment
+# question always also carries „გადახდა"/etc., so it is still caught.
+_PAYMENT_QUESTION_MARKERS: tuple[str, ...] = (
+    "გადახდა", "გადავიხად", "გადაიხდ", "გადახდის პირობ", "შეძენა", "ვიყიდ",
+    "ყიდვ", "ჯავშანი როგორ", "ჯავშნის გაკეთ", "წინასწარ უნდა",
+)
+# „წინასწარ" (upfront) is included so a paraphrased upfront-payment leak into a
+# simple price answer is stripped even without the TBC/განვადება anchors.
+_SIMPLE_PRICE_STRIP_MARKERS: tuple[str, ...] = (
+    "tbc", "თი-ბი-სი", "საქართველოს ბანკ", "bank of georgia",
+    "განვადებ", "გადანაწილ", "ჯავშნის საფასურ", "ხელშეკრულებ", "წინასწარ",
+)
+
+
+def _is_payment_question(message: str) -> bool:
+    """True when the user asked about PAYMENT / purchase / booking-fee — those
+    keep the approved payment wording (not stripped). Also recognises the
+    „გადასახად(ი) როგორ ხდება?" phrasing (a price-marker word used with a
+    „how is it paid" cue)."""
+    low = (message or "").lower()
+    if any(m in low for m in _PAYMENT_QUESTION_MARKERS):
+        return True
+    # „გადასახად(ი)" is in the price markers, but „გადასახადი როგორ ხდება?" is a
+    # PAYMENT question — a fee word + a „how paid" cue.
+    if "გადასახად" in low and any(c in low for c in ("როგორ", "იხდი", "ვიხდი", "გადაიხდ")):
+        return True
+    return False
+
+
+def _strip_payment_terms_from_simple_price(message: str, response: str) -> str:
+    """For a SIMPLE camp-price answer, drop any sentence carrying payment /
+    installment / upfront terms so the reply stays price + inclusions + CTA.
+    No-op for a payment/purchase question (keeps the approved payment wording),
+    a non-price message, or a reply that is not actually a PRICE answer (does not
+    carry the camp price value — so a pure payment answer is never gutted). Only
+    returns a modified reply when a payment sentence was truly removed (so it
+    never collapses paragraph whitespace on a clean price answer)."""
+    if not response:
+        return response
+    if not _is_camp_price_intent(message) or _is_payment_question(message):
+        return response
+    # Only scrub a reply that IS a price answer (carries the price value); a pure
+    # payment answer (no price number) must never be gutted to just the CTA.
+    if _camp_price_value() not in response and "2150" not in response:
+        return response
+    parts = re.split(r"(?<=[.?!])\s+", response.strip())
+    kept = [
+        s for s in parts
+        if s.strip() and not any(m in s.lower() for m in _SIMPLE_PRICE_STRIP_MARKERS)
+    ]
+    # Nothing removed → return the ORIGINAL verbatim (preserve paragraph breaks).
+    if len(kept) == len([s for s in parts if s.strip()]):
+        return response
+    out = " ".join(kept).strip()
+    if not out:
+        return response
+    logger.info("[parent_flow] stripped payment terms from simple price answer")
+    return out
+
+
 def _camp_price_value() -> str:
     """Canonical camp price (admin_config / camp_2026), never hard-coded."""
     try:
@@ -2547,6 +2846,10 @@ def _maybe_handle_repeat_camp_price(
     (new questions / payment-method / dates / SS + adult price)."""
     if not _is_camp_price_intent(message):
         return None
+    # A payment/purchase question phrased with a price marker („გადასახადი როგორ
+    # ხდება?") must get the payment wording from the engine, not the price repeat.
+    if _is_payment_question(message):
+        return None
     if _camp_price_question_count(conversation) < 2:
         return None
     logger.info(
@@ -2574,6 +2877,230 @@ def _maybe_handle_repeat_camp_price(
 # aware and defers (None) inside a consultation booking unless the message is an
 # explicit NEW camp-topic question (a daypart/contact reply has no topic trigger
 # and is consumed by the earlier booking handlers, so it never reaches here).
+
+
+# ── Client follow-up hotfix (2026-06-30) — exact-detail / multi-question /
+#    political / clarification / final-response guards ─────────────────────────
+_CONSULT_CTA_MARKERS: tuple[str, ...] = (
+    "კონსულტაციაზე ჩაგწერთ", "აგიხსნით", "დაგაკავშირებთ მენეჯერთან",
+    "კონსულტაცია ჩავნიშნოთ", "კონსულტაციაზე ჩავწერ",
+)
+
+
+def _camp_price_block() -> str:
+    """The approved simple-price block (price + inclusions), for multi-question
+    answers. No payment terms, no CTA (the multi-question renderer keeps it
+    concise)."""
+    return (
+        f"ბანაკის ღირებულებაა {_camp_price_value()} ლარი. "
+        "ღირებულებაში შედის ტრანსპორტი, განთავსება, კვება და სრული პროგრამა."
+    )
+
+
+def _split_question_clauses(message: str) -> list[str]:
+    """Split a message into question clauses on „?" and the „ და " conjunction."""
+    parts = re.split(r"[?？]+|\s+და\s+", message or "")
+    return [p.strip() for p in parts if p and p.strip()]
+
+
+def _answer_camp_part(conversation: Conversation, clause: str) -> str | None:
+    """Deterministic answer for ONE camp clause (price / exact-detail /
+    operational / known topic), or None. Used only by the multi-question
+    combiner — never invents."""
+    from app.reasoning import camp_topic_facts as _ctf
+
+    if not clause or not clause.strip():
+        return None
+    if _is_camp_price_intent(clause) and not _is_payment_question(clause):
+        return _camp_price_block()
+    try:
+        ed = _ctf.resolve_exact_detail(clause)
+        if ed is not None:
+            general, fallback = ed
+            return f"{general}\n\n{fallback}" if general else fallback
+        op = _ctf.resolve_operational(clause)
+        if op:
+            return op
+        ca = _ctf.resolve_camp_answer(clause)
+        if ca:
+            # For multi-question conciseness, use the FIRST approved paragraph of
+            # a topic block (operational defers are single-paragraph already).
+            return ca.split("\n\n", 1)[0].strip()
+    except Exception:  # pragma: no cover — defensive
+        return None
+    return None
+
+
+def _maybe_handle_multi_question(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """LIMITED parent-flow multi-question fix (client 2026-06-30): when a message
+    carries TWO distinct answerable camp parts (e.g. price + sports, safety +
+    parent-contact, price + seats/stadium), answer BOTH (up to 2 blocks) instead
+    of dropping one. Returns None for a single-topic message (dedup by answer
+    prefix so „კვება + მენიუ" — both food — is left to the exact-detail handler).
+    NOT the full adult/camp mixed-intent task."""
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    clauses = _split_question_clauses(message)
+    if len(clauses) < 2:
+        return None
+    answers: list[str] = []
+    prefixes: list[str] = []
+    for c in clauses:
+        ans = _answer_camp_part(conversation, c)
+        if not ans:
+            continue
+        pfx = ans.strip()[:40]
+        if any(pfx[:22] in p or p[:22] in pfx for p in prefixes):
+            continue  # same topic already answered (e.g. food twice)
+        prefixes.append(pfx)
+        answers.append(ans.strip())
+        if len(answers) >= 2:
+            break
+    if len(answers) >= 2:
+        logger.info(
+            "[parent_flow] multi-question answered %d parts (sender=%s)",
+            len(answers), conversation.sender_id,
+        )
+        return "\n\n".join(answers)
+    return None
+
+
+def _recent_assistant_texts(conversation: Conversation, n: int = 6) -> str:
+    hist = getattr(conversation, "history", []) or []
+    return " ".join(
+        str(t.get("content") or "") for t in hist[-n:]
+        if isinstance(t, dict) and t.get("role") == "assistant"
+    )
+
+
+def _exact_detail_already_general(
+    conversation: Conversation, general: str, fallback: str,
+) -> bool:
+    """True when the general block (or the same defer) was already shown recently
+    — so an immediate repeat of the exact-detail question gets the defer only."""
+    if not general:
+        return False
+    recent = _recent_assistant_texts(conversation)
+    if not recent:
+        return False
+    gen_sig = general.strip()[:30]
+    return (fallback[:30] in recent) or (bool(gen_sig) and gen_sig in recent)
+
+
+def _maybe_handle_exact_detail(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """KNOWN general answer + exact-unknown defer (client 2026-06-30). Food
+    frequency / exact menu / staff count / peer presence / age-group count.
+    First time → general + defer; immediate repeat → defer only. Returns None for
+    a non-exact-detail message. ADULT segment is skipped."""
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    try:
+        from app.reasoning import camp_topic_facts as _ctf
+        res = _ctf.resolve_exact_detail(message)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("[parent_flow] exact-detail failed (%s)", exc)
+        return None
+    if res is None:
+        return None
+    general, fallback = res
+    if general and _exact_detail_already_general(conversation, general, fallback):
+        logger.info("[parent_flow] repeat exact-detail → defer only (sender=%s)",
+                    conversation.sender_id)
+        return fallback
+    return f"{general}\n\n{fallback}" if general else fallback
+
+
+def _maybe_handle_political(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Deterministic neutral redirect for a political / party-identity bait —
+    no political claim, no defensiveness, no child-age question, no CTA. Uses
+    „დაგეხმარებით" (never „მსურს დაგეხმაროთ")."""
+    try:
+        from app.reasoning import camp_topic_facts as _ctf
+        reply = _ctf.political_reply(message)
+    except Exception:  # pragma: no cover — defensive
+        return None
+    if reply:
+        logger.info("[parent_flow] political bait → neutral redirect (sender=%s)",
+                    conversation.sender_id)
+    return reply
+
+
+def _maybe_handle_unclear_phrase(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Polished clarification for a recognised unclear Georgian phrase
+    („ხელა ბავშ"). No camp funnel, no child-age question."""
+    try:
+        from app.reasoning import camp_topic_facts as _ctf
+        return _ctf.unclear_phrase_reply(message)
+    except Exception:  # pragma: no cover — defensive
+        return None
+
+
+def _strip_extras_after_unknown_fallback(response: str) -> str:
+    """Final-response guard (client 2026-06-30): a reply carrying the unknown-
+    detail manager defer („ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33") must
+    NOT also carry a child-age question or a consultation CTA / „აგიხსნით". Strips
+    those sentences only when present (paragraph structure is otherwise
+    preserved). The defer sentence itself is always kept."""
+    if not response or _UNKNOWN_DETAIL_ENDING not in response:
+        return response
+    has_extra = (
+        _has_any_child_age_question(response)
+        or any(m in response for m in _CONSULT_CTA_MARKERS)
+    )
+    if not has_extra:
+        return response
+    parts = re.split(r"(?<=[.?!])\s+", response.strip())
+    kept = [
+        s for s in parts
+        if s.strip()
+        and not _has_any_child_age_question(s)
+        and not any(m in s for m in _CONSULT_CTA_MARKERS)
+    ]
+    out = " ".join(kept).strip()
+    if out and out != response.strip():
+        logger.info("[parent_flow] stripped age-question/CTA after unknown fallback")
+    return out or response
+
+
+def _maybe_handle_unknown_operational_early(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Client follow-up hotfix (2026-06-29) — GLOBAL anti-invention defer that
+    runs BEFORE the static welcome / camp intro / age question / discovery.
+
+    A first-turn (or any-turn) question about an UNSUPPORTED operational detail
+    — remaining seats, room count/distribution (typo-tolerant), towels, hotel
+    guests, transport departure, exact day schedule, direct-call rules,
+    organizer/founder, or a generic un-normalizable detail — must NOT show the
+    camp intro or ask the child's age. It gets the honest topic-specific manager
+    defer immediately. Returns None for everything else (greetings, discovery,
+    known camp topics, canonical price/dates/registration/SS/adult flows), so
+    normal first-turn behaviour is unchanged for those. ADULT segment is skipped
+    (adult flow owns its turns). Fail-closed: any error → None (normal flow)."""
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    try:
+        from app.reasoning import camp_topic_facts as _ctf
+
+        answer = _ctf.resolve_operational(message)
+    except Exception as exc:  # pragma: no cover — defensive, never break a reply
+        logger.warning("[parent_flow] early operational defer failed (%s)", exc)
+        return None
+    if not answer:
+        return None
+    logger.info(
+        "[parent_flow] unsupported operational detail → manager defer "
+        "(pre-welcome, sender=%s)", conversation.sender_id,
+    )
+    return answer
 
 
 def _maybe_handle_camp_topic_facts(
@@ -5136,6 +5663,82 @@ _DECLINE_OVERRIDE_INTEREST: tuple[str, ...] = (
     "ძვირ",                        # ძვირია / ძვირი — price objection
     "მიჭირს",                      # გადახდა მიჭირს — price objection
 )
+
+
+# ── Thanks / farewell / soft-close (client follow-up hotfix 2026-06-29) ──────
+# A pure thanks / farewell / „I'll write later" close must warm-close WITHOUT
+# continuing the camp funnel. The decline handler owns explicit declines; this
+# owns the NON-decline closes that would otherwise reach the engine and get an
+# appended child-age question / consultation offer (the live bug).
+# „ხვალამდე" removed (client-review): „ხვალამდე უნდა გადავიხადო" is a payment
+# question, not a farewell. „კარგად" stays (a bare acknowledgement close).
+_FAREWELL_CLOSE_MARKERS: tuple[str, ...] = (
+    "ნახვამდის", "მშვიდობით", "კარგად",
+)
+_SOFT_CLOSE_MARKERS: tuple[str, ...] = (
+    "მერე მოგწერთ", "მოგწერთ მერე", "მოგვიანებით მოგწერთ", "მერე დაგიკავშირდები",
+)
+# Action / affirmation tokens that mean the user wants to PROCEED (book / enrol /
+# get the number / know more), NOT close — so a thanks tacked onto an action
+# („კი, მადლობა" after a slot offer, „მადლობა, ჩამწერეთ") is NEVER a pure close.
+_CLOSE_PROCEED_TOKENS: tuple[str, ...] = (
+    "კი", "დიახ", "ok", "ოკ", "yes", "მინდა", "ჩამწერ", "ჩაწერ", "ჩამრიცხ",
+    "ჩანიშ", "დაჯავშ", "დამირეკ", "დარეკ", "ნომერ", "კონსულტაც", "გადავიხად",
+    "გადაიხდ", "ვიხდი", "რეგისტ", "ჩავეწერ", "ჩავწერ",
+)
+_THANKS_CLOSE_REPLY: str = "მადლობა თქვენ. თუ კიდევ დაგჭირდებათ ინფორმაცია, მომწერეთ."
+_FAREWELL_CLOSE_REPLY: str = "გასაგებია. თუ კიდევ დაგჭირდებათ ინფორმაცია, მომწერეთ."
+
+
+def _is_thanks_or_farewell_close(message: str) -> bool:
+    """True for a pure thanks / farewell / soft-close (no real question, no
+    proceed/action intent). Client-review hardening: a thanks/farewell that
+    co-occurs with an affirmation or an action verb („კი, მადლობა", „მადლობა,
+    ჩამწერეთ", „ხვალამდე უნდა გადავიხადო") is NOT a close — it must reach the
+    booking / contact / engine path. Length cap ≤6 so a slightly longer pure
+    thank-you („დიდი მადლობა ინფორმაციისთვის, კარგები ხართ") still closes."""
+    raw = message or ""
+    if "?" in raw:
+        return False
+    t = raw.lower().strip().strip(".,!?…")
+    if not t:
+        return False
+    has_thanks = any(tok in t for tok in _USER_THANKS_TOKENS)
+    has_farewell = any(w in t for w in _FAREWELL_CLOSE_MARKERS)
+    has_soft = any(w in t for w in _SOFT_CLOSE_MARKERS)
+    if not (has_thanks or has_farewell or has_soft):
+        return False
+    # A proceed / action / affirmation token → the user wants to continue, not
+    # close. Affirmations are matched as WHOLE tokens (so „კი" never fires inside
+    # „კიდევ"); action stems are distinctive enough for a substring match.
+    tokens = [tok.strip(".,!?…-") for tok in t.split()]
+    _AFFIRM = ("კი", "დიახ", "ok", "ოკ", "yes")
+    if any(a in tokens for a in _AFFIRM):
+        return False
+    if any(p in t for p in _CLOSE_PROCEED_TOKENS if p not in _AFFIRM):
+        return False
+    return len(t.split()) <= 6
+
+
+def _maybe_handle_thanks_farewell(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Deterministic warm close for a pure thanks / farewell / soft-close — never
+    continues the funnel (no age question, no phone ask, no consultation offer).
+    Returns None inside an active booking (a „კი, მადლობა" after a slot offer is
+    a confirmation, not a close) and for ADULT segment / real questions."""
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    if getattr(conversation, "pending_booking", None) is not None:
+        return None
+    if not _is_thanks_or_farewell_close(message):
+        return None
+    logger.info(
+        "[parent_flow] thanks/farewell close — no funnel continuation (sender=%s)",
+        conversation.sender_id,
+    )
+    has_thanks = any(tok in (message or "").lower() for tok in _USER_THANKS_TOKENS)
+    return _THANKS_CLOSE_REPLY if has_thanks else _FAREWELL_CLOSE_REPLY
 
 
 def _maybe_handle_decline_engine(

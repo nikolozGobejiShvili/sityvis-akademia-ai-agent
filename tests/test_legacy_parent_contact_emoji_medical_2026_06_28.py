@@ -27,7 +27,7 @@ from app.reasoning import camp_topic_facts as ctf
 from app.services import admin_config_service, conversation_service, messenger_service
 
 _MANAGER_NUMBER = "558 67 47 33"
-_HEART = "❤️"
+_HEART = "💙"  # Client wording fix (2026-06-29): blue heart, never red ❤️.
 _LEAK = "მადლობა, რომ დაგვიკავშირდით. "          # simulated mid-convo intro leak
 _PRICE = "ბანაკის ღირებულებაა 2150₾. შედის ტრანსპორტი."
 _DATES = "ბანაკი ტარდება 23–29 ივნისი, 5–11 ივლისი."
@@ -115,7 +115,10 @@ def test_1_how_do_i_contact_my_child(engine_on):
     out = parent_flow.handle(_conv("p1"), "მე როგორ დავუკავშირდები ბავშვს?")
     assert out == _PC
     assert "დღის პროგრამა" in out and "ფოტო-ვიდეო მასალა" in out
-    assert "კონტაქტის წესები" in out and "მენეჯერი" in out
+    # Client wording fix (2026-07-01): direct-contact caveat uses the approved
+    # manager defer (no „აგიხსნით").
+    assert "პირდაპირი კონტაქტის წესებს" in out and "მენეჯერი" in out
+    assert "აგიხსნით" not in out
     assert _CONSULT_PHRASE not in out
 
 

@@ -205,13 +205,20 @@ def test_mid_sentence_greeting_not_stripped():
 
 def test_engine_strips_mid_conversation_greeting(engine_on, monkeypatch):
     """If the (mocked) model opens a LATER-turn reply with „გამარჯობა", the
-    final outgoing text must not start with it."""
+    final outgoing text must not start with it.
+
+    NB (Client follow-up hotfix 2026-06-29): the trigger message is a substantive
+    continuation („ბანაკზე მეტი მინდა ვიცოდე"), NOT a thanks/close — a pure
+    thanks/close („კარგი, გასაგებია მადლობა") now warm-closes deterministically
+    and never reaches the engine (client requirement: closes must not continue
+    the funnel). This test targets the greeting-strip, so a continuation message
+    exercises exactly that path."""
     monkeypatch.setattr(
         openai_service, "chat_with_tools",
         lambda **kw: _mk_response("გამარჯობა, ბანაკი მართლაც მშვენიერი გამოცდილებაა."),
     )
     conv = _parent_conv(child_age="14", phone="595999733")
-    out = parent_flow.handle(conv, "კარგი, გასაგებია მადლობა")
+    out = parent_flow.handle(conv, "ბანაკზე მეტი მინდა ვიცოდე")
     assert not out.strip().startswith("გამარჯობა")
     assert "ბანაკი" in out  # the substantive reply survived
 

@@ -183,7 +183,10 @@ def test_4_parent_communication(engine_on):
 def test_5_direct_child_contact(engine_on):
     out = parent_flow.handle(_conv("p5"), "ბავშვთან კონტაქტი მექნება?")
     assert "დღის პროგრამა" in out
-    assert "მენეჯერი" in out and "კონტაქტის წესები" in out   # manager clarifies
+    # Client wording fix (2026-07-01): the direct-contact caveat now uses the
+    # approved manager defer (no „აგიხსნით").
+    assert "მენეჯერი" in out and "პირდაპირი კონტაქტის წესებს" in out
+    assert "აგიხსნით" not in out
     # never invents unlimited calls
     assert "ნებისმიერ დროს" not in out and "ნებისმიერ მომენტ" not in out
 
@@ -446,27 +449,33 @@ def test_detect_is_self_contained_unit():
 # Follow-up (2026-06-28): unknown-detail honest defer + paragraphing +
 # camp-context activities.
 # =====================================================================
-_UNKNOWN_DEFER = "ამ საკითხზე ზუსტი ინფორმაცია არ მაქვს"
+# Client wording fix (2026-06-29): the unknown-detail fallback is now
+# TOPIC-SPECIFIC — „რაც შეეხება <topic>, ამ დეტალებს მენეჯერი გაგაცნობთ : 558
+# 67 47 33" — replacing the old generic „ამ საკითხზე ზუსტი ინფორმაცია არ მაქვს"
+# defer. The old `_UNKNOWN_DEFER` string no longer appears anywhere.
+_UNKNOWN_DEFER = "ამ საკითხზე ზუსტი ინფორმაცია არ მაქვს"   # legacy phrase (must be GONE)
+_ROOM_FALLBACK = "რაც შეეხება ოთახებში ბავშვების განაწილებას, ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"
+_MENU_FALLBACK = "რაც შეეხება ზუსტ მენიუს, ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"
 _BAD_ROOM_CLAIMS = ("რამდენიმე ბავშვი", "2–3 ბავშვი", "2-3 ბავშვი", "კომფორტული განაწილება")
 _DISCOVERY_Q = "რა არის მთავარი, რის მიღებაც გსურთ"
 
 
 def test_f1_unknown_room_occupancy_defers(engine_on):
     out = parent_flow.handle(_conv("u1"), "ოთახში რამდენი ბავშვი იქნება?")
-    assert _UNKNOWN_DEFER in out
-    assert "მენეჯერი დაგიზუსტებთ დეტალებს" in out
-    assert "მენეჯერთან დაგაკავშირებთ" in out
+    assert _ROOM_FALLBACK in out                             # topic-specific defer
+    assert _UNKNOWN_DEFER not in out                         # old generic phrase gone
+    assert "დაგიზუსტებთ" not in out                          # „გაგაცნობთ", never „დაგიზუსტებთ"
     for bad in _BAD_ROOM_CLAIMS:
         assert bad not in out                                # never invented
     assert _DISCOVERY_Q not in out                           # no discovery question
-    assert not re.search(r"\d", out)                         # no invented 2/3/4
+    assert "💙" not in out and "❤️" not in out               # no emoji in the fallback
     assert _no_engine(out)
 
 
 def test_f2_unknown_room_distribution_defers(engine_on):
     out = parent_flow.handle(_conv("u2"), "ოთახებში როგორ ანაწილებთ ბავშვებს?")
-    assert _UNKNOWN_DEFER in out
-    assert "მენეჯერი" in out
+    assert _ROOM_FALLBACK in out
+    assert "558 67 47 33" in out                             # manager phone included
     for bad in _BAD_ROOM_CLAIMS:
         assert bad not in out
 
@@ -474,8 +483,9 @@ def test_f2_unknown_room_distribution_defers(engine_on):
 def test_f3_exact_menu_food_plus_manager_clarification(engine_on):
     out = parent_flow.handle(_conv("u3"), "ზუსტად რა მენიუ ექნებათ?")
     assert "კვება შედის ბანაკის ღირებულებაში" in out         # food included
-    assert "ზუსტი მენიუ მენეჯერთან დაზუსტდება" in out        # exact menu deferred
-    assert _UNKNOWN_DEFER not in out                         # not the generic fallback
+    assert _MENU_FALLBACK in out                             # exact menu deferred (new ending)
+    assert "ზუსტი მენიუ მენეჯერთან დაზუსტდება" not in out    # old wording gone
+    assert _UNKNOWN_DEFER not in out
 
 
 def test_f3b_general_menu_question_no_exact_clarification(engine_on):

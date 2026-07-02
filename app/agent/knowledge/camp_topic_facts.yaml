@@ -74,7 +74,7 @@ camp_topic_facts:
 
       მშობლებს ყოველდღიურად გაეგზავნებათ დღის პროგრამა და ფოტო-ვიდეო მასალა ბანაკიდან, რომ იცოდნენ, როგორ გადის ბავშვის დღე და რა აქტივობებში მონაწილეობს.
 
-      თუ ბავშვის პირდაპირი კონტაქტის წესები გაინტერესებთ, ამ დეტალს მენეჯერი ზუსტად აგიხსნით.
+      რაც შეეხება ბავშვთან პირდაპირი კონტაქტის წესებს, ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33
 
   # 3. Food / menu
   food:
@@ -87,7 +87,7 @@ camp_topic_facts:
       - ალერგი
       - დიეტ
     answer: |-
-      კვება შედის ბანაკის ღირებულებაში და ბავშვებისთვის ორგანიზებულად არის გათვალისწინებული.
+      ბანაკში კვება ორგანიზებულია ჯანსაღი და დაბალანსებული მენიუს მიხედვით, რაც ხელს უწყობს ბავშვების ფიზიკურ და ემოციურ კეთილდღეობას. კვება შედის ბანაკის ღირებულებაში.
 
       თუ ბავშვს აქვს ალერგია, კვებითი შეზღუდვა ან განსაკუთრებული საჭიროება, ამ დეტალს მენეჯერი ინდივიდუალურად დაგიზუსტებთ, რომ წინასწარ სწორად გადაეცეს გუნდს.
 
@@ -269,6 +269,21 @@ camp_topic_facts:
 
       პროგრამა ისეა დაგეგმილი, რომ ბავშვმა მიიღოს ახალი გამოცდილება, ჩაერთოს საინტერესო აქტივობებში და ამავე დროს დაისვენოს საუკეთესო გარემოში.
 
+  # 15b. Accommodation — GENERAL, approved answer ONLY (client fix 2026-06-29).
+  # „განთავსება როგორია?" / „სად იქნებიან ბავშვები განთავსებული?" → the general
+  # sentence below. The EXACT room count / distribution („ოთახში რამდენი ბავშვი?")
+  # is NOT known → it defers via the `room` unknown category (operational, runs
+  # BEFORE topic scoring), never with this general sentence. Triggers are the
+  # accommodation nouns only (NO „ოთახ" — that belongs to the room defer).
+  accommodation:
+    triggers:
+      - განთავს
+      - დაბინავებ
+      - სად იქნებიან ბავშ
+      - სად ცხოვრობენ ბავშ
+    answer: |-
+      ბანაკში ბავშვები ნაწილდებიან კომფორტულ ოთახებში.
+
   # 16. General camp overview (LOWEST priority — only for explicit „describe the
   # camp / general info" requests; specific topics always win). Facts templated
   # from canonical get_camp_facts() at render time.
@@ -293,37 +308,175 @@ camp_topic_facts:
 
       თუ გსურთ, შემიძლია გითხრათ თარიღები, პირობები ან კონსულტაციაზე ჩაგწეროთ.
 
-# ── Unknown operational detail → honest defer (NEVER invent) ──────────────────
-# Fires ONLY when (a) the message is NOT a canonical flow (price/dates/link/SS/
-# adult) AND (b) it does NOT match any known topic block above AND (c) it asks
-# about a specific operational detail we do not have approved facts for — an
-# operational NOUN (room occupancy / bed distribution / leader ratio) PLUS an
-# interrogative/arrangement CUE. The noun+cue pairing is deliberate so a parent
-# DESCRIBING the child („ერთ ოთახში გამოიკეტება") is never mistaken for a
-# question about the camp's rooms. NEVER invents „რამდენიმე ბავშვი" / „2–3
-# ბავშვი" / „კომფორტული განაწილება" and never adds a discovery question.
-camp_unknown_detail:
-  noun_markers:
-    - ოთახ
-    - საწოლ
-    - თანაფარდობ
-  cue_markers:
-    - რამდენი
-    - რამდენ
-    - ანაწილებ
-    - განაწილებ
-    - როგორ
-    - ვინ
-    - რა პრინციპ
-    - რა წესით
-  answer: |-
-    ამ საკითხზე ზუსტი ინფორმაცია არ მაქვს. მენეჯერი დაგიზუსტებთ დეტალებს.
+# ── Unknown operational detail → TOPIC-SPECIFIC honest defer (client fix
+#    2026-06-29) ────────────────────────────────────────────────────────────
+# We have NO approved source for these operational details, so the agent must
+# NEVER invent an answer. Instead it names the exact topic the parent asked
+# about and defers to the manager, using the EXACT approved ending.
+#
+# Rendered shape:  „რაც შეეხება <topic>, <camp_unknown_ending>"
+# The ending is used VERBATIM — „გაგაცნობთ" (NEVER „დაგიზუსტებთ"), the space
+# before the colon is intentional, and the manager phone is always included.
+# NO emoji is ever added to these fallbacks.
+camp_manager_phone: "558 67 47 33"
+camp_unknown_ending: "ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"
 
-    თუ გსურთ, მენეჯერთან დაგაკავშირებთ.
+# Remaining-seats / stream-availability topic phrase (used with or without a
+# known prefix — see the known+unknown split in camp_topic_facts.py).
+camp_seats_topic: "კონკრეტულ ნაკადზე დარჩენილ ადგილებს"
+
+# Known lines used as the FIRST paragraph of a known+unknown split before the
+# seats fallback. {age}/{age_min}/{age_max} are filled at render time.
+camp_age_eligible_line: "{age} წლის ასაკი ბანაკისთვის შესაბამისია, რადგან პროგრამა {age_min}–{age_max} წლის ბავშვებისთვისაა."
+camp_sibling_discount_line: "დედმამიშვილებისთვის მოქმედებს 10%-იანი ფასდაკლება."
+
+# Ordered topic-specific unknown categories (first match wins). Each: the exact
+# `topic` phrase, the operational `noun_markers`, and optional `cue_markers`
+# (omit / null → the noun alone is enough). The noun+cue pairing keeps a parent
+# DESCRIBING the child („ერთ ოთახში გამოიკეტება") from being read as a rooms
+# question.
+camp_unknown_categories:
+  - key: room
+    # EXACT room count / distribution. Typo-tolerant nouns (ოთახ / ოთხაშ / ოთაშ)
+    # so „ოთხაში რამდენი ბავაში იქნება?" still defers. The cue set includes the
+    # „how many will there be" forms. General accommodation („განთავსება როგორია?")
+    # has no room noun → it is answered by the `accommodation` topic instead.
+    topic: "ოთახებში ბავშვების განაწილებას"
+    noun_markers: [ოთახ, ოთხაშ, ოთაშ, საწოლ, თანაფარდობ]
+    cue_markers: [რამდენი, რამდენ, რამდენნი, ანაწილებ, განაწილებ, როგორ, ვინ, რა პრინციპ, რა წესით, იქნებ, იქნებიან]
+  - key: towels
+    topic: "პირსახოცებს"
+    noun_markers: [პირსახოც, ხელსახოც]
+  - key: hotel
+    # „სასტუმრო" OR „სტუმრ" (guest) — so „სხვა სტუმრები იქნებიან ბანაკში?" defers
+    # even when the word „სასტუმრო" itself is absent (client-review 2026-06-30).
+    # The cue REQUIRES an „other / only / who" marker so „მოწვეული სტუმრები
+    # არიან?" (invited guests — an event question) is NOT swallowed as a hotel
+    # accommodation question and reaches the engine (regression fix 2026-07-02).
+    topic: "სასტუმროში სხვა სტუმრების ყოფნას"
+    noun_markers: [სასტუმრო, სტუმრ]
+    cue_markers: [სხვა, მარტო, მხოლოდ, ვინ]
+  - key: stadium
+    topic: "სტადიონს"
+    noun_markers: [სტადიონ, სპორტული მოედან]
+  - key: pool
+    topic: "საცურაო აუზს"
+    noun_markers: [საცურაო აუზ, საბანაო აუზ, აუზ]
+  - key: transport
+    topic: "ტრანსპორტის გასვლის ზუსტ ადგილს"
+    noun_markers: [ტრანსპორტ, ავტობუს, მიკროავტობუს, წამოსვლ]
+    cue_markers: [საიდან, სად, გავა, გადის, ავდივ, შეხვედრ, ადგილ, წამო]
+  - key: schedule
+    # Day-schedule ONLY — deliberately NOT bare „გრაფიკ" (that also matches
+    # „წამლის გრაფიკი" = medical, and „გადახდის გრაფიკი" = payment).
+    topic: "დღის ზუსტ განრიგს"
+    noun_markers: [დღის განრიგ, საათობრივ, დღის რეჟიმ, დღის გეგმ, დღის რუტინ, დღის განაწეს]
+  - key: direct_call
+    # Call / phone-contact rules. Typo-tolerant + verbal-noun coverage: the
+    # verbal noun „დარეკვა/დარეკვას/დარეკვის" („to call") is added so
+    # „დღეში რამდენჯერ შევძლებ დარეკვას?" defers deterministically (client QA
+    # 2026-07-01), alongside the finite forms „დავურეკ/დაურეკ/ვურეკ" and the
+    # bell/ring noun „ზარ". Cues add „შეეძლ" (can) + „დრო" (time) so
+    # „ბავშვს დარეკვა შეეძლება?" / „ზარის დრო როგორ იქნება?" match too.
+    topic: "ბავშვთან პირდაპირი კონტაქტის წესებს"
+    noun_markers: [დავურეკ, დაურეკ, ვურეკ, დარეკვ, რეკვ, ზარ]
+    cue_markers: [რამდენჯერ, დღეში, ხშირად, როდის, შემიძლი, შეეძლ, წეს, დრო]
 
 # Appended (as a new paragraph) to the food block for an EXACT-menu question
 # („ზუსტად რა მენიუ ექნებათ?") — food inclusion is known, the exact menu is not.
-camp_menu_clarification: "ზუსტი მენიუ მენეჯერთან დაზუსტდება."
+camp_menu_clarification: "რაც შეეხება ზუსტ მენიუს, ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"
+
+# ── EXACT-DETAIL split: KNOWN general answer + exact-unknown defer ───────────
+# (client follow-up 2026-06-30). When the parent asks an EXACT detail we do NOT
+# know but a GENERAL approved answer exists, give the general answer (first
+# approved paragraph / line only — never invent the exact detail) THEN the
+# topic-specific manager defer. On an immediate repeat, parent_flow drops the
+# general part and returns the defer only.
+
+# Food FREQUENCY („დღეში რამდენჯერ?") — general food + this defer.
+camp_food_frequency_topic: "დღეში კვების რაოდენობას"
+camp_food_frequency_markers: [რამდენჯერ, რადმენჯერ, რამდენ ჯერ, რამდენჯერაა, რამდენჯერ ჭამ, რამდენჯერ ექნებ]
+camp_food_context_markers: [კვება, კვებ, ჭამ, საჭმ, მენიუ]
+
+# Exact / detailed MENU question (broadened beyond ზუსტ/კონკრეტ) → food + „ზუსტ მენიუს".
+camp_menu_detail_markers:
+  - "ზუსტ მენიუ"
+  - "კონკრეტ მენიუ"
+  - "მენიუ როგორ"
+  - "მენიუ როგორი"
+  - "მენიუში რა"
+  - "რა მენიუ"
+  - "რა საჭმელ"
+  - "მენიუ გამოგვიგზავ"
+  - "მენიუ გამომიგზავ"
+  - "დღის მენიუ"
+camp_menu_topic: "ზუსტ მენიუს"
+
+# Staff COUNT — general staff line + this defer (NEVER invents a number).
+camp_staff_line: "ადგილზე ბავშვებთან მუშაობს მაღალკვალიფიციური, პასუხისმგებლიანი და საბანაკე გამოცდილების მქონე სტაფი."
+camp_staff_count_topic: "სტაფის წევრების რაოდენობას"
+camp_staff_count_nouns: [სტაფ, ლიდერ, მასწავლ, აღმზრდ]
+camp_staff_count_cues: [რამდენი, რაოდენობ, რამდენ, ჩამონათვ, შედგებ, ადამიან]
+
+# Peer / same-age presence — eligibility line (if age given) + this defer.
+# NEVER guarantees „თანატოლები იქნებიან".
+camp_peer_topic: "მისი ტოლი ბავშვების ყოფნას კონკრეტულ ნაკადში"
+camp_peer_markers: [მისი ტოლ, ტოლი ბავშ, თანატოლ, მისი ასაკის ბავშ, ამ ასაკის ბავშ]
+
+# Age-group COUNT („რამდენი ბავშვი იქნება 14 წლის?") → „{age} წლის ბავშვების
+# რაოდენობას" defer ONLY (no general line, no CTA).
+camp_age_group_count_topic_template: "{age} წლის ბავშვების რაოდენობას"
+
+# ── Political / party-identity bait → neutral redirect (client 2026-06-30) ────
+# Never claim a political identity, never get defensive, no child-age question,
+# no consultation offer. Uses „დაგეხმარებით" (NOT „მსურს დაგეხმაროთ").
+camp_political_reply: "პოლიტიკურ თემებზე პასუხს არ ვცემ. ბანაკთან დაკავშირებულ კითხვებზე დაგეხმარებით."
+camp_political_markers: [ქოცი, ქოცებ, ნაცი, ნაცებ, ნაცნ ხარ, პარტიას უჭერ, რომელ პარტია, პოლიტიკ, ოპოზიცი, ხელისუფლებას უჭერ]
+
+# ── Unclear-phrase clarification wording (client 2026-06-30) ─────────────────
+# Polished Georgian for an unclear phrase — asks the parent to explain, no
+# „ასე უკეთ გაგვეცნობა თქვენი სურვილები" filler.
+camp_unclear_reply_template: "გთხოვთ, განმიმარტეთ, რას გულისხმობთ „{phrase}“, რომ უკეთესად შევძლო თქვენი დახმარება."
+camp_unclear_phrases: [ხელა ბავშ]
+camp_unclear_default_phrase: "ხელა ბავშვებში"
+
+# ── Organization / team / „who is behind you?" (client fix 2026-06-29) ────────
+# „თქვენს უკან ვინ დგას?" / „ვინ არიან ორგანიზატორები?" must NOT trigger the camp
+# funnel (no camp intro, no child-age question). A brief AI-assistant line, then
+# the organizer/founder details deferred to the manager (not an approved fact).
+# Rendered:  „<camp_org_prefix>\n\nრაც შეეხება <camp_org_topic>, <ending>".
+camp_org_prefix: "ეს არის სიტყვის აკადემიის AI ასისტენტი."
+camp_org_topic: "ორგანიზატორების შესახებ დეტალებს"
+camp_org_markers:
+  # Specific „who is behind the organization" / founder phrasings only. The
+  # broad „ვინ მართავს" / „ვინ უდგას" were REMOVED (client-review 2026-06-29):
+  # they caught on-site-supervision („ბანაკს ვინ მართავს ადგილზე?") and
+  # child-support („ბავშვს ვინ უდგას გვერდში?") questions, which are NOT about
+  # organizers. The legitimate org cases below still match without them.
+  - "უკან ვინ დგას"
+  - "უკან ვინ დგახარ"
+  - "ვინ დგას უკან"
+  - "ვინ დგახართ უკან"
+  - "ვინ დგას თქვენს უკან"
+  - "ვინ არის ორგანიზ"
+  - "ვინ არიან ორგანიზ"
+  - "ორგანიზატორ"
+  - "დამფუძნებ"
+
+# ── Generic unsupported operational detail (client fix 2026-06-29) ───────────
+# LAST-RESORT anti-invention defer for an operational detail whose exact topic
+# can NOT be safely normalized to one of the categories above. Rendered as
+# „რაც შეეხება ამ საკითხს, <ending>". Deliberately a CONSERVATIVE noun set — the
+# specific categories above should catch the common cases first; the LLM system
+# prompt handles the truly open-ended tail by deferring instead of inventing.
+camp_generic_topic: "ამ საკითხს"
+camp_generic_markers:
+  - "დაზღვევ"
+  - "ინვენტარ"
+  - "ფორს-მაჟორ"
+  - "ფორსმაჟორ"
+  - "აღჭურვილობ"
+  - "იურიდიულ დეტალ"
 
 # ── Doctor / medical / medication → SAFE answer (NEVER overpromise) ───────────
 # Mentions the known fact (medical personnel 24/7) but NEVER guarantees that a

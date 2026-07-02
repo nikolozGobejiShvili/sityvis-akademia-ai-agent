@@ -29,6 +29,7 @@ engine then answers as before), never raises into the hot path.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Mapping
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ TOPIC_PRIORITY: tuple[str, ...] = (
     "sports_health",
     "activities_creativity",
     "rest_environment",
+    "accommodation",
     "general_overview",
 )
 
@@ -174,8 +176,10 @@ def detect_camp_topic(message: str) -> str | None:
 
 
 def _is_exact_menu_question(low: str) -> bool:
-    """True for an EXACT-menu question („ზუსტად რა მენიუ ექნებათ?") — food
-    inclusion is known, the exact menu is not."""
+    """True for an EXACT/detailed-menu question („ზუსტად რა მენიუ ექნებათ?",
+    „მენიუ როგორი იქნება?") — food inclusion is known, the exact menu is not."""
+    if _count(low, _load_data().get("camp_menu_detail_markers")) > 0:
+        return True
     return "მენიუ" in low and any(x in low for x in ("ზუსტ", "კონკრეტ"))
 
 
@@ -229,30 +233,278 @@ def _is_parent_child_contact(low: str) -> bool:
     return True
 
 
-def _is_unknown_camp_detail(low: str) -> bool:
-    """True for a camp question that asks about a specific OPERATIONAL detail we
-    have no approved fact for — an operational noun PLUS an interrogative /
-    arrangement cue. The noun+cue pairing keeps a parent DESCRIBING the child
-    („ერთ ოთახში გამოიკეტება") from being read as a camp-rooms question."""
-    cfg = _load_data().get("camp_unknown_detail")
-    if not isinstance(cfg, Mapping):
-        return False
-    if _count(low, cfg.get("noun_markers")) == 0:
-        return False
-    return _count(low, cfg.get("cue_markers")) > 0
+# ── Unknown operational detail → TOPIC-SPECIFIC honest defer (client fix
+#    2026-06-29). Names the exact topic, then the EXACT approved ending — never
+#    invents, never adds an emoji, „გაგაცნობთ" verbatim, manager phone always. ──
+def _unknown_ending() -> str:
+    return str(_load_data().get("camp_unknown_ending") or "").strip()
 
 
-def unknown_detail_answer() -> str | None:
-    cfg = _load_data().get("camp_unknown_detail")
-    if isinstance(cfg, Mapping):
-        ans = str(cfg.get("answer") or "").strip()
-        if ans:
-            return ans
+def _fallback_for(topic_phrase: str) -> str:
+    """„რაც შეეხება <topic>, ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"."""
+    return f"რაც შეეხება {topic_phrase}, {_unknown_ending()}"
+
+
+# Seats / availability — a places question („ადგილები გაქვთ?"), NOT a camp
+# LOCATION question („რომელ ადგილას ტარდება?").
+_SEATS_AVAIL_CUES: tuple[str, ...] = (
+    "გაქვთ", "არის", "იქნებ", "დარჩ", "რჩება", "თავისუფ", "მოვასწ", "დაგვრჩ",
+    "მექნებ", "შევძლებ",
+)
+_SEATS_LOCATION_GUARD: tuple[str, ...] = (
+    "რომელ ადგილას", "მდებარე", "ლოკაცი", "მისამართ", "სად ტარდებ", "სად არის ბანაკ",
+)
+# 2+ children / discount cue for the known+unknown split (own copy — this
+# reasoning module must not import parent_flow).
+_DISCOUNT_TRIGGERS: tuple[str, ...] = (
+    "ორი ბავშვ", "ორ ბავშვ", "ორი შვილ", "ორივე შვილ", "ჩემი შვილები",
+    "სამი ბავშვ", "სამ ბავშვ", "და-ძმა", "და ძმა ერთად", "დედმამიშ", "ფასდაკლებ",
+)
+_AGE_RE = re.compile(r"(\d{1,2})\s*წლ")
+_STREAM_NO_RE = re.compile(r"მე-?\s*(\d+)\s*ნაკად")
+_STREAM_DATE_RE = re.compile(r"(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(ივნის|ივლის|აგვისტ)")
+_MONTH_DATIVE = {"ივნის": "ივნისს", "ივლის": "ივლისს", "აგვისტ": "აგვისტოს"}
+
+
+def _is_seats_question(low: str) -> bool:
+    if "ადგილ" not in low:
+        return False
+    if any(g in low for g in _SEATS_LOCATION_GUARD):
+        return False
+    return any(c in low for c in _SEATS_AVAIL_CUES)
+
+
+def _extract_eligible_age(low: str) -> int | None:
+    m = _AGE_RE.search(low)
+    if not m:
+        return None
+    try:
+        age = int(m.group(1))
+    except ValueError:
+        return None
+    facts = _canonical_overview_facts()
+    try:
+        lo, hi = int(facts["age_min"]), int(facts["age_max"])
+    except (ValueError, KeyError):
+        lo, hi = 9, 17
+    return age if lo <= age <= hi else None
+
+
+def _stream_confirm_line(low: str) -> str:
+    """„მე-2 ნაკადი ტარდება 5–11 ივლისს." — only when the message NAMES both the
+    stream number AND an explicit date range (best-effort; else "")."""
+    mn = _STREAM_NO_RE.search(low)
+    md = _STREAM_DATE_RE.search(low)
+    if not (mn and md):
+        return ""
+    dative = _MONTH_DATIVE.get(md.group(3), md.group(3))
+    return f"მე-{mn.group(1)} ნაკადი ტარდება {md.group(1)}–{md.group(2)} {dative}."
+
+
+def _known_prefix_for_seats(low: str) -> str:
+    """The known part of a known+unknown split, if present. Priority: explicit
+    eligible age → sibling-discount cue → named stream+date. Else ""."""
+    age = _extract_eligible_age(low)
+    if age is not None:
+        facts = _canonical_overview_facts()
+        line = str(_load_data().get("camp_age_eligible_line") or "")
+        return (line.replace("{age}", str(age))
+                    .replace("{age_min}", facts["age_min"])
+                    .replace("{age_max}", facts["age_max"])).strip()
+    if any(t in low for t in _DISCOUNT_TRIGGERS):
+        return str(_load_data().get("camp_sibling_discount_line") or "").strip()
+    return _stream_confirm_line(low)
+
+
+def _seats_answer(low: str) -> str:
+    topic = str(_load_data().get("camp_seats_topic") or "").strip()
+    fb = _fallback_for(topic)
+    prefix = _known_prefix_for_seats(low)
+    return f"{prefix}\n\n{fb}" if prefix else fb
+
+
+def _unknown_categories() -> list[dict[str, Any]]:
+    cats = _load_data().get("camp_unknown_categories")
+    if isinstance(cats, (list, tuple)):
+        return [dict(c) for c in cats if isinstance(c, Mapping)]
+    return []
+
+
+def _match_unknown_category(low: str) -> str | None:
+    """First topic-specific category whose noun (+ optional cue) matches."""
+    for cat in _unknown_categories():
+        if _count(low, cat.get("noun_markers")) == 0:
+            continue
+        cues = cat.get("cue_markers")
+        if cues and _count(low, cues) == 0:
+            continue
+        topic = str(cat.get("topic") or "").strip()
+        if topic:
+            return _fallback_for(topic)
     return None
+
+
+def _match_org(low: str) -> str | None:
+    """Organization / team / „who is behind you" → a brief AI-assistant line then
+    the organizer/founder details deferred to the manager. Never the camp funnel
+    (no camp intro, no child-age question)."""
+    if _count(low, _load_data().get("camp_org_markers")) == 0:
+        return None
+    topic = str(_load_data().get("camp_org_topic") or "").strip()
+    if not topic:
+        return None
+    fb = _fallback_for(topic)
+    prefix = str(_load_data().get("camp_org_prefix") or "").strip()
+    return f"{prefix}\n\n{fb}" if prefix else fb
+
+
+def _match_generic_unknown(low: str) -> str | None:
+    """LAST-RESORT anti-invention defer for an unsupported operational detail
+    whose exact topic can NOT be normalized → „რაც შეეხება ამ საკითხს, …"."""
+    if _count(low, _load_data().get("camp_generic_markers")) == 0:
+        return None
+    topic = str(_load_data().get("camp_generic_topic") or "").strip()
+    return _fallback_for(topic) if topic else None
+
+
+def _resolve_operational(low: str) -> str | None:
+    """Seats/availability (with optional known prefix) + organization defer +
+    topic-specific unknown operational details + the generic last-resort defer.
+    Runs BEFORE the dates/price exclusion so a „ნაკადზე ადგილები" seats question
+    is not swallowed as a dates question. Returns None for anything that is NOT
+    an unsupported operational detail (known topics answer later)."""
+    if _is_seats_question(low):
+        return _seats_answer(low)
+    org = _match_org(low)
+    if org is not None:
+        return org
+    cat = _match_unknown_category(low)
+    if cat is not None:
+        return cat
+    return _match_generic_unknown(low)
+
+
+def resolve_operational(message: str) -> str | None:
+    """Public entry for the EARLY parent_flow interceptor (client fix 2026-06-29).
+
+    Returns the honest anti-invention defer for an unsupported OPERATIONAL detail
+    (seats/availability, room distribution, towels, hotel, transport, day
+    schedule, direct-call rules, organizer/founder, or a generic un-normalizable
+    detail) — or None for everything else (greetings, discovery, known camp
+    topics, canonical price/dates/registration/Sunday-School/adult flows). It is
+    deliberately narrow so it can run BEFORE the static welcome / camp intro /
+    age question without changing first-turn behaviour for anything else."""
+    low = (message or "").lower().strip()
+    if not low:
+        return None
+    return _resolve_operational(low)
 
 
 def menu_clarification() -> str:
     return str(_load_data().get("camp_menu_clarification") or "").strip()
+
+
+# ── EXACT-DETAIL split: KNOWN general answer + exact-unknown defer ───────────
+# (client follow-up 2026-06-30). Returns (general_part, fallback_part). The
+# general part uses only the FIRST approved paragraph/line — never invents the
+# exact detail. parent_flow renders „general\n\nfallback"; on an immediate
+# repeat it drops the general part and returns the fallback only.
+_ANY_AGE_RE = re.compile(r"(\d{1,2})\s*წლ")
+
+
+def _food_general() -> str:
+    """First approved paragraph of the food block (no allergy note)."""
+    block = answer_for_topic("food") or ""
+    return block.split("\n\n", 1)[0].strip()
+
+
+def _eligibility_line(age: int) -> str:
+    facts = _canonical_overview_facts()
+    line = str(_load_data().get("camp_age_eligible_line") or "")
+    return (line.replace("{age}", str(age))
+                .replace("{age_min}", facts["age_min"])
+                .replace("{age_max}", facts["age_max"])).strip()
+
+
+def _extract_any_age(low: str) -> int | None:
+    m = _ANY_AGE_RE.search(low)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def resolve_exact_detail(message: str) -> tuple[str, str] | None:
+    """Return (general_part, fallback_part) for a KNOWN-general + exact-unknown
+    detail question, or None. general_part is '' when only the defer applies.
+    Order (most specific first): age-group count → peer presence → staff count →
+    food frequency → exact/detailed menu. NEVER invents the exact detail."""
+    low = (message or "").lower().strip()
+    if not low:
+        return None
+    data = _load_data()
+
+    # 1. Age-group COUNT („რამდენი ბავშვი იქნება 14 წლის?") → defer only.
+    if any(c in low for c in _CHILD_WORDS) and any(c in low for c in ("რამდენი", "რაოდენობ")):
+        age = _extract_any_age(low)
+        if age is not None:
+            tmpl = str(data.get("camp_age_group_count_topic_template") or "")
+            topic = tmpl.replace("{age}", str(age)).strip()
+            if topic:
+                return ("", _fallback_for(topic))
+
+    # 2. Peer / same-age presence → eligibility (if age given) + peer defer.
+    if _count(low, data.get("camp_peer_markers")) > 0:
+        topic = str(data.get("camp_peer_topic") or "").strip()
+        if topic:
+            age = _extract_eligible_age(low)
+            general = _eligibility_line(age) if age is not None else ""
+            return (general, _fallback_for(topic))
+
+    # 3. Staff COUNT → staff line + staff-count defer.
+    if (_count(low, data.get("camp_staff_count_nouns")) > 0
+            and _count(low, data.get("camp_staff_count_cues")) > 0):
+        topic = str(data.get("camp_staff_count_topic") or "").strip()
+        if topic:
+            return (str(data.get("camp_staff_line") or "").strip(), _fallback_for(topic))
+
+    # 4. Food FREQUENCY → food general + frequency defer.
+    if (_count(low, data.get("camp_food_frequency_markers")) > 0
+            and _count(low, data.get("camp_food_context_markers")) > 0):
+        topic = str(data.get("camp_food_frequency_topic") or "").strip()
+        if topic:
+            return (_food_general(), _fallback_for(topic))
+
+    # 5. Exact / detailed MENU → food general + menu defer.
+    if _count(low, data.get("camp_menu_detail_markers")) > 0:
+        topic = str(data.get("camp_menu_topic") or "").strip()
+        if topic:
+            return (_food_general(), _fallback_for(topic))
+
+    return None
+
+
+def political_reply(message: str) -> str | None:
+    """Neutral redirect for a political / party-identity bait, or None."""
+    low = (message or "").lower()
+    if _count(low, _load_data().get("camp_political_markers")) == 0:
+        return None
+    return str(_load_data().get("camp_political_reply") or "").strip() or None
+
+
+def unclear_phrase_reply(message: str) -> str | None:
+    """Polished clarification for a recognised unclear phrase („ხელა ბავშ"), or
+    None. Fills the approved template with the client's canonical phrase."""
+    low = (message or "").lower()
+    if _count(low, _load_data().get("camp_unclear_phrases")) == 0:
+        return None
+    tmpl = str(_load_data().get("camp_unclear_reply_template") or "").strip()
+    phrase = str(_load_data().get("camp_unclear_default_phrase") or "").strip()
+    if not tmpl:
+        return None
+    return tmpl.replace("{phrase}", phrase)
 
 
 def resolve_camp_answer(message: str) -> str | None:
@@ -266,15 +518,27 @@ def resolve_camp_answer(message: str) -> str | None:
     low = (message or "").lower().strip()
     if not low:
         return None
-    if _is_excluded(low):
-        return None
 
-    # Pre-checks (before generic topic scoring):
-    # 1. Doctor / medical / medication → safe medical block (never overpromise).
+    # 0a. Doctor / medical / medication → safe medical block FIRST, so a
+    #     „წამლის გრაფიკი" (medication schedule) is medical, never mistaken for
+    #     the day-schedule operational fallback below.
     if _is_medical(low):
         med = medical_answer()
         if med:
             return med
+
+    # 0b. Operational unknown-detail + seats / known+unknown split (client fix
+    #     2026-06-29). Runs BEFORE the canonical-flow exclusion so a
+    #     „ნაკადზე ადგილები" seats question is answered with the honest topic
+    #     fallback instead of being swallowed as a dates question. NEVER invents.
+    op = _resolve_operational(low)
+    if op is not None:
+        return op
+
+    if _is_excluded(low):
+        return None
+
+    # Pre-checks (before generic topic scoring):
     # 2. Parent→child CONTACT during camp → the parent-communication block
     #    (beats consultation phone/video flow AND communication_socialization).
     if _is_parent_child_contact(low):
@@ -293,8 +557,6 @@ def resolve_camp_answer(message: str) -> str | None:
                 answer = f"{answer}\n\n{clar}"
         return answer
 
-    if _is_unknown_camp_detail(low):
-        return unknown_detail_answer()
     return None
 
 
