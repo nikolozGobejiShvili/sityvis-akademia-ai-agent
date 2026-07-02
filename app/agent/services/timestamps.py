@@ -110,6 +110,9 @@ def _extract_time(text: str) -> tuple[int, int] | None:
 #   სათზე / სათი            (common typo — a single „ა")
 #   სთ / სთ-ზე / სთზე
 #   8-ზე / 8ზე              (bare hour + locative, hyphen optional, no space)
+#   5ს / 5 ს                (E7: „ს" abbreviation of „საათზე" — matched LAST so
+#                            „სთ"/„საათ" still win; the negative lookahead keeps
+#                            it from firing inside „სხვა"/„საათ"/any Georgian word)
 _COLLOQUIAL_HOUR_RE = re.compile(
     r"(?<!\d)(\d{1,2})\s*"
     r"(?:"
@@ -117,12 +120,83 @@ _COLLOQUIAL_HOUR_RE = re.compile(
     r"|სათ(?:ზე|ისთვის|ისკენ|ი)?"
     r"|სთ(?:\s*-?\s*ზე)?"
     r"|-?ზე"
+    r"|ს(?![ა-ჰ])"
     r")"
 )
 
 # Morning / evening qualifier stems (substring match on lower-cased text).
 _MORNING_MARKERS: tuple[str, ...] = ("დილ",)            # დილის / დილით / დილა…
 _EVENING_MARKERS: tuple[str, ...] = ("საღამო", "ღამის", "ღამე")
+
+
+def _normalize_pm_hour(hour: int, morning: bool, evening: bool) -> int:
+    """Apply the project's PARENT-context colloquial PM convention to a bare
+    hour. Single source of truth shared by the numeric, spelled-out and
+    half-hour parsers so they stay in lock-step:
+      * explicit „დილ…" (morning)  → literal (8 → 08:00)
+      * explicit „საღამო…" (evening) 1–11 → +12 (8 → 20:00), 12 → literal
+      * unqualified 1–9            → +12 (8 → 20:00)
+      * 10 / 11 / 12 (and 0 / 13–23) → literal
+    """
+    if morning:
+        return hour
+    if evening:
+        return hour + 12 if 1 <= hour <= 11 else hour
+    if 1 <= hour <= 9:
+        return hour + 12
+    return hour
+
+
+# E7 — half-hour colloquial forms („7ნახ" / „7 ნახ" / „7 ნახევარზე" → 7:30;
+# „ნახევარი 8" → 8:30). DOCUMENTED CONVENTION: the explicit digit is the hour
+# (PM-normalised by `_normalize_pm_hour`) and the minute is fixed at 30 — i.e.
+# „ნახევარი 8" is read as „eight-thirty", NOT the „half-to-eight" (7:30)
+# interpretation. The two forms (digit-before-„ნახ" and „ნახევარი"-before-digit)
+# both resolve to HH:30 for consistency.
+_HALF_HOUR_AFTER_RE = re.compile(r"(?<!\d)(\d{1,2})\s*ნახ")
+_HALF_HOUR_BEFORE_RE = re.compile(r"ნახევარ\w*\s*(\d{1,2})(?!\s*წ)")
+
+
+def _extract_half_hour(
+    low: str, morning: bool, evening: bool,
+) -> tuple[int, int] | None:
+    m = _HALF_HOUR_AFTER_RE.search(low) or _HALF_HOUR_BEFORE_RE.search(low)
+    if not m:
+        return None
+    hour = int(m.group(1))
+    if not (0 <= hour <= 23):
+        return None
+    return _normalize_pm_hour(hour, morning, evening), 30
+
+
+# E8 — spelled-out Georgian hours. Stems are declension-tolerant (matched with a
+# trailing „[ა-ჰ]*" so „ხუთ"/„ხუთი"/„ათ"/„ათი" all hit) and REQUIRE a following
+# „საათ"/„სთ" time word, so a number word elsewhere („ერთი შვილი") never parses
+# as a time and the „ათ" in „საათ" itself is never mis-read. Longest / compound
+# stems first so „თერთმეტ" wins over „ერთ" and „თორმეტ" over „ორ".
+_SPELLED_HOURS: tuple[tuple[str, int], ...] = (
+    ("თერთმეტ", 11),
+    ("თორმეტ", 12),
+    ("ცხრა", 9),
+    ("ექვს", 6),
+    ("ხუთ", 5),
+    ("ოთხ", 4),
+    ("შვიდ", 7),
+    ("რვა", 8),
+    ("სამ", 3),
+    ("ორ", 2),
+    ("ერთ", 1),
+    ("ათ", 10),
+)
+
+
+def _extract_spelled_hour(
+    low: str, morning: bool, evening: bool,
+) -> tuple[int, int] | None:
+    for stem, value in _SPELLED_HOURS:
+        if re.search(r"(?<![ა-ჰ])" + stem + r"[ა-ჰ]*\s+(?:საათ|სთ)", low):
+            return _normalize_pm_hour(value, morning, evening), 0
+    return None
 
 
 def extract_colloquial_hour(text: str) -> tuple[int, int] | None:
@@ -144,8 +218,18 @@ def extract_colloquial_hour(text: str) -> tuple[int, int] | None:
             return hour, minute
     morning = any(mk in low for mk in _MORNING_MARKERS)
     evening = any(mk in low for mk in _EVENING_MARKERS)
+    # E7 — half-hour colloquial („7ნახ" / „ნახევარი 8") → HH:30. Checked before
+    # the bare-hour regex so „7 ნახევარზე" is not mis-read as a whole hour.
+    half = _extract_half_hour(low, morning, evening)
+    if half is not None:
+        return half
     m = _COLLOQUIAL_HOUR_RE.search(low)
     if not m:
+        # E8 — spelled-out Georgian hour („რვა საათზე" → 20:00). Only when the
+        # numeric regex found nothing (spelled forms carry no digit).
+        spelled = _extract_spelled_hour(low, morning, evening)
+        if spelled is not None:
+            return spelled
         # Bare hour with NO time suffix is only trusted when an explicit
         # „დილ…"/„საღამო…" qualifier is present („საღამოს 8" → 20:00).
         # Guard against age phrases („8 წლის") by rejecting a number
@@ -222,6 +306,58 @@ def _extract_relative_day_offset(text: str) -> int | None:
     return None
 
 
+# E9 — Georgian weekday names (dative „on <weekday>" forms). Stems are
+# declension-tolerant; the compound „-შაბათ" weekdays are listed BEFORE bare
+# „შაბათ" (Saturday) because each contains „შაბათ" as a substring (ორ-შაბათ,
+# სამ-შაბათ, …) — first match wins, so order is load-bearing.
+_WEEKDAY_STEMS: tuple[tuple[str, int], ...] = (
+    ("ოთხშაბათ", 2),   # Wednesday
+    ("ხუთშაბათ", 3),   # Thursday
+    ("ორშაბათ", 0),    # Monday
+    ("სამშაბათ", 1),   # Tuesday
+    ("პარასკევ", 4),   # Friday
+    ("შაბათ", 5),      # Saturday
+    ("კვირას", 6),     # Sunday — the dative „კვირას" only (NOT „კვირის" = week)
+)
+
+
+def _resolve_weekday_date(text: str, base: datetime):
+    """Resolve a Georgian weekday phrase to a future date (Asia/Tbilisi),
+    or None when no weekday name is present.
+
+      * „მომავალი/შემდეგი კვირის <weekday>" → that weekday in NEXT calendar week.
+      * „ამ კვირის <weekday>"               → that weekday in THIS week (rolled
+                                              forward 7 days if already past).
+      * bare „<weekday>ს"                   → the next upcoming occurrence;
+                                              same-day if today IS that weekday
+                                              (same-day future booking is allowed
+                                              — see the today-first availability
+                                              feature). Never a past date.
+    """
+    low = (text or "").lower()
+    target_wd = None
+    for stem, wd in _WEEKDAY_STEMS:
+        if stem in low:
+            target_wd = wd
+            break
+    if target_wd is None:
+        return None
+    today = base.date()
+    today_wd = today.weekday()
+    this_monday = today - timedelta(days=today_wd)
+    next_week = ("მომავალ" in low or "შემდეგ" in low) and "კვირ" in low
+    this_week = ("ამ კვირ" in low) or ("ამავე კვირ" in low)
+    if next_week:
+        return this_monday + timedelta(days=7 + target_wd)
+    if this_week:
+        d = this_monday + timedelta(days=target_wd)
+        if d < today:
+            d += timedelta(days=7)
+        return d
+    # Bare weekday → next upcoming occurrence (today if today is that weekday).
+    return today + timedelta(days=(target_wd - today_wd) % 7)
+
+
 def resolve_relative_datetime(
     text: str,
     *,
@@ -243,13 +379,19 @@ def resolve_relative_datetime(
 
     The function NEVER throws; bad input returns ``None``.
     """
-    offset = _extract_relative_day_offset(text)
-    if offset is None:
-        return None
     base = now or now_tbilisi()
     if base.tzinfo is None:
         base = base.replace(tzinfo=TBILISI_TZ)
-    target_date = (base + timedelta(days=offset)).date()
+    offset = _extract_relative_day_offset(text)
+    if offset is not None:
+        # Explicit relative-day word („დღეს"/„ხვალ"/„გუშინ"/…) — a past offset
+        # („გუშინ") is intentional and allowed.
+        target_date = (base + timedelta(days=offset)).date()
+    else:
+        # E9 — Georgian weekday name („შაბათს", „მომავალი კვირის სამშაბათს").
+        target_date = _resolve_weekday_date(text, base)
+        if target_date is None:
+            return None
     parsed_time = _extract_time(text)
     hh, mm = parsed_time if parsed_time else (0, 0)
     return datetime.combine(target_date, time(hh, mm), tzinfo=TBILISI_TZ)
