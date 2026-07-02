@@ -30,7 +30,9 @@ from app.services import admin_config_service, conversation_service, messenger_s
 _ENDED = "ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია."
 _FULL = "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია."
 _COMING = "ბანაკის დეტალები ჯერ ზუსტდება."
-_ALT = "შეგიძლიათ დაინტერესდეთ საკვირაო სკოლით ან ზრდასრულთა ღონისძიებებით"
+# Approved wording (2026-07-02): camp-off offers ONLY Sunday School + manager
+# connection; adult events are NOT mentioned by default.
+_ALT = "ამ ეტაპზე თქვენი შვილისთვის შეგვიძლია შემოგთავაზოთ საკვირაო სკოლა. თუ გსურთ, დეტალებზე მენეჯერთან დაგაკავშირებთ."
 _CHILD_OFF = "ამ ეტაპზე ბანაკის მიმდინარე ნაკადები აქტიური არ არის."
 _SS_COMING = "საკვირაო სკოლის დეტალები ჯერ ზუსტდება. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
 _ROOM_FB = "რაც შეეხება ოთახებში ბავშვების განაწილებას, ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"
@@ -329,3 +331,45 @@ def test_28_child_offering_points_to_sunday_school(monkeypatch):
     assert _AGE_Q not in out
     assert "2150" not in out
     assert _REG_URL not in out
+    assert "ზრდასრულ" not in out                    # no adult events by default
+
+
+# =====================================================================
+# Approved wording (2026-07-02): exact camp-off text + no adult by default
+# =====================================================================
+_EXPECTED_BY_STATUS = {
+    "hidden": parent_flow._CAMP_MSG_ENDED,
+    "ended": parent_flow._CAMP_MSG_ENDED,
+    "full": parent_flow._CAMP_MSG_FULL,
+    "coming_soon": parent_flow._CAMP_MSG_COMING_SOON,
+}
+
+
+@pytest.mark.parametrize("camp_status", list(_EXPECTED_BY_STATUS))
+def test_29_camp_off_exact_wording_no_adult(monkeypatch, camp_status):
+    out = _ask(monkeypatch, camp_status, "ბანაკზე ინფორმაცია მინდა", child_age="")
+    assert out == _EXPECTED_BY_STATUS[camp_status]
+    assert "თქვენი შვილისთვის შეგვიძლია შემოგთავაზოთ საკვირაო სკოლა" in out
+    assert "თუ გსურთ, დეტალებზე მენეჯერთან დაგაკავშირებთ" in out
+    assert "ზრდასრულ" not in out                    # no adult events by default
+    assert "რომელი მიმართულება გაინტერესებთ" not in out   # old routing trailer gone
+
+
+def test_30_direct_completed_question_wording(monkeypatch):
+    out = _ask(monkeypatch, "ended", "ბანაკი დასრულდა?")
+    assert out == (
+        "დიახ, ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n"
+        "ამ ეტაპზე თქვენი შვილისთვის შეგვიძლია შემოგთავაზოთ საკვირაო სკოლა. "
+        "თუ გსურთ, დეტალებზე მენეჯერთან დაგაკავშირებთ."
+    )
+    assert "ზრდასრულ" not in out
+
+
+def test_31_adult_mentioned_only_on_explicit_request(monkeypatch):
+    # Camp-only under camp-off → no adult mention…
+    plain = _ask(monkeypatch, "ended", "ბანაკის ფასი რა არის?")
+    assert "ზრდასრულ" not in plain
+    # …but an explicit camp + adult question DOES route/mention adult.
+    mixed = _ask(monkeypatch, "ended", "ბანაკი და ზრდასრულთა ღონისძიება მაინტერესებს")
+    assert _ENDED in mixed
+    assert "ზრდასრულთა ღონისძიებ" in mixed

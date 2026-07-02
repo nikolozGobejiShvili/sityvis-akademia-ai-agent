@@ -345,9 +345,12 @@ def _normalise_agixsnit_wording(text: str) -> str:
 # the status message. Non-camp flows (Sunday School, adult events, manager phone,
 # off-topic, greetings) are NEVER intercepted, so they keep working. When the
 # status is "active" the gate is a no-op → existing behaviour is byte-identical.
+# Approved wording (2026-07-02): a camp-off message offers ONLY Sunday School +
+# a manager connection. Adult events are NEVER mentioned by default — they are
+# offered only when the user explicitly asks (the camp+adult branch below).
 _CAMP_OFF_ALT: str = (
-    "ამ ეტაპზე შეგიძლიათ დაინტერესდეთ საკვირაო სკოლით ან ზრდასრულთა "
-    "ღონისძიებებით.\nრომელი მიმართულება გაინტერესებთ?"
+    "ამ ეტაპზე თქვენი შვილისთვის შეგვიძლია შემოგთავაზოთ საკვირაო სკოლა. "
+    "თუ გსურთ, დეტალებზე მენეჯერთან დაგაკავშირებთ."
 )
 # hidden and ended share the "streams completed" wording.
 _CAMP_MSG_ENDED: str = "ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n" + _CAMP_OFF_ALT
@@ -357,8 +360,7 @@ _CAMP_SHORT_ENDED: str = "ბანაკის მიმდინარე ნ�
 _CAMP_SHORT_FULL: str = "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია."
 _CAMP_SHORT_COMING_SOON: str = "ბანაკის დეტალები ჯერ ზუსტდება."
 _CAMP_ENDED_DIRECT: str = (
-    "დიახ, ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n"
-    "ამ ეტაპზე შეგიძლიათ დაინტერესდეთ საკვირაო სკოლით ან ზრდასრულთა ღონისძიებებით."
+    "დიახ, ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n" + _CAMP_OFF_ALT
 )
 _CAMP_OFF_CHILD_PREFIX: str = "ამ ეტაპზე ბანაკის მიმდინარე ნაკადები აქტიური არ არის."
 _CAMP_OFF_ADULT_POINTER: str = "რაც შეეხება ზრდასრულთა ღონისძიებებს — რომელი გაინტერესებთ?"
