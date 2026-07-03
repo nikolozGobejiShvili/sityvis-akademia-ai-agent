@@ -1418,8 +1418,35 @@ class ParentToolExecutor:
         saved: list[str] = []
         invalid: list[str] = []
 
+        # International phone / name truncation guard (client hotfix 2026-07-03).
+        # The LLM occasionally splits a contact like „ნიკოლოზ +995595999733"
+        # into name="ნიკოლოზ +" (stray „+") and phone="595999733" (country code
+        # dropped) BEFORE it reaches this tool. The deterministic parser on the
+        # RAW user message (unit-tested, preserves the country code) recovers the
+        # clean name + full number, so prefer it whenever THIS turn's message
+        # carries exactly one phone. The Georgian local happy path is unchanged
+        # (msg-derived and arg-derived values are identical there).
+        _msg_name, _msg_phone = "", ""
+        _msg_single_phone = False
+        try:
+            _msg_name, _msg_phone = parent_flow._parse_name_phone(
+                self.user_message or "",
+            )
+            _msg_single_phone = (
+                bool(_msg_phone)
+                and len(
+                    parent_flow._distinct_valid_phones(self.user_message or "")
+                ) == 1
+            )
+        except Exception:  # pragma: no cover — defensive, never break a save
+            _msg_name, _msg_phone, _msg_single_phone = "", "", False
+
         if "name" in args and (args.get("name") or "").strip():
             name = args["name"].strip()
+            # On a single-phone contact turn, trust the deterministic parse of
+            # the raw message (drops the stray „+" the LLM pulled off the number).
+            if _msg_single_phone and _msg_name:
+                name = _msg_name
             # Live Bug 2 (2026-06-11) — never store a month / date / time /
             # booking word as the parent's name even when the LLM passes it
             # directly (e.g. name="ივნის"). Same deterministic guard the
@@ -1437,6 +1464,11 @@ class ParentToolExecutor:
             _parsed_name, parsed_phone = parent_flow._parse_name_phone(
                 str(args["phone"]),
             )
+            # Prefer the full number parsed from the raw user message so a country
+            # code the LLM dropped from its own phone arg („+995…" → „595999733")
+            # is preserved in the lead / Sheet / email / Calendar.
+            if _msg_single_phone:
+                parsed_phone = _msg_phone
             if parsed_phone:
                 self.lead.phone = parsed_phone
                 saved.append("phone")

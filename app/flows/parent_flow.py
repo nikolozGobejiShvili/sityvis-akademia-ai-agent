@@ -526,6 +526,74 @@ def _maybe_handle_camp_status(
     return _camp_status_message(status)
 
 
+# ---------------------------------------------------------------------------
+# Bug 4 (client hotfix 2026-07-03) — capture the parent's stated camp goal /
+# challenge onto the lead the moment they ANSWER the goal/motivation question,
+# regardless of which handler produces this turn's reply.
+#
+# Live bug: a goal answer („გაჯეტთან დროის შემცირება და ახალი მეგობრები")
+# overlaps camp-topic triggers (გაჯეტ / ეკრან / მეგობრ), so the deterministic
+# `_maybe_handle_camp_topic_facts` interceptor short-circuits the LLM engine and
+# the engine's post-turn `maybe_capture_challenge_fallback` never runs — leaving
+# the manager email / Sheet „ინტერესი / გამოწვევა: არ არის მითითებული".
+#
+# The capture is a pure lead mutation (no response change), gated on the bot
+# having just asked the open goal/motivation question (system_parent_v2 examples:
+# „რას ელოდებით ბანაკისგან …", „რისი მიღება გსურთ თქვენი შვილისთვის …"). The
+# underlying `maybe_capture_challenge_fallback` still requires a recognisable
+# challenge stem and skips contact / slot / adult-event disclosures, so a bare
+# „კი ჩამწერეთ" / price question is never stored.
+# ---------------------------------------------------------------------------
+_GOAL_QUESTION_ASKED_STEMS: tuple[str, ...] = (
+    "რას ელოდებით",
+    "რას ელით ბანაკ",
+    "რისი მიღება",
+    "რისი მიღწევა",
+    "რას მოელით",
+    "რას ისურვ",
+    "მთავარი მიზანი",
+    "მთავარი მოტივაცი",
+    "რა მიზნით",
+)
+
+
+def _bot_recently_asked_challenge_question(conversation: Conversation) -> bool:
+    """True when the most recent assistant turn asked the open goal / motivation
+    (challenge) question — used to capture the parent's next-turn answer even
+    when a deterministic interceptor answers the turn."""
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        low = str(turn.get("content") or "").lower()
+        return any(stem in low for stem in _GOAL_QUESTION_ASKED_STEMS)
+    return False
+
+
+def _maybe_capture_challenge_on_goal_reply(
+    conversation: Conversation, message: str,
+) -> None:
+    """Capture the parent's camp goal / challenge onto the lead when this turn
+    answers the goal question. Pure lead mutation; never raises, never alters the
+    reply. PARENT-only (ADULT owns its own ``event_interest`` field)."""
+    try:
+        if getattr(conversation, "segment", "") == "ADULT":
+            return
+        if not _bot_recently_asked_challenge_question(conversation):
+            return
+        lead = getattr(conversation, "lead", None)
+        if lead is None:
+            _ensure_lead(conversation)
+            lead = getattr(conversation, "lead", None)
+        if lead is None:
+            return
+        from app.agent.llm.parent_llm_engine import maybe_capture_challenge_fallback
+        maybe_capture_challenge_fallback(lead, message)
+    except Exception:  # pragma: no cover — capture must never break a reply
+        logger.exception(
+            "[parent_flow] goal-reply challenge capture raised — ignored",
+        )
+
+
 def handle(conversation: Conversation, message: str) -> str:
     """Public entry — runs the core handler, then applies the deterministic
     client output polish (mid-conversation greeting-leak strip + one-❤️ emoji
@@ -590,6 +658,12 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             except Exception:  # pragma: no cover — trace must never break a reply
                 pass
             return _sanitise_booking_confirmation(conversation, protected)
+
+    # Bug 4 (client hotfix 2026-07-03) — capture the parent's camp goal /
+    # challenge onto the lead BEFORE any deterministic interceptor (camp-topic
+    # facts, etc.) can short-circuit the engine and skip its challenge fallback.
+    # Pure lead mutation, gated on the bot having just asked the goal question.
+    _maybe_capture_challenge_on_goal_reply(conversation, message)
 
     # Camp admin-status gate (2026-07-01) — when the operator turns the camp off
     # (`summer_camp.status` != active), a CAMP question is answered with the
@@ -1116,6 +1190,13 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             # Georgia / განვადება / წინასწარ). Strip a leaked payment sentence;
             # a payment question keeps the approved payment wording.
             engine_response = _strip_payment_terms_from_simple_price(
+                message, engine_response,
+            )
+            # Bug 1 (client hotfix 2026-07-03) — a simple price answer must not
+            # tack on a premature scheduling / date-time / name-contact question;
+            # booking starts after explicit consent. Strip such a sentence while
+            # keeping the price line + the soft consultation offer.
+            engine_response = _strip_premature_scheduling_from_price_answer(
                 message, engine_response,
             )
             engine_response = _ensure_camp_age_question(
@@ -2295,6 +2376,20 @@ def _user_explicit_slot_choice(
         if h:
             hh = int(h.group(1))
             if 0 <= hh <= 23:
+                # Bug 2 (client hotfix 2026-07-03) — in booking slot-selection a
+                # bare colloquial hour follows the PM convention (1–9 → afternoon/
+                # evening), so „3 ივლის 8 საათზე იყოს" matches the offered 20:00
+                # slot instead of a rejected 08:00. Explicit „დილ…" (morning)
+                # stays literal; „საღამო…" (evening) 1–11 → +12. This is the
+                # SLOT-SELECTION matcher only — global Batch A / colloquial-hour
+                # parsing (timestamps.extract_colloquial_hour) is untouched.
+                try:
+                    from app.agent.services import timestamps as _ts
+                    _morning = any(mk in text for mk in _ts._MORNING_MARKERS)
+                    _evening = any(mk in text for mk in _ts._EVENING_MARKERS)
+                    hh = _ts._normalize_pm_hour(hh, _morning, _evening)
+                except Exception:  # pragma: no cover — defensive
+                    pass
                 target_time = f"{hh:02d}:00"
 
     if target_time is None:
@@ -3029,6 +3124,65 @@ def _strip_payment_terms_from_simple_price(message: str, response: str) -> str:
     if not out:
         return response
     logger.info("[parent_flow] stripped payment terms from simple price answer")
+    return out
+
+
+# Bug 1 (client hotfix 2026-07-03) — a SIMPLE camp-price answer must not carry a
+# premature scheduling / date-time / name-contact QUESTION. The approved price
+# answer is price + inclusions + the soft consultation OFFER only; booking starts
+# after EXPLICIT consent (e.g. „კი, ჩამწერეთ"). The LLM sometimes tacks on „რა
+# დროს გადახედოთ კონსულტაციას?" (a WHEN question) or a „მომწერეთ სახელი და ნომერი"
+# contact ask onto the price answer — those are dropped here. The soft offer
+# („თუ გსურთ, კონსულტაციაზე ჩაგწერთ, სადაც დეტალებს მენეჯერი გაგაცნობთ.") is a
+# STATEMENT and matches none of the markers, so it is preserved.
+_PRICE_ANSWER_SCHEDULING_STRIP_MARKERS: tuple[str, ...] = (
+    "რა დროს", "გადახედ", "რომელ დროს", "რომელი დღე", "რომელ დღეს",
+    "რომელ საათ", "რა საათ", "დღე და დრო", "რომელი დრო",
+    "როდის გაწყ", "როდის ჩაგწერ", "როდის მოგერგ", "როდის დაგირეკ",
+    "საკონტაქტო ნომერ",
+)
+
+
+def _strip_premature_scheduling_from_price_answer(
+    message: str, response: str,
+) -> str:
+    """Drop a premature scheduling / date-time / name-contact QUESTION sentence
+    from a SIMPLE camp-price answer (price + inclusions + soft consultation
+    offer). No-op for a payment question, a non-price message, or a reply that is
+    not a price answer (does not carry the camp price value — so a pure payment
+    answer is never gutted). Paragraph-aware: surviving paragraphs keep their
+    breaks; only the offending sentence is removed. Never returns an answer that
+    lost the price value."""
+    if not response:
+        return response
+    if not _is_camp_price_intent(message) or _is_payment_question(message):
+        return response
+    if _camp_price_value() not in response and "2150" not in response:
+        return response
+    removed = False
+    out_paras: list[str] = []
+    for para in response.split("\n\n"):
+        sentences = re.split(r"(?<=[.?!])\s+", para.strip())
+        present = [s for s in sentences if s.strip()]
+        kept = [
+            s for s in present
+            if not any(
+                m in s.lower() for m in _PRICE_ANSWER_SCHEDULING_STRIP_MARKERS
+            )
+        ]
+        if len(kept) != len(present):
+            removed = True
+        if kept:
+            out_paras.append(" ".join(kept).strip())
+    if not removed:
+        return response
+    out = "\n\n".join(p for p in out_paras if p).strip()
+    # Never gut the answer — the price value must survive the strip.
+    if not out or (_camp_price_value() not in out and "2150" not in out):
+        return response
+    logger.info(
+        "[parent_flow] stripped premature scheduling question from price answer",
+    )
     return out
 
 
