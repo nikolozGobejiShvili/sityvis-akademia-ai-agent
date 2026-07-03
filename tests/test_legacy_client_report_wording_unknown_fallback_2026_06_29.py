@@ -438,7 +438,9 @@ def test_hf6_greeting_emoji_placement(engine_on, emoji_on, monkeypatch):
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _INTRO)
     out = parent_flow.handle(_fresh("hf6"), "გამარჯობა ბანაკზე მაინტერესებს ინფორმაცია")
     assert out.startswith("გამარჯობა 💙")
-    assert "სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას" in out
+    # Approved deterministic Camp intro (client hotfix 2026-07-03).
+    assert "ციფრულ ხმაურს" in out
+    assert "სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას" not in out
     assert "რამდენი წლის არის თქვენი შვილი" in out
     assert "ერთვებიან 💙" not in out
     assert "გამოხატვას 💙" not in out
@@ -451,8 +453,12 @@ def test_hf6_greeting_emoji_placement(engine_on, emoji_on, monkeypatch):
 def test_hf7_intro_wording_output(engine_on, monkeypatch):
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _INTRO)
     out = parent_flow.handle(_fresh("hf7"), "ბანაკზე მაინტერესებს ინფორმაცია")
-    assert ("სიტყვის აკადემიის ბანაკი 7-დღიანი გამოცდილებაა, სადაც ბავშვები ისვენებენ და, "
-            "ამავდროულად, სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას.") in out
+    # Approved deterministic Camp intro (client hotfix 2026-07-03) — exact text.
+    assert ("სიტყვის აკადემიის ბანაკი არის 7-დღიანი გამოცდილება, სადაც ბავშვები არა "
+            "მხოლოდ ისვენებენ, არამედ რამდენიმე დღით შორდებიან ციფრულ ხმაურს, ერთვებიან "
+            "ცოცხალ დისკუსიებში, სწავლობენ ფიქრს, აზრის ჩამოყალიბებასა და რეალურ "
+            "ურთიერთობას.") in out
+    assert "სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას" not in out
     assert "თვითგამოხატვის პროცესში ერთვებიან" not in out
     assert "თვითგამოხქტვაში" not in out
 

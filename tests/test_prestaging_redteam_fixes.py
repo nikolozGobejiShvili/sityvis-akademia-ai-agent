@@ -511,7 +511,7 @@ def test_fix4_no_phone_existing_complete_ask_unchanged():
     conv, lead = _eligible_conv(name="", child_age="14")
     reply = _maybe_request_full_contact_on_intent(conv, "კი მინდა")
     assert reply == (
-        "მომწერეთ თქვენი სახელი და 9-ნიშნა საკონტაქტო ნომერი, "
+        "მომწერეთ თქვენი სახელი და საკონტაქტო ნომერი, "
         "რომ კონსულტაცია ჩავნიშნოთ."
     )
 

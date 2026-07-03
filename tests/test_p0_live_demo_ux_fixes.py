@@ -180,7 +180,9 @@ def test_issue1_engine_path_skips_menu(monkeypatch):
     conv.segment = "PARENT"
     out = parent_flow.handle(conv, "საზაფხულო ბანაკი მაინტერესებს")
     assert _MENU_MARKER not in out
-    assert "რამდენი წლისაა" in out
+    # Deterministic approved intro (client hotfix 2026-07-03) asks the child age
+    # („რამდენი წლის არის თქვენი შვილი?"); match either age-question phrasing.
+    assert "რამდენი წლის" in out
 
 
 def test_issue1_plain_greeting_engine_on_still_menu(monkeypatch):

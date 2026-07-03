@@ -75,9 +75,9 @@ _INFO_INPUTS = [
 def test_info_request_is_not_registration_link(engine_on, msg):
     out = conversation_service.process_message("info", msg, "instagram")
     assert _ADMIN_URL not in out, f"info request wrongly returned the link: {msg!r}"
-    # Routed to the normal camp flow (engine consulted), not the
-    # deterministic registration interceptor.
-    assert len(engine_on) == 1, f"info request must reach the engine: {msg!r}"
+    # A camp INFO / interest request is now answered by the deterministic
+    # approved intro (client hotfix 2026-07-03), never the registration link.
+    assert "ციფრულ ხმაურს" in out, f"info request did not get the camp intro: {msg!r}"
 
 
 # =========================================================================

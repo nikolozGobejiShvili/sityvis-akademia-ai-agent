@@ -335,6 +335,48 @@ def _normalise_agixsnit_wording(text: str) -> str:
     return text
 
 
+# ── Client wording guarantee (2026-07-03) — never say „9-ნიშნა" ───────────────
+# The client wants the bot to accept a contact number from ANY country, so it
+# must never demand a „9-ნიშნა" (9-digit) number in user-facing wording. This
+# final deterministic pass runs on EVERY reply returned by handle() and rewrites
+# any residual „9-ნიშნა…" / „9 ციფრი" form (deterministic constant OR LLM output)
+# into the approved „საკონტაქტო ნომერი" wording, and drops the Georgian-only
+# „(5/7/8-ით დაწყებული)" hint. Ordered longest→shortest so a full phrase maps
+# before the bare token. Does NOT touch detection markers / history / logs.
+_CONTACT_NUMBER_WORDING_REWRITES: tuple[tuple[str, str], ...] = (
+    (" (5/7/8-ით დაწყებული)", ""),
+    ("(5/7/8-ით დაწყებული)", ""),
+    ("9-ნიშნა საკონტაქტო ნომერი", "საკონტაქტო ნომერი"),
+    ("9 ნიშნა საკონტაქტო ნომერი", "საკონტაქტო ნომერი"),
+    ("ცხრანიშნა საკონტაქტო ნომერი", "საკონტაქტო ნომერი"),
+    ("9-ნიშნა საკონტაქტო", "საკონტაქტო"),
+    ("9-ნიშნა ნომერი", "საკონტაქტო ნომერი"),
+    ("9 ნიშნა ნომერი", "საკონტაქტო ნომერი"),
+    ("ცხრანიშნა ნომერი", "საკონტაქტო ნომერი"),
+    ("ცხრა ნიშნა ნომერი", "საკონტაქტო ნომერი"),
+    ("ცხრა ციფრი", "საკონტაქტო ნომერი"),
+    ("9 ციფრი", "საკონტაქტო ნომერი"),
+    ("9-ნიშნა", "საკონტაქტო"),
+    ("9 ნიშნა", "საკონტაქტო"),
+    ("ცხრანიშნა", "საკონტაქტო"),
+)
+
+
+def _normalise_contact_number_wording(text: str) -> str:
+    """Rewrite any „9-ნიშნა" / „9 ციფრი" contact-number wording into the approved
+    „საკონტაქტო ნომერი" form and drop the „(5/7/8-ით დაწყებული)" Georgian-only
+    hint. No-op when no such token is present. Runs on every handle() reply so
+    NO user-facing prompt (deterministic OR LLM) ever demands a 9-digit number —
+    the bot now accepts contact numbers from any country."""
+    if not text:
+        return text
+    if "ნიშნა" not in text and "ციფრ" not in text and "5/7/8" not in text:
+        return text
+    for old, new in _CONTACT_NUMBER_WORDING_REWRITES:
+        text = text.replace(old, new)
+    return text
+
+
 # ── Camp admin-status gate (2026-07-01) ──────────────────────────────────────
 # The operator can turn the camp off from Admin Config (`summer_camp.status`,
 # read via `admin_config_service.get_camp_status()` which defaults to "active").
@@ -497,6 +539,9 @@ def handle(conversation: Conversation, message: str) -> str:
     result = _apply_client_emoji_policy(conversation, message, result)
     # Final wording guarantee (2026-07-01): never let „აგიხსნით" reach the client.
     result = _normalise_agixsnit_wording(result)
+    # Client wording guarantee (2026-07-03): never demand a „9-ნიშნა" number —
+    # the bot accepts a contact number from any country.
+    result = _normalise_contact_number_wording(result)
     return result
 
 
@@ -967,6 +1012,19 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if availability_response is not None:
             return _sanitise_booking_confirmation(
                 conversation, availability_response,
+            )
+
+        # Approved Camp intro (client hotfix 2026-07-03) — a clear camp-info /
+        # interest turn with an unknown child age gets the EXACT approved intro
+        # + age question deterministically, instead of an LLM paraphrase. Runs
+        # LAST among the deterministic interceptors (every specific camp
+        # sub-question returned above), right before the engine. Defers (None)
+        # for everything else so discovery / objections / follow-ups still reach
+        # the LLM.
+        camp_intro_response = _maybe_handle_camp_intro(conversation, message)
+        if camp_intro_response is not None:
+            return _sanitise_booking_confirmation(
+                conversation, camp_intro_response,
             )
 
         engine_response = _run_llm_engine_safely(conversation, message)
@@ -2813,7 +2871,7 @@ _OUT_OF_RANGE_AGE_MESSAGE: str = (
     "ბანაკი განკუთვნილია {lo}–{hi} წლის ბავშვებისთვის. {age} წლის ასაკზე "
     "ჯობია მენეჯერმა ინდივიდუალურად გაგიწიოთ კონსულტაცია და გითხრათ, "
     "რამდენად შესაბამისია პროგრამა.\n\n"
-    "თუ გსურთ, მომწერეთ თქვენი სახელი და 9-ნიშნა საკონტაქტო ნომერი, რომ "
+    "თუ გსურთ, მომწერეთ თქვენი სახელი და საკონტაქტო ნომერი, რომ "
     "მენეჯერი დაგიკავშირდეთ."
 )
 
@@ -3341,16 +3399,16 @@ _UNDERAGE_HANDOFF_ALREADY: str = (
 )
 # Asking copy — name+phone together when name unknown, phone-only when known.
 _HANDOFF_ASK_NAME_AND_PHONE: str = (
-    "მომწერეთ თქვენი სახელი და 9-ნიშნა საკონტაქტო ნომერი, რომ მენეჯერს გადავცე."
+    "მომწერეთ თქვენი სახელი და საკონტაქტო ნომერი, რომ მენეჯერს გადავცე."
 )
 _HANDOFF_ASK_PHONE_ONLY: str = (
-    "მომწერეთ თქვენი 9-ნიშნა საკონტაქტო ნომერი და მენეჯერს გადავცემ."
+    "მომწერეთ თქვენი საკონტაქტო ნომერი და მენეჯერს გადავცემ."
 )
 _HANDOFF_GOT_PHONE_ASK_NAME: str = (
     "ნომერი მივიღე. მომწერეთ თქვენი სახელი, რომ მენეჯერს გადავცე."
 )
 _HANDOFF_GOT_NAME_ASK_PHONE: str = (
-    "სახელი მივიღე. მომწერეთ 9-ნიშნა საკონტაქტო ნომერი, რომ მენეჯერს გადავცე."
+    "სახელი მივიღე. მომწერეთ საკონტაქტო ნომერი, რომ მენეჯერს გადავცე."
 )
 _UNDERAGE_HANDOFF_FAIL_WITH_CONTACT: str = (
     "ამ მომენტში ავტომატურად ვერ გადავეცი მენეჯერს.\n\n"
@@ -3634,16 +3692,16 @@ _SUNDAY_SCHOOL_PIVOT_MARKERS: tuple[str, ...] = (
 _SUNDAY_SCHOOL_FALLBACK_AVAILABILITY: str = "საკვირაო სკოლის დეტალები ზუსტდება."
 _SUNDAY_SCHOOL_OFFER_TAIL: str = (
     "შემიძლია მენეჯერს გადავცე თქვენი საკონტაქტო, რომ დაგიკავშირდეთ. "
-    "მომწერეთ თქვენი სახელი და 9-ნიშნა ნომერი."
+    "მომწერეთ თქვენი სახელი და საკონტაქტო ნომერი."
 )
 _SUNDAY_SCHOOL_ASK_NAME: str = (
     "საკვირაო სკოლის თაობაზე მენეჯერს გადავცე — მომწერეთ თქვენი სახელი."
 )
 _SUNDAY_SCHOOL_ASK_PHONE: str = (
-    "საკვირაო სკოლის თაობაზე მენეჯერს გადავცე — მომწერეთ თქვენი 9-ნიშნა ნომერი."
+    "საკვირაო სკოლის თაობაზე მენეჯერს გადავცე — მომწერეთ თქვენი საკონტაქტო ნომერი."
 )
 _SUNDAY_SCHOOL_INVALID_PHONE: str = (
-    "ნომერი სწორად ვერ ამოვიკითხე. საკვირაო სკოლის თაობაზე მომწერეთ 9-ნიშნა "
+    "ნომერი სწორად ვერ ამოვიკითხე. საკვირაო სკოლის თაობაზე მომწერეთ თქვენი "
     "საკონტაქტო ნომერი."
 )
 _SUNDAY_SCHOOL_SUCCESS: str = (
@@ -4438,6 +4496,86 @@ def _maybe_static_welcome(conversation: Conversation, message: str) -> str | Non
             exc,
         )
         return None
+
+
+# ── Approved Camp intro (client hotfix 2026-07-03) ───────────────────────────
+# The Camp intro was LLM-generated (system_parent_v2.md). The client requires
+# the EXACT approved wording, so a clear camp-info / interest turn (child age
+# still unknown) is answered deterministically, bypassing the LLM. The greeting-
+# emoji policy in handle() prepends „გამარჯობა 💙" when the user greeted on the
+# first turn (so the greeting variant matches the approved wording). The child-
+# age question is part of the intro, so the post-engine `_ensure_camp_age_question`
+# (which this return skips) never double-asks.
+_CAMP_INTRO_TEXT: str = (
+    "სიტყვის აკადემიის ბანაკი არის 7-დღიანი გამოცდილება, სადაც ბავშვები არა "
+    "მხოლოდ ისვენებენ, არამედ რამდენიმე დღით შორდებიან ციფრულ ხმაურს, ერთვებიან "
+    "ცოცხალ დისკუსიებში, სწავლობენ ფიქრს, აზრის ჩამოყალიბებასა და რეალურ "
+    "ურთიერთობას.\n\nრამდენი წლის არის თქვენი შვილი?"
+)
+# NARROW intro markers — genuine INFO / INTEREST only. Deliberately EXCLUDES the
+# transactional registration / form / link stems that `_CAMP_INTENT_MARKERS`
+# also carries (e.g. „ფორმა", which matches inside „ფორმატი"), so a format /
+# registration / link question is never read as an intro turn.
+_CAMP_INTRO_INTENT_MARKERS: tuple[str, ...] = (
+    "ინტერეს",       # მაინტერესებს / დაინტერესებული / ინტერესი
+    "დაინტერეს",
+    "დამაინტერეს",
+    "ინფორმაცი",     # ინფორმაცია
+    "მინდა",
+    "მსურს",
+    "interested",
+    "info",
+    "want",
+)
+
+
+def _maybe_handle_camp_intro(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Return the EXACT approved Camp intro + child-age question for a clear
+    camp-info / interest turn while the child age is still unknown; None
+    otherwise (defer to the LLM engine).
+
+    Gated NARROWLY so it never overrides a specific camp sub-question: price /
+    payment / registration / topic-fact / operational / exact-detail /
+    consultation / date. Those have dedicated interceptors that already ran (and
+    returned) above; the extra checks here are defence in depth. PARENT-only."""
+    if getattr(conversation, "segment", "") != "PARENT":
+        return None
+    lead = getattr(conversation, "lead", None)
+    if _child_age_known(lead):
+        return None
+    low = (message or "").lower()
+    # Georgian camp keyword + a genuine INFO/INTEREST marker only. English camp
+    # intent keeps its existing behaviour (yields to the engine, which replies in
+    # Georgian). The narrow marker set excludes transactional registration/form/
+    # link stems, so a format („ფორმატი") / registration / link question is NOT
+    # read as an intro turn (those have their own handlers / reach the engine).
+    if not any(kw in low for kw in _CAMP_INTENT_KEYWORDS):
+        return None
+    if not any(m in low for m in _CAMP_INTRO_INTENT_MARKERS):
+        return None
+    if _is_camp_price_intent(message):
+        return None
+    if _is_payment_question(message):
+        return None
+    if _is_camp_registration_link_request(message):
+        return None
+    if any(s in low for s in ("კონსულტ", "კოსულტ", "ჯავშ")):
+        return None
+    if any(s in low for s in ("როდის", "თარიღ", "რიცხვ")):
+        return None
+    try:
+        from app.reasoning import camp_topic_facts as _ctf
+        if (
+            _ctf.detect_camp_topic(message) is not None
+            or _ctf.resolve_operational(message) is not None
+            or _ctf.resolve_exact_detail(message) is not None
+        ):
+            return None
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return _CAMP_INTRO_TEXT
 
 
 # =========================================================================
@@ -6212,7 +6350,7 @@ _RESCHEDULE_ASK_NEW_TIME: str = (
 
 _RESCHEDULE_NO_BOOKING_ASK: str = (
     "ვერ ვპოულობ თქვენს აქტიურ კონსულტაციას. გთხოვთ, მომწერეთ თქვენი "
-    "სახელი და 9-ნიშნა საკონტაქტო ნომერი, რომ მენეჯერმა გადატანაში "
+    "სახელი და საკონტაქტო ნომერი, რომ მენეჯერმა გადატანაში "
     "დაგეხმაროთ."
 )
 
@@ -6459,8 +6597,7 @@ _CONTACT_THANKS_NAME_ASK_TIME: str = (
     "მადლობა, {name}. რომელი დღე და დრო გირჩევნიათ კონსულტაციისთვის?"
 )
 _CONTACT_INVALID_PHONE_ASK: str = (
-    "ნომერი სწორად ვერ ამოვიკითხე. მომწერეთ 9-ნიშნა საკონტაქტო ნომერი "
-    "(5/7/8-ით დაწყებული)."
+    "ნომერი სწორად ვერ ამოვიკითხე. მომწერეთ თქვენი საკონტაქტო ნომერი."
 )
 _CONTACT_MULTIPLE_PHONES_ASK: str = (
     "ორი ნომერი მომწერეთ. რომელი ნომრით დაგიკავშირდეთ?"
@@ -6469,7 +6606,7 @@ _CONTACT_MULTIPLE_PHONES_ASK: str = (
 # already chosen). Used by `_maybe_commit_pending_booking_engine` so a known
 # slot is never re-requested (live bug 2026-06-25 — re-asked name+phone).
 _BOOKING_ASK_PHONE_ONLY: str = (
-    "სახელი მივიღე. მომწერეთ 9-ნიშნა საკონტაქტო ნომერი, რომ კონსულტაცია ჩავნიშნოთ."
+    "სახელი მივიღე. მომწერეთ საკონტაქტო ნომერი, რომ კონსულტაცია ჩავნიშნოთ."
 )
 _BOOKING_ASK_CHILD_AGE: str = (
     "ბავშვის ასაკიც მომწერეთ, რომ კონსულტაცია ჩავნიშნოთ."
@@ -6740,11 +6877,11 @@ _CONSULT_WANT_VERBS: tuple[str, ...] = (
     "მინდა", "მსურს", "ჩავეწერ", "ჩაწერა",
 )
 _CONTACT_REQUEST_NAME_AND_PHONE: str = (
-    "მომწერეთ თქვენი სახელი და 9-ნიშნა საკონტაქტო ნომერი, "
+    "მომწერეთ თქვენი სახელი და საკონტაქტო ნომერი, "
     "რომ კონსულტაცია ჩავნიშნოთ."
 )
 _CONTACT_REQUEST_PHONE_ONLY: str = (
-    "მომწერეთ 9-ნიშნა საკონტაქტო ნომერი, რომ კონსულტაცია ჩავნიშნოთ."
+    "მომწერეთ საკონტაქტო ნომერი, რომ კონსულტაცია ჩავნიშნოთ."
 )
 
 # Anti-repeat variants (live-demo polish 2026-06-22). When the SAME contact
@@ -6753,11 +6890,11 @@ _CONTACT_REQUEST_PHONE_ONLY: str = (
 # example-bearing variants say the same thing differently — WHAT we ask for is
 # unchanged (so lead capture is untouched); only the wording varies on a repeat.
 _CONTACT_REQUEST_NAME_AND_PHONE_RETRY: str = (
-    "კონსულტაციის ჩასანიშნად მხოლოდ თქვენი სახელი და 9-ნიშნა ნომერი "
+    "კონსულტაციის ჩასანიშნად მხოლოდ თქვენი სახელი და საკონტაქტო ნომერი "
     "მჭირდება — მაგალითად: ნინო, 555 12 34 56."
 )
 _CONTACT_REQUEST_PHONE_ONLY_RETRY: str = (
-    "ჩასაწერად მხოლოდ თქვენი 9-ნიშნა ნომერია საჭირო — "
+    "ჩასაწერად მხოლოდ თქვენი საკონტაქტო ნომერია საჭირო — "
     "მაგალითად: 555 12 34 56."
 )
 
@@ -7173,8 +7310,8 @@ def _maybe_commit_pending_booking_engine(
             )
         if reason == "invalid_phone":
             return (
-                "ნომერი სწორად ვერ ამოვიკითხე. მომწერეთ 9-ნიშნა "
-                "საკონტაქტო ნომერი (5/7/8-ით დაწყებული)."
+                "ნომერი სწორად ვერ ამოვიკითხე. მომწერეთ თქვენი "
+                "საკონტაქტო ნომერი."
             )
         if reason == "calendar_error":
             return (
@@ -7813,6 +7950,27 @@ def _handle_custom_slot_request(
 
 PHONE_CANDIDATE_PATTERN = re.compile(r"(\+?995[\s\-]?)?(\d[\d\s\-\(\)]*)")
 VALID_LOCAL_PREFIXES = {"5", "7", "8"}
+# Flexible international phone acceptance (client hotfix 2026-07-03). Used ONLY
+# as a fallback when the strict Georgian 9-digit local match fails, so Georgian
+# behaviour is byte-identical. Matches a phone-like run: optional leading „+",
+# then digits with embedded spaces / hyphens / parens / dots. The caller
+# additionally requires 7–15 total digits (E.164 range) so an empty string or a
+# stray 1–2 digit run is NEVER treated as a phone. We do not validate the
+# country or guarantee correctness — only that something phone-like exists.
+_INTL_PHONE_PATTERN = re.compile(r"\+?\d[\d\s\-\(\)\.]{5,}\d")
+_INTL_PHONE_MIN_DIGITS = 7
+_INTL_PHONE_MAX_DIGITS = 15
+
+
+def _normalise_intl_phone(token: str) -> str:
+    """Normalise a phone-like token to digits (keeping a leading „+" when the
+    token had one), or „" when it is not phone-like (7–15 digits)."""
+    if not token:
+        return ""
+    digits = re.sub(r"\D", "", token)
+    if not (_INTL_PHONE_MIN_DIGITS <= len(digits) <= _INTL_PHONE_MAX_DIGITS):
+        return ""
+    return ("+" + digits) if token.lstrip().startswith("+") else digits
 NAME_FILLER_WORDS = {
     "მე", "ვარ", "მქვია", "სახელი", "სახელია", "ნომერი", "ნომერია",
     "ტელეფონი", "ტელ",
@@ -8125,6 +8283,13 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
             candidate_str = token
             phone_start = match.start()
             break
+        # Do NOT fragment an international number into a spurious 9-digit
+        # Georgian-looking window (client hotfix 2026-07-03): skip the compound
+        # rescue when the token is clearly international — a „+" prefix (a genuine
+        # +995 was already accepted by the primary branch above) or a leading „0"
+        # trunk. The international fallback below then captures the FULL number.
+        if token.lstrip().startswith("+") or digits.startswith("0"):
+            continue
         # Compound rescue: scan inside the captured digit run for a
         # clean 9-digit window starting with a valid local prefix.
         rescued = ""
@@ -8142,6 +8307,24 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
                 "***" + rescued[-3:],
             )
             break
+
+    # International fallback (client hotfix 2026-07-03): no Georgian local number
+    # matched — accept a phone-like token from ANY country (7–15 digits, optional
+    # „+", spaces / hyphens / parens allowed) so the booking / handoff flow still
+    # captures it. The Georgian path above is unchanged; this runs only on a miss.
+    if not phone:
+        for match in _INTL_PHONE_PATTERN.finditer(text):
+            token = match.group(0)
+            normalised = _normalise_intl_phone(token)
+            if normalised:
+                phone = normalised
+                candidate_str = token
+                phone_start = match.start()
+                logger.info(
+                    "[parent_flow] international phone accepted: %s",
+                    "***" + normalised[-3:],
+                )
+                break
 
     if not phone:
         # Log only when nothing worked — covers both "no digits" and
@@ -8248,7 +8431,17 @@ def _distinct_valid_phones(message: str) -> list[str]:
         if len(local) == 9 and local[0] in VALID_LOCAL_PREFIXES:
             if local not in found:
                 found.append(local)
-    return found
+    if found:
+        return found
+    # International fallback (client hotfix 2026-07-03): count DISTINCT phone-like
+    # tokens from any country ONLY when no Georgian local number was present, so
+    # the Georgian „two numbers" detection stays byte-identical.
+    intl: list[str] = []
+    for match in _INTL_PHONE_PATTERN.finditer(message or ""):
+        normalised = _normalise_intl_phone(match.group(0))
+        if normalised and normalised not in intl:
+            intl.append(normalised)
+    return intl
 
 
 def _format_phone_display(phone: str) -> str:

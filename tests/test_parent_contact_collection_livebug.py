@@ -143,7 +143,9 @@ def test_bug1_too_long_phone_asks_for_valid():
     reply = _maybe_handle_contact_collection(conv, "555555555555555")
 
     assert reply is not None
-    assert "9-ნიშნა" in reply
+    # Client wording (2026-07-03): asks for a contact number, never „9-ნიშნა".
+    assert "საკონტაქტო ნომერი" in reply
+    assert "9-ნიშნა" not in reply
     assert not (lead.phone or "")
 
 
@@ -359,7 +361,8 @@ def test_bug4_intent_no_name_asks_name_and_phone():
     reply = _maybe_request_full_contact_on_intent(conv, "კი მინდა")
     assert reply is not None
     assert "სახელი" in reply
-    assert "9-ნიშნა საკონტაქტო ნომერი" in reply
+    assert "საკონტაქტო ნომერი" in reply
+    assert "9-ნიშნა" not in reply
     assert "უკვე ვიცი" not in reply
 
 
@@ -370,7 +373,8 @@ def test_bug4_intent_name_known_phone_missing_asks_phone_only():
     _lead(conv, name="ნინო", child_age="14")  # name known, phone missing
     reply = _maybe_request_full_contact_on_intent(conv, "კი მინდა")
     assert reply is not None
-    assert "9-ნიშნა საკონტაქტო ნომერი" in reply
+    assert "საკონტაქტო ნომერი" in reply
+    assert "9-ნიშნა" not in reply
     assert "სახელი უკვე ვიცი" not in reply
     assert "თქვენი სახელი უკვე ვიცი" not in reply
 
@@ -401,7 +405,8 @@ def test_bug4_enrol_stem_no_name_asks_name_and_phone():
     _lead(conv, child_age="14")
     reply = _maybe_request_full_contact_on_intent(conv, "ჩამწერეთ კონსულტაციაზე")
     assert reply is not None
-    assert "სახელი" in reply and "9-ნიშნა" in reply
+    assert "სახელი" in reply and "საკონტაქტო ნომერი" in reply
+    assert "9-ნიშნა" not in reply
 
 
 def test_bug4_soft_browsing_message_not_treated_as_request():

@@ -89,10 +89,14 @@ _ENDING = "ამ დეტალებს მენეჯერი გაგა
 # Mocked-engine sentinels / approved wordings the real LLM is prompted to emit.
 _ENGINE = "[ENGINE-MOCK]"
 _DATES = "[ENGINE-DATES] ბანაკი ტარდება 23–29 ივნისი, 5–11 ივლისი, 14–20 ივლისი."
+# Approved deterministic Camp intro (client hotfix 2026-07-03). The intro is now
+# returned by `parent_flow._maybe_handle_camp_intro` (byte-exact), BEFORE the
+# engine — so this mock is only a fallback for non-intro turns.
 _INTRO = (
-    "სიტყვის აკადემიის ბანაკი 7-დღიანი გამოცდილებაა, სადაც ბავშვები ისვენებენ და, "
-    "ამავდროულად, სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას.\n\n"
-    "რამდენი წლის არის თქვენი შვილი?"
+    "სიტყვის აკადემიის ბანაკი არის 7-დღიანი გამოცდილება, სადაც ბავშვები არა "
+    "მხოლოდ ისვენებენ, არამედ რამდენიმე დღით შორდებიან ციფრულ ხმაურს, ერთვებიან "
+    "ცოცხალ დისკუსიებში, სწავლობენ ფიქრს, აზრის ჩამოყალიბებასა და რეალურ "
+    "ურთიერთობას.\n\nრამდენი წლის არის თქვენი შვილი?"
 )
 # Simple-price answer AS THE LLM PRODUCES IT (with payment/installment terms) —
 # the deterministic price sanitizer strips the payment sentence for a SIMPLE
@@ -383,10 +387,11 @@ MATRIX = [
         "turns": ["გამარჯობა, ბანაკზე ინფორმაცია მაინტერესებს"],
         "expected_contains": [
             "გამარჯობა 💙",
-            "სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას",
+            "ციფრულ ხმაურს",
             "რამდენი წლის არის თქვენი შვილი?",
         ],
         "forbidden_contains": [
+            "სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას",
             "თვითგამოხატვის პროცესში ერთვებიან",
             "გამოხატვას 💙",
             "💙.",
@@ -398,10 +403,13 @@ MATRIX = [
         "fresh": True,
         "turns": ["ბანაკზე მინდა ინფორმაცია"],
         "expected_contains": [
-            "სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას",
+            "ციფრულ ხმაურს",
             "რამდენი წლის არის თქვენი შვილი?",
         ],
-        "forbidden_contains": ["❤️"],
+        "forbidden_contains": [
+            "❤️",
+            "სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას",
+        ],
     },
     # ── Price / payment ──────────────────────────────────────────────────────
     {

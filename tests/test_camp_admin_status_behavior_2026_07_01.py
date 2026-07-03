@@ -140,7 +140,10 @@ def test_get_camp_status_defaults(monkeypatch):
 # =====================================================================
 def test_01_active_intro(monkeypatch):
     out = _ask(monkeypatch, "active", "ბანაკზე ინფორმაცია მინდა", child_age="")
-    assert "სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას" in out
+    # Approved deterministic Camp intro (client hotfix 2026-07-03) replaces the
+    # old LLM-paraphrased intro.
+    assert "ციფრულ ხმაურს" in out
+    assert "სწავლობენ საკუთარი აზრებისა და ემოციების გამოხატვას" not in out
     assert _AGE_Q in out
     assert _no_camp_off(out)
 

@@ -74,7 +74,9 @@ def test_bug1_fullpath_clear_camp_skips_menu(parent_engine_on, msg):
     conversation_service.conversations.clear()
     out = conversation_service.process_message("b1-fp", msg, "instagram")
     assert _MENU not in out, f"menu wrongly shown for: {msg!r}"
-    assert "CAMP_ENGINE_REPLY" in out, f"camp flow did not continue for: {msg!r}"
+    # Camp flow continues — now via the deterministic approved intro
+    # (client hotfix 2026-07-03) instead of the LLM engine reply.
+    assert "ციფრულ ხმაურს" in out, f"camp flow did not continue for: {msg!r}"
     assert conversation_service.conversations["b1-fp"].segment == "PARENT"
 
 

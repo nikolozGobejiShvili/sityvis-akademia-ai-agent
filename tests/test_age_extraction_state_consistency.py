@@ -306,7 +306,9 @@ def test_12_new_user_camp_interest_asks_age(monkeypatch):
         monkeypatch, conv, "საზაფხულო ბანაკი მაინტერესებს",
         "სიამოვნებით დაგეხმარებით ბანაკის შესახებ.",
     )
-    assert "რამდენი წლისაა" in out
+    # Deterministic approved intro (client hotfix 2026-07-03) asks the child age
+    # with „რამდენი წლის არის თქვენი შვილი?"; match either age-question phrasing.
+    assert "რამდენი წლის" in out
 
 
 def test_13_new_user_price_question_asks_age(monkeypatch):
@@ -333,7 +335,9 @@ def test_15_adult_age_only_still_asks_child_age(monkeypatch):
         monkeypatch, conv, "საზაფხულო ბანაკი მაინტერესებს",
         "სიამოვნებით დაგეხმარებით ბანაკის შესახებ.",
     )
-    assert "თქვენი შვილი რამდენი წლისაა?" in out
+    # Deterministic approved intro (client hotfix 2026-07-03) asks the child age;
+    # match either age-question phrasing.
+    assert "რამდენი წლის" in out
     assert conv.lead.child_age == ""        # adult_age NOT used as child_age
     assert conv.lead.adult_age == "30"
 
