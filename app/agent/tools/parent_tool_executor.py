@@ -1432,12 +1432,19 @@ class ParentToolExecutor:
             _msg_name, _msg_phone = parent_flow._parse_name_phone(
                 self.user_message or "",
             )
-            _msg_single_phone = (
-                bool(_msg_phone)
-                and len(
-                    parent_flow._distinct_valid_phones(self.user_message or "")
-                ) == 1
-            )
+            _distinct = parent_flow._distinct_valid_phones(self.user_message or "")
+            _msg_single_phone = bool(_msg_phone) and len(_distinct) == 1
+            # +43/+49 hotfix (2026-07-04) — when the message has exactly ONE phone
+            # and `_distinct_valid_phones` kept a longer, country-code-preserving
+            # form than `_parse_name_phone` (which could otherwise truncate a
+            # non-995 „+" number into an embedded 9-digit local window), prefer the
+            # FULL international number. Same trailing digits, fuller form.
+            if _msg_single_phone:
+                _full = _distinct[0]
+                _dm = "".join(c for c in (_msg_phone or "") if c.isdigit())
+                _df = "".join(c for c in (_full or "") if c.isdigit())
+                if _dm and _df and _df.endswith(_dm) and len(_df) > len(_dm):
+                    _msg_phone = _full
         except Exception:  # pragma: no cover — defensive, never break a save
             _msg_name, _msg_phone, _msg_single_phone = "", "", False
 

@@ -569,16 +569,47 @@ def _bot_recently_asked_challenge_question(conversation: Conversation) -> bool:
     return False
 
 
+def _message_has_camp_goal_signal(message: str) -> bool:
+    """True when the message carries a clear volunteered Camp goal/challenge
+    signal (screen-time / gadgets / friends / confidence / self-expression /
+    development). Reuses the SAME closed-set stems the challenge fallback uses,
+    so a generic price / payment / date / location question carries no signal and
+    is never treated as a challenge (client hotfix Bug B, 2026-07-04)."""
+    low = (message or "").lower()
+    if not low:
+        return False
+    try:
+        from app.agent.llm.parent_llm_engine import _CHALLENGE_CATEGORIES
+    except Exception:  # pragma: no cover — defensive
+        return False
+    for _category, stems in _CHALLENGE_CATEGORIES:
+        if any(stem in low for stem in stems):
+            return True
+    return False
+
+
 def _maybe_capture_challenge_on_goal_reply(
     conversation: Conversation, message: str,
 ) -> None:
     """Capture the parent's camp goal / challenge onto the lead when this turn
-    answers the goal question. Pure lead mutation; never raises, never alters the
-    reply. PARENT-only (ADULT owns its own ``event_interest`` field)."""
+    answers the goal question OR volunteers a clear Camp goal/challenge in a
+    multi-intent message (challenge + a price/payment/info question — Bug B,
+    2026-07-04). Pure lead mutation; never raises, never alters the reply.
+    PARENT-only (ADULT owns its own ``event_interest`` field).
+
+    The underlying `maybe_capture_challenge_fallback` self-guards: it needs a
+    challenge stem, skips contact/slot/adult-event disclosures, drops pure
+    factual-question clauses (so „ფასი რა არის ბანაკის?" contributes nothing),
+    stores only the parent's own goal wording, and NEVER overwrites an existing
+    challenge. So a price/payment/date/location message is never stored, and a
+    previously meaningful challenge is preserved."""
     try:
         if getattr(conversation, "segment", "") == "ADULT":
             return
-        if not _bot_recently_asked_challenge_question(conversation):
+        if not (
+            _bot_recently_asked_challenge_question(conversation)
+            or _message_has_camp_goal_signal(message)
+        ):
             return
         lead = getattr(conversation, "lead", None)
         if lead is None:
@@ -8290,6 +8321,11 @@ def _name_token_is_valid(token: str) -> bool:
     low = token.lower().strip(".,:;!?-")
     if not low:
         return False
+    # A real name token carries at least one Georgian/Latin letter — a lone „+"
+    # or a punctuation-only run (e.g. the „+" split off an international phone
+    # like „ნიკოლოზ +43…") is NEVER a name (client hotfix 2026-07-04).
+    if not re.search(r"[ა-ჰa-zA-Z]", low):
+        return False
     if low in NAME_FILLER_WORDS:
         return False
     if low in _NAME_REJECT_EXACT:
@@ -8438,11 +8474,20 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
             phone_start = match.start()
             break
         # Do NOT fragment an international number into a spurious 9-digit
-        # Georgian-looking window (client hotfix 2026-07-03): skip the compound
-        # rescue when the token is clearly international — a „+" prefix (a genuine
-        # +995 was already accepted by the primary branch above) or a leading „0"
-        # trunk. The international fallback below then captures the FULL number.
-        if token.lstrip().startswith("+") or digits.startswith("0"):
+        # Georgian-looking window (client hotfix 2026-07-03 / 07-04): skip the
+        # compound rescue when the run is clearly international — a „+" prefix or a
+        # leading „0" trunk. `PHONE_CANDIDATE_PATTERN` only keeps the „+" INSIDE the
+        # token for a „+995…" number; for every other country code (+43 / +49 / …)
+        # the „+" sits in the raw text immediately BEFORE the match, so the old
+        # `token.startswith("+")` check was bypassed and „+43595999733" was
+        # truncated to „595999733". Also check the preceding character so the
+        # international fallback below captures the FULL number.
+        preceded_by_plus = match.start() > 0 and text[match.start() - 1] == "+"
+        if (
+            preceded_by_plus
+            or token.lstrip().startswith("+")
+            or digits.startswith("0")
+        ):
             continue
         # Compound rescue: scan inside the captured digit run for a
         # clean 9-digit window starting with a valid local prefix.
