@@ -969,15 +969,95 @@ def extract_hashtags(text: str) -> list[str]:
     return [_normalize_hashtag(tag) for tag in HASHTAG_PATTERN.findall(text)]
 
 
-async def fetch_post_content(post_id: str, platform: str) -> str:
-    """Fetch a post's caption / message via the Meta Graph API.
+# ── Post-content fetch fields (2026-07-04) ──────────────────────────────────
+# Platform-correct Graph fields for the caption/message fetch. Facebook Page
+# posts carry the operator's caption (with the routing hashtags) in `message`;
+# a small minority (shares / system stories) only have `story`. Instagram media
+# carry it in `caption`. Requesting an Instagram-only field on a Facebook node
+# (or vice-versa) is a hard „(#100) nonexisting field" 400 — so the field list
+# is platform-specific, and the secondary field is tried ONLY when the primary
+# request FAILS (never a combined `fields=message,story` list, which would 400
+# the whole call when one field is invalid for the node type).
+_POST_CONTENT_FIELDS: dict[str, tuple[str, ...]] = {
+    "instagram": ("caption",),
+    "facebook": ("message", "story"),
+    "messenger": ("message", "story"),
+}
+_DEFAULT_POST_CONTENT_FIELDS: tuple[str, ...] = ("message", "story")
 
-    Soft-fail contract:
-      * 400 / 403 / network exception → returns "" so the caller can
-        fall back to comment-text-only routing or generic flow.
-      * Never raises.
-      * Never logs the access token, params dict, or response body.
-        Only status codes and a privacy-safe ``post_id`` tail.
+# Redact any `access_token=…` occurrence before a Meta error string is logged.
+_ACCESS_TOKEN_RE = re.compile(r"access_token=[^&\s\"']+", re.IGNORECASE)
+
+
+def _post_content_fields(platform: str) -> tuple[str, ...]:
+    """Ordered Graph field candidates for the caption/message fetch, per
+    platform. Unknown platforms default to the Facebook shape (`message` →
+    `story`)."""
+    return _POST_CONTENT_FIELDS.get(
+        (platform or "").strip().lower(), _DEFAULT_POST_CONTENT_FIELDS,
+    )
+
+
+def _redact_access_token(text: str) -> str:
+    """Strip any `access_token=<value>` substring before it is logged."""
+    if not text:
+        return ""
+    return _ACCESS_TOKEN_RE.sub("access_token=<redacted>", text)
+
+
+def _meta_error_summary(response) -> str:
+    """Return a privacy-safe one-line summary of a Meta Graph error body.
+
+    Surfaces the diagnostic fields (`error.code` / `error.error_subcode` /
+    `error.type` / `error.fbtrace_id`) plus a token-scrubbed, truncated
+    message so a production 400 is diagnosable (permission vs
+    nonexisting-field vs invalid-token) — WITHOUT ever logging the access
+    token or the raw request URL. Returns "" when the body is not a parseable
+    Meta error (the raw text is NEVER logged, since Graph error payloads can
+    echo the request URL, which carries the token)."""
+    try:
+        data = response.json()
+    except Exception:
+        return ""
+    err = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(err, dict):
+        return ""
+    msg = str(err.get("message") or "")
+    # Belt-and-braces: scrub both the `access_token=` pattern AND the literal
+    # configured token value, so the token can never surface even if Meta ever
+    # echoes it back verbatim.
+    token = getattr(settings, "META_ACCESS_TOKEN", "") or ""
+    if token:
+        msg = msg.replace(token, "<redacted>")
+    msg = _redact_access_token(msg)[:200]
+    return (
+        f"code={err.get('code')} subcode={err.get('error_subcode')} "
+        f"type={err.get('type')!r} fbtrace_id={err.get('fbtrace_id')!r} "
+        f"message={msg!r}"
+    )
+
+
+async def fetch_post_content(post_id: str, platform: str) -> str:
+    """Fetch a post's caption / message text via the Meta Graph API.
+
+    Uses platform-correct fields (Instagram → ``caption``; Facebook Page →
+    ``message`` with a ``story`` safe fallback). When the primary field
+    request FAILS (non-2xx / network error) the next candidate field is tried
+    before giving up, so a single bad field request no longer collapses
+    hashtag routing to UNCLEAR.
+
+    Soft-fail contract (unchanged):
+      * any failure → returns "" so the caller falls back to comment-text /
+        post_id-map / generic routing. Never raises.
+      * Never logs the access token, params dict, or raw response URL. Meta
+        error bodies are surfaced ONLY through the token-scrubbed
+        ``_meta_error_summary`` (code / subcode / type / fbtrace_id / message).
+
+    Caching: a reachable-API result (2xx — even an empty caption) is cached so
+    a genuinely caption-less post is not re-fetched every comment. A fully
+    failed fetch (every field non-2xx / errored) is NOT cached, so hashtag
+    routing recovers on the very next comment the moment a token / permission
+    issue is fixed on the Meta side.
     """
     cached = post_content_cache.get(post_id)
     if cached:
@@ -985,42 +1065,82 @@ async def fetch_post_content(post_id: str, platform: str) -> str:
         if datetime.utcnow() - ts < POST_CACHE_TTL:
             return content
 
-    field_name = "caption" if platform == "instagram" else "message"
     url = f"{_graph_base_url()}/{post_id}"
-    params = {"fields": field_name, "access_token": settings.META_ACCESS_TOKEN}
+    fields = _post_content_fields(platform)
+    api_reachable = False
 
-    for attempt in range(2):
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.get(url, params=params)
+    for field_name in fields:
+        params = {
+            "fields": field_name,
+            "access_token": settings.META_ACCESS_TOKEN,
+        }
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    response = await client.get(url, params=params)
+            except Exception as exc:
+                # Suppress exception args — httpx may carry the redacted URL
+                # (with the token) in the message; log only the exception type.
+                logger.warning(
+                    "[COMMENT] fetch_post_content post=%s platform=%s field=%s "
+                    "attempt=%s error_type=%s (soft-fail)",
+                    post_id, platform, field_name, attempt + 1,
+                    type(exc).__name__,
+                )
+                if attempt < 1:
+                    await asyncio.sleep(1)
+                continue
+
             if response.is_success:
-                data = response.json()
-                content = data.get(field_name) or ""
-                post_content_cache[post_id] = (content, datetime.utcnow())
-                return content
-            # Privacy-safe failure log: status code only, never the
-            # response body (Meta error payloads echo the request URL
-            # which can contain the access token).
-            logger.warning(
-                "[COMMENT] fetch_post_content post=%s attempt=%s status=%s "
-                "(soft-fail, falling back)",
-                post_id,
-                attempt + 1,
-                response.status_code,
-            )
-        except Exception as exc:
-            # Suppress exception args from the log line — they may
-            # carry the redacted URL from httpx with the token.
-            logger.warning(
-                "[COMMENT] fetch_post_content post=%s attempt=%s "
-                "error_type=%s (soft-fail, falling back)",
-                post_id,
-                attempt + 1,
-                type(exc).__name__,
-            )
-        if attempt < 1:
-            await asyncio.sleep(1)
+                api_reachable = True
+                try:
+                    data = response.json()
+                except Exception:
+                    data = {}
+                content = (
+                    data.get(field_name) if isinstance(data, dict) else ""
+                ) or ""
+                if content:
+                    post_content_cache[post_id] = (content, datetime.utcnow())
+                    logger.info(
+                        "[COMMENT] fetch_post_content ok post=%s platform=%s "
+                        "field=%s len=%d",
+                        post_id, platform, field_name, len(content),
+                    )
+                    return content
+                # 2xx but this field is empty — no text here. Try the next
+                # candidate field (if any) instead of retrying the same one.
+                logger.info(
+                    "[COMMENT] fetch_post_content empty post=%s platform=%s "
+                    "field=%s (trying next field if any)",
+                    post_id, platform, field_name,
+                )
+                break
 
+            # Non-2xx — log a token-safe Meta error summary for diagnosis
+            # (surfaces whether it is a permission / field / token error).
+            logger.warning(
+                "[COMMENT] fetch_post_content post=%s platform=%s field=%s "
+                "attempt=%s status=%s error=%s (soft-fail)",
+                post_id, platform, field_name, attempt + 1,
+                response.status_code, _meta_error_summary(response),
+            )
+            if attempt < 1:
+                await asyncio.sleep(1)
+
+    # All candidate fields exhausted.
+    if api_reachable:
+        # API was reachable but no field carried text — cache the definitive
+        # empty so a caption-less post is not re-fetched on every comment.
+        post_content_cache[post_id] = ("", datetime.utcnow())
+    else:
+        # Every field request failed (permission / token / transient). Do NOT
+        # cache, so routing recovers automatically on the next comment.
+        logger.warning(
+            "[COMMENT] fetch_post_content post=%s platform=%s ALL fields failed "
+            "fields=%s — hashtag routing will fall back (post_id map / UNCLEAR)",
+            post_id, platform, list(fields),
+        )
     return ""
 
 
