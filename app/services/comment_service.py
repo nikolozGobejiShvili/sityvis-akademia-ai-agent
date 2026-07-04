@@ -251,6 +251,77 @@ def _build_parent_rich_dm() -> str:
         return PARENT_FIRST_CONTACT_DM
 
 
+# ── Camp-post comment DM (2026-07-04) — comment-aware Summer-Camp reply ──────
+# When a comment routes to the Summer-Camp section (via post_id map, caption
+# hashtag, or legacy PARENT hashtags), answer the ACTUAL question briefly and
+# bridge into the Camp flow with the approved child-age question — instead of
+# the generic category-choice menu. Deterministic; reuses parent_flow's approved
+# constants/builders (no new user-facing wording, no LLM). Never invents dates
+# (date / location reuse the visible-stream-filtered rich DM).
+_CAMP_COMMENT_DATE_MARKERS: tuple[str, ...] = ("როდის", "თარიღ", "რიცხვ")
+_CAMP_COMMENT_LOCATION_MARKERS: tuple[str, ...] = (
+    "სად", "ლოკაცი", "მისამართ", "ტარდება",
+)
+# An EXPLICIT „give me information / details" request → the approved Camp intro
+# (which bridges into the flow with the child-age question). A bare interest
+# marker („მაინტერესებს") is NOT here — it keeps the existing rich first-contact
+# DM, so current behaviour / tests are preserved.
+_CAMP_COMMENT_INFO_MARKERS: tuple[str, ...] = ("ინფორმაცი", "დეტალ")
+
+
+def _build_camp_comment_dm(comment_text: str) -> str:
+    """Return a comment-aware Summer-Camp first-contact DM.
+
+      * price question        → approved price block + child-age bridge
+      * date question         → visible-stream rich DM + child-age bridge (never invents)
+      * location question     → rich DM (carries the camp location) + child-age bridge
+      * explicit info request → approved Camp intro (ends with the child-age question)
+      * everything else       → the existing rich first-contact DM (UNCHANGED)
+
+    Falls back to the plain rich DM on any error. Reuses parent_flow's approved
+    constants so no new user-facing Georgian wording is introduced here."""
+    text = (comment_text or "").strip()
+    low = text.lower()
+    try:
+        from app.flows import parent_flow as _pf
+    except Exception:  # pragma: no cover — defensive
+        return _build_parent_rich_dm()
+    # The approved child-age question that bridges a comment into the Camp flow.
+    try:
+        bridge = _pf._CAMP_INTRO_TEXT.split("\n\n")[-1].strip()
+    except Exception:  # pragma: no cover — defensive
+        bridge = ""
+
+    # 1) Price (not payment) → approved price block + bridge.
+    try:
+        if _pf._is_camp_price_intent(text) and not _pf._is_payment_question(text):
+            block = _pf._camp_price_block()
+            return f"{block}\n\n{bridge}" if bridge else block
+    except Exception:  # pragma: no cover — defensive
+        pass
+
+    # 2) Date / 3) Location → rich DM (visible stream dates + location, never
+    #    invents) + bridge into the Camp flow.
+    if (
+        any(m in low for m in _CAMP_COMMENT_DATE_MARKERS)
+        or any(m in low for m in _CAMP_COMMENT_LOCATION_MARKERS)
+    ):
+        rich = _build_parent_rich_dm()
+        if rich and rich.strip() and bridge:
+            return f"{rich.rstrip()}\n\n{bridge}"
+        return rich
+
+    # 4) Explicit „ინფორმაცია / დეტალები" request → approved Camp intro.
+    if any(m in low for m in _CAMP_COMMENT_INFO_MARKERS):
+        try:
+            return _pf._CAMP_INTRO_TEXT
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    # 5) Default → the existing rich first-contact DM (behaviour preserved).
+    return _build_parent_rich_dm()
+
+
 def _build_adult_rich_dm() -> str:
     """PATCH 3 — ADULT first-contact rich DM.
 
@@ -980,6 +1051,27 @@ async def resolve_section_from_post(
     NOT consulted here — callers route to the legacy
     `determine_segment_from_post` for that path.
     """
+    # (2026-07-04, ADDITIVE) Section-level post_id → section mapping. Consulted
+    # BEFORE the Meta caption fetch so a comment under a mapped Camp / SS / Adult
+    # post routes correctly even when `fetch_post_content` fails or the caption
+    # carries no literal „#" hashtag. Falls through to the UNCHANGED caption-
+    # hashtag path below when no post_id mapping exists — hashtag routing is
+    # untouched.
+    try:
+        mapped = admin_config_service.find_section_from_post_id(post_id)
+    except Exception as exc:
+        mapped = None
+        logger.warning(
+            "[COMMENT] find_section_from_post_id failed for post=%s: %s",
+            post_id, exc,
+        )
+    if mapped is not None:
+        logger.info(
+            "[COMMENT] Post %s → admin_section=%s status=%s via post_id map",
+            post_id, mapped.get("id"), mapped.get("status"),
+        )
+        return mapped
+
     content = await fetch_post_content(post_id, platform)
     hashtags = extract_hashtags(content)
     try:
@@ -1266,9 +1358,13 @@ async def send_dm_from_comment(
             # (never Camp content). Camp (`type=camp`) is unaffected.
             message = _build_sunday_school_comment_dm(admin_section)
         elif section_type in {"camp", "kids_program"} and segment == "PARENT":
-            # Existing PARENT path covers summer_camp via admin_config
-            # (rich-DM builder calls admin_config_service first).
-            message = _build_parent_rich_dm()
+            # Existing PARENT path covers summer_camp via admin_config. Send a
+            # comment-aware Camp DM (price / dates / location / intro) that
+            # bridges into the Camp flow, instead of the generic category menu
+            # (2026-07-04). Sunday School (kids_program) is already handled by
+            # the `_is_sunday_school_section` branch ABOVE, so this only reaches
+            # the actual Summer-Camp section.
+            message = _build_camp_comment_dm(comment_text)
         elif section_type == "adult_events" and segment == "ADULT":
             # Generic Adult Event Comment Patch (2026-06-09).
             # Prefer the operator-driven active-events list (sourced
@@ -1301,7 +1397,10 @@ async def send_dm_from_comment(
         # builder itself, so the caller never needs a try/except. The
         # UNCLEAR path keeps the existing two-segment routing menu.
         if segment == "PARENT":
-            message = _build_parent_rich_dm()
+            # Comment-aware Camp DM for a PARENT comment resolved via the legacy
+            # hashtag fallback (no admin section) — bridge into the Camp flow
+            # instead of the category menu (2026-07-04).
+            message = _build_camp_comment_dm(comment_text)
         elif segment == "ADULT":
             # Generic Adult Event Comment Patch (2026-06-09) — mirror
             # of the admin-section branch above so a generic `#event`

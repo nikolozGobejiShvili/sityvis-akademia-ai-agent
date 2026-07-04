@@ -178,11 +178,16 @@ def test_6_ss_full_no_camp_dm(monkeypatch):
 
 
 def test_7_camp_comment_still_sends_camp_dm(monkeypatch):
-    # Camp section (type=camp) must STILL render the Summer-Camp rich DM (2150).
+    # Camp section (type=camp) must STILL send a Summer-Camp DM — never the
+    # Sunday-School DM (the leak guarantee this suite protects).
+    # Comment-aware Camp DM (2026-07-04): the shared helper's comment text is an
+    # explicit „ინფორმაცია მინდა" request, which now returns the approved Camp
+    # intro (a Camp DM) instead of the full rich DM. Camp content present, SS
+    # content absent — the leak fix is fully preserved.
     ok, text = _run_comment(monkeypatch, _CAMP_SECTION, segment="PARENT")
     assert ok is True
-    assert CAMP_PRICE in text
-    assert SS_COMING_SOON not in text
+    assert "ციფრულ ხმაურს" in text        # approved Camp intro → still a Camp DM
+    assert SS_COMING_SOON not in text      # never the Sunday-School DM
 
 
 def test_8_adult_comment_not_impacted(monkeypatch):

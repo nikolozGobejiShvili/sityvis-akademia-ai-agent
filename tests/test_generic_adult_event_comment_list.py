@@ -757,11 +757,15 @@ def test_camp_segment_routing_still_uses_parent_rich_dm(
         lambda: "PARENT RICH DM STUB",
     )
 
+    # A bare interest comment exercises the default first-contact path (the
+    # rich DM); price/date/location/info comments are covered by the comment-
+    # aware tests in test_comment_post_id_section_mapping_2026_07_04.py. This
+    # test only asserts camp SEGMENT routing (camp DM, never the adult list).
     ok = _run(comment_service.send_dm_from_comment(
         sender_id="camp_user", platform="facebook",
         post_id="post_camp", segment="PARENT",
         comment_id="cm_camp",
-        comment_text="ფასი?",
+        comment_text="მაინტერესებს",
     ))
     assert ok
     body = sent[0][1]

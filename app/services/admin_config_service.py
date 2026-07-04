@@ -294,6 +294,59 @@ def find_section_from_comment_text(comment_text: str) -> dict[str, Any] | None:
     return find_section_from_post_hashtags(tags)
 
 
+# ── Section-level post_id → section mapping (2026-07-04, ADDITIVE) ───────────
+# Deterministic fallback so a comment under a Camp / Sunday-School / Adult post
+# routes to the right section even when the Meta caption fetch fails or the
+# caption carries no literal „#" hashtag. This NEVER touches, reads, or
+# overwrites section `hashtags` — hashtag routing (`find_section_from_post_hashtags`)
+# is completely unchanged and still works with no post_id mapping present.
+#
+# Canonical operator field: ``facebook_post_ids`` (a YAML list of post ids).
+# The singular ``facebook_post_id`` and the ``post_ids`` / ``post_id`` aliases
+# are also accepted so an operator can use whichever is convenient. First
+# matching section wins (sections.yaml order).
+_SECTION_POST_ID_FIELDS: tuple[str, ...] = (
+    "facebook_post_ids", "post_ids", "facebook_post_id", "post_id",
+)
+
+
+def _section_post_ids(section: dict[str, Any]) -> set[str]:
+    """Collect the post ids mapped onto a section from any accepted field
+    (list or scalar). Returns an empty set when none are configured — so an
+    unmapped section is simply skipped, never matched."""
+    ids: set[str] = set()
+    if not isinstance(section, dict):
+        return ids
+    for field in _SECTION_POST_ID_FIELDS:
+        val = section.get(field)
+        if not val:
+            continue
+        if isinstance(val, (list, tuple, set)):
+            ids.update(str(v).strip() for v in val if str(v).strip())
+        else:
+            s = str(val).strip()
+            if s:
+                ids.add(s)
+    return ids
+
+
+def find_section_from_post_id(post_id: str) -> dict[str, Any] | None:
+    """Return the section explicitly mapped to ``post_id`` via a section-level
+    post-id field, or ``None`` when no section maps it.
+
+    Additive fallback to :func:`find_section_from_post_hashtags`: consulted
+    BEFORE the caption fetch by the comment router, but it NEVER affects hashtag
+    routing and NEVER mutates any section data (read-only). First match wins.
+    """
+    pid = (post_id or "").strip()
+    if not pid:
+        return None
+    for section in load_sections():
+        if pid in _section_post_ids(section):
+            return section
+    return None
+
+
 # -- templates -------------------------------------------------------------
 
 
