@@ -818,6 +818,18 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     if resume_ack is not None:
         return resume_ack
 
+    # Multi-child age record-and-continue (2026-07-06 client fix) — a parent
+    # registering two children states two ages („12-14 წლის" / „12 და 14 წლის").
+    # The age-range guard used to silently drop „12-14" (mistaking it for the
+    # advertised „9-17" band), so the booking kept re-asking the age. Record BOTH
+    # ages BEFORE the engine (child_age = first in-band gate value; full list in
+    # the manager-visible deeper_concern field), acknowledge, and continue. The
+    # band is still never captured. Returns None for a single age / the band / an
+    # eligibility question → the normal flow continues unchanged.
+    multi_child_age_response = _maybe_handle_multi_child_age(conversation, message)
+    if multi_child_age_response is not None:
+        return multi_child_age_response
+
     # Turn Intent Gateway (Reasoning Layer Phase 2, 2026-06-23) — central,
     # DETERMINISTIC, metadata-only intent classification computed ONCE per turn
     # and consulted by the sticky domain handlers so they never consume the
@@ -1676,6 +1688,133 @@ def _child_age_known(lead: Lead | None) -> bool:
     if lead is None:
         return False
     return bool(_extract_age_digits((lead.child_age or "")))
+
+
+# Multi-child age record-and-continue (2026-07-06 client fix, REVISED). A parent
+# registering two children states two ages („12-14 წლის" / „12 და 14 წლის" /
+# „12, 14 წლის", or a bare „12 და 14" right after the age question). The old
+# range guard silently dropped „12-14" (mistaking it for the advertised „9-17"
+# band), so the booking kept re-asking the age. We now RECORD BOTH ages —
+# child_age holds the first in-band age (the single-value booking gate); ALL
+# stated ages are preserved in the manager-visible `deeper_concern` field so the
+# Google Sheet + manager handoff show both — acknowledge, and CONTINUE the flow
+# (no „which one?" question). The advertised band („9-17") is still never
+# captured.
+_MULTI_CHILD_AGE_ACK_2 = (
+    "ორი ბავშვის ასაკი მივიღე — {a} და {b} წელი. ორივე ასაკი ჩავიწერე. "
+    "ბანაკი ორივე ასაკისთვის შესაბამისია."
+)
+# Approved discovery goal question (mirrors the „რას ელოდებით" question the
+# engine asks and `_GOAL_QUESTION_ASKED_STEMS` detects). Appended to the
+# acknowledgement to continue discovery when the goal is not yet known.
+_CAMP_GOAL_QUESTION_CONTINUE = "რას ელოდებით ბანაკისგან?"
+
+
+def _multi_child_manager_note(ages: list[int]) -> str:
+    """Manager-visible note, e.g. „ორი შვილი: 12 და 14 წლის" (2 ages) or
+    „შვილების ასაკები: 12, 14, 16 წლის" (3+). Stored so the Google Sheet + the
+    manager handoff show every stated age even though child_age holds one."""
+    if len(ages) == 2:
+        return f"ორი შვილი: {ages[0]} და {ages[1]} წლის"
+    listed = ", ".join(str(a) for a in ages)
+    return f"შვილების ასაკები: {listed} წლის"
+
+
+def _record_multi_child_ages(
+    lead: Lead, all_ages: list[int], in_band: list[int],
+) -> None:
+    """Persist all stated child ages for manager context WITHOUT a schema
+    change: child_age keeps the first IN-BAND age (the single-value booking
+    gate); the full list lands in `deeper_concern` — a Sheets + manager-email
+    field the engine discovery path does not otherwise populate. Idempotent —
+    never duplicates the note, never clobbers an existing one."""
+    if in_band:
+        lead.child_age = str(in_band[0])
+    note = _multi_child_manager_note(all_ages)
+    existing = (lead.deeper_concern or "").strip()
+    if note in existing:
+        return
+    lead.deeper_concern = f"{note}. {existing}".strip() if existing else note
+
+
+def _build_multi_child_ack(in_band: list[int]) -> str:
+    """Acknowledge the ELIGIBLE ages (never claims suitability for an age outside
+    the camp band)."""
+    if len(in_band) == 2:
+        return _MULTI_CHILD_AGE_ACK_2.format(a=in_band[0], b=in_band[1])
+    listed = ", ".join(str(a) for a in in_band)
+    return (
+        f"რამდენიმე ბავშვის ასაკი მივიღე — {listed} წელი. ყველა ასაკი ჩავიწერე. "
+        "ბანაკი ყველა ასაკისთვის შესაბამისია."
+    )
+
+
+def _maybe_handle_multi_child_age(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Deterministic multi-child age RECORD-AND-CONTINUE (2026-07-06 client fix).
+
+    When the parent states TWO+ distinct child ages in a compact expression
+    („12-14 წლის" / „12 და 14 წლის" / „12, 14 წლის", or a bare „12 და 14" right
+    after the age question) and no single child age is on record yet, record ALL
+    ages (child_age = first in-band age; the full list in the manager-visible
+    `deeper_concern` field), acknowledge, and continue — asking the camp goal
+    when it is not yet known. Runs BEFORE the engine so the two-age turn is never
+    dropped by the range guard. The advertised band („9-17") is never captured; a
+    single age, an eligibility QUESTION, or scattered numbers all defer. Returns
+    None to defer to the normal flow."""
+    lead = getattr(conversation, "lead", None)
+    if lead is None:
+        return None
+    # PARENT/camp context only — mirrors the _ensure_camp_age_question gate.
+    if getattr(conversation, "segment", "") != "PARENT":
+        return None
+    # Age already known → nothing to record (a later different-child correction
+    # is owned by _maybe_requalify_child, which runs earlier).
+    if _child_age_known(lead):
+        return None
+    try:
+        from app.services import admin_config_service
+        age_min, age_max = admin_config_service.get_camp_age_bounds()
+    except Exception:  # pragma: no cover — defensive, never break the turn
+        age_min, age_max = 9, 17
+    try:
+        from app.agent.llm.parent_llm_engine import (
+            _bot_recently_asked_child_age,
+            extract_distinct_child_ages,
+        )
+        ages = extract_distinct_child_ages(
+            message, age_min=age_min, age_max=age_max,
+            age_question_pending=_bot_recently_asked_child_age(conversation),
+        )
+    except Exception:  # pragma: no cover — defensive
+        return None
+    if len(ages) < 2:
+        return None
+    in_band = [a for a in ages if age_min <= a <= age_max]
+    if not in_band:
+        # All ages outside the camp band → let the normal under/over-age
+        # handling deal with it (never claim suitability).
+        return None
+    # Record: child_age = first in-band gate value + all ages for the manager.
+    _record_multi_child_ages(lead, ages, in_band)
+    logger.info(
+        "[parent_flow] multi-child ages recorded gate_age=%s all=%s in_band=%s",
+        lead.child_age, ages, in_band,
+    )
+    if len(in_band) < 2:
+        # Mixed sibling pair (only one age eligible): the eligible age is now
+        # captured so the booking never re-asks; continue the normal flow rather
+        # than claim both ages are suitable.
+        return None
+    ack = _build_multi_child_ack(in_band)
+    # Continue the flow: if a booking is already in progress let it continue
+    # (age is now set → no re-ask); otherwise ask the goal when not yet known.
+    if getattr(conversation, "pending_booking", None):
+        return ack
+    if not (lead.challenge or "").strip():
+        return f"{ack} {_CAMP_GOAL_QUESTION_CONTINUE}"
+    return ack
 
 
 def _strip_redundant_age_question_if_known(

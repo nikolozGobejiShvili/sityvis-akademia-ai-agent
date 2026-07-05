@@ -290,6 +290,87 @@ def maybe_capture_child_age_fallback(
             return
 
 
+# A COMPACT multi-age expression: two+ 1-2 digit numbers connected by a range
+# dash, „და", or comma (optionally with an intervening „წლ…", repeated). This is
+# how a parent states siblings' ages — „12-14" / „12 და 14" / „12, 14" /
+# „12 წლის და 14 წლის" / „12 და 14 და 16" — NOT two numbers scattered across a
+# sentence in different roles („10 დღიანია? … ჩემი შვილი 14 წლისაა").
+_MULTI_AGE_EXPR_PATTERN = re.compile(
+    r"(?<!\d)\d{1,2}(?:\s*წლ\w*)?\s*(?:[-–—]|და|,)\s*"
+    r"\d{1,2}(?:(?:\s*წლ\w*)?\s*(?:და|,)\s*\d{1,2})*(?!\d)"
+)
+# Camp-eligibility QUESTION markers — „ბანაკი 12-14 წლის ბავშვებისთვისაა?" asks
+# who the camp is FOR; combined with „ბანაკ" it is never a parent stating their
+# OWN children's ages.
+_ELIGIBILITY_TARGET_MARKERS: tuple[str, ...] = (
+    "ბავშვებისთვის", "ბავშვებზეა", "ასაკისთვისაა", "წლისთვისაა", "ვისთვის",
+)
+
+
+def extract_distinct_child_ages(
+    message: str, *, age_min: int = 9, age_max: int = 17,
+    age_question_pending: bool = False,
+) -> list[int]:
+    """Return the distinct plausible child ages (5–20) a parent stated in a
+    COMPACT multi-age expression, first-seen order.
+
+    Detects the sibling-age forms „12-14 წლის" / „12 და 14 წლის" / „12, 14 წლის"
+    / „12 წლის და 14 წლის" (and a bare „12 და 14" / „12-14" right after the age
+    question, via ``age_question_pending``). Returns ``[]`` when:
+      * there is NO compact multi-age expression — a lone single age is NOT
+        multi-child (left to the single-age fallback), and two numbers scattered
+        across a sentence in different roles („10 დღიანია … 14 წლისაა") are not
+        harvested;
+      * the expression is the advertised camp band (dash-range on the EXACT
+        bounds „9-17", or a „…დან…წლამდე" construction);
+      * the message is a camp-eligibility QUESTION („ბანაკი … ბავშვებისთვისაა?");
+      * there is no age context (no წლ/წელ, no child word, no
+        ``age_question_pending``).
+
+    Numbers are limited to 5–20 so a phone / price / day-count is never
+    harvested. Callers treat ``len(ages) >= 2`` as the multi-child signal, and
+    should filter to ``age_min..age_max`` for the single-value booking gate.
+    Pure — never mutates the lead, never asks anything, never books.
+    """
+    if not message:
+        return []
+    age_source = _strip_phone_numbers(message)
+    text = age_source.lower()
+    # Age context is required (or the bot just asked the age — a bare „12 და 14").
+    has_age_word = "წლ" in text or "წელ" in text
+    has_child_word = "შვილ" in text or "ბავშვ" in text
+    if not (has_age_word or has_child_word or age_question_pending):
+        return []
+    # A camp-eligibility QUESTION („ბანაკი … ბავშვებისთვისაა?") is not the
+    # parent's OWN children's ages.
+    if "ბანაკ" in text and any(m in text for m in _ELIGIBILITY_TARGET_MARKERS):
+        return []
+    # Advertised-band „…დან…წლამდე" construction → never child ages.
+    if _AGE_RANGE_DAN_PATTERN.search(age_source) or "წლამდე" in text:
+        return []
+    try:
+        lo_bound, hi_bound = int(age_min), int(age_max)
+    except (TypeError, ValueError):
+        lo_bound, hi_bound = 9, 17
+    # A COMPACT multi-age expression must be present — otherwise this is not a
+    # sibling-age input.
+    expr = _MULTI_AGE_EXPR_PATTERN.search(age_source)
+    if not expr:
+        return []
+    span = expr.group(0)
+    nums = [int(n) for n in re.findall(r"\d{1,2}", span)]
+    # A dash-range on the EXACT camp bounds is the advertised band, not ages.
+    is_dash = any(d in span for d in ("-", "–", "—"))
+    if is_dash and len(nums) == 2 and {nums[0], nums[1]} == {lo_bound, hi_bound}:
+        return []
+    # Distinct plausible child ages (5–20), first-seen order.
+    ages: list[int] = []
+    for n in nums:
+        if 5 <= n <= 20 and n not in ages:
+            ages.append(n)
+    return ages
+
+
 def maybe_capture_phone_fallback(lead: Lead, message: str) -> None:
     """Belt-and-braces capture of the parent's phone — the phone counterpart
     of :func:`maybe_capture_child_age_fallback`. Lets the deterministic state
