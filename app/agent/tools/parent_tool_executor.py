@@ -95,9 +95,12 @@ def _mark_manager_notified(sender_id: str) -> None:
     try:
         from app.services import redis_state_service
         if redis_state_service.is_enabled():
+            # Per-user session guard — expire on the same rolling window as the
+            # conversation (8-day default). Positional TTL for mock-compat.
             redis_state_service.set_json(
                 _manager_notified_redis_key(sender_id),
                 {"sender_id": sender_id, "notified": True},
+                redis_state_service.conversation_ttl_seconds(),
             )
     except Exception as exc:
         logger.warning(

@@ -625,6 +625,8 @@ async def handle_comment(
         if comment_id:
             _mark_comment_processed_local(comment_id)
             if redis_state_service.is_enabled():
+                # Dedup guard — expire on the rolling session window (8-day
+                # default). Positional TTL for mock-compat.
                 redis_state_service.set_json(
                     f"processed_comment:{comment_id}",
                     {
@@ -635,6 +637,7 @@ async def handle_comment(
                         "created_at": now_tbilisi_iso(),
                         "dm_sent": bool(dm_ok),
                     },
+                    redis_state_service.conversation_ttl_seconds(),
                 )
 
     except Exception as exc:

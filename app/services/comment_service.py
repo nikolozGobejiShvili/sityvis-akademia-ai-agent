@@ -1654,6 +1654,8 @@ def _mark_comment_expired(comment_id: str) -> None:
     try:
         from app.services import redis_state_service
         if redis_state_service.is_enabled():
+            # Dedup guard — expire on the rolling session window (8-day
+            # default). Positional TTL for mock-compat.
             redis_state_service.set_json(
                 f"processed_comment:{comment_id}",
                 {
@@ -1661,6 +1663,7 @@ def _mark_comment_expired(comment_id: str) -> None:
                     "marked_by": "comment_followup_scheduler",
                     "reason": "expired_or_unrecoverable",
                 },
+                redis_state_service.conversation_ttl_seconds(),
             )
     except Exception as exc:
         logger.warning(

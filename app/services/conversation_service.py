@@ -69,7 +69,12 @@ def _save_conversation_to_redis(conversation: Conversation) -> None:
             "[redis] conversation %s serialise failed: %s", key, exc,
         )
         return
-    redis_state_service.set_json(key, payload)
+    # 8-day rolling TTL: the conversation expires that many seconds after the
+    # user's LAST message. Passed positionally so test doubles that stub
+    # set_json(key, value, ttl=None) stay compatible.
+    redis_state_service.set_json(
+        key, payload, redis_state_service.conversation_ttl_seconds(),
+    )
 
 # -- Segment classification (Phase 3.6A — owner-confirmed policy) -----------
 #
@@ -898,7 +903,7 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
     _record_post_response_followup_markers(conversation)
 
     # P3-B — write-through to Redis so a server restart can restore
-    # state. TTL refreshes on every save (sliding 7-day default).
+    # state. TTL refreshes on every save (rolling 8-day conversation window).
     _save_conversation_to_redis(conversation)
 
     _lead = conversation.lead

@@ -393,6 +393,12 @@ class Settings:
     REDIS_URL: str = ""
     REDIS_ENABLED: bool = True
     REDIS_TTL_SECONDS: int = 604800
+    # Per-conversation / per-user session TTL. A conversation's Redis state
+    # expires this many seconds after the user's LAST message; every
+    # write-through refreshes the expiry (rolling window), and distinct users
+    # expire independently. Default 691200 = 8 days (7-day follow-up cadence +
+    # 1-day buffer) so old user memory clears automatically.
+    REDIS_CONVERSATION_TTL_SECONDS: int = 691200
     # Admin Panel MVP — operator UI for section / template editing.
     # Default off so a misconfigured deploy never exposes the panel.
     # When enabled, the routes under /admin require HTTP Basic Auth
@@ -537,6 +543,9 @@ class Settings:
             REDIS_ENABLED=_parse_bool_optional("REDIS_ENABLED", True),
             REDIS_TTL_SECONDS=_parse_int_optional(
                 "REDIS_TTL_SECONDS", 604800,
+            ),
+            REDIS_CONVERSATION_TTL_SECONDS=_parse_int_optional(
+                "REDIS_CONVERSATION_TTL_SECONDS", 691200,
             ),
             ADMIN_PANEL_ENABLED=_parse_bool_optional(
                 "ADMIN_PANEL_ENABLED", False,

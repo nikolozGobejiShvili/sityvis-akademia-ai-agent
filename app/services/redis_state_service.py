@@ -7,7 +7,7 @@ handler) goes through the small API exposed here:
     is_enabled()         → bool   — feature flag + connection both up
     ping()               → bool   — round-trip health check
     get_json(key)        → dict | None
-    set_json(key, value, ttl=None) → bool
+    set_json(key, value, ttl_seconds=None) → bool
     delete(key)          → bool
     exists(key)          → bool
 
@@ -59,6 +59,33 @@ def _redis_ttl() -> int:
         return int(getattr(settings, "REDIS_TTL_SECONDS", 0) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+# Per-conversation / per-user session TTL (rolling 8-day window). Used by the
+# conversation write-through and the per-user session guards (manager_notified,
+# processed_comment) so a user's Redis memory expires ~8 days after their last
+# activity; every write refreshes the expiry. Default 691200 = 8 days.
+_CONVERSATION_TTL_DEFAULT = 691200
+
+
+def _conversation_ttl() -> int:
+    try:
+        value = int(
+            getattr(settings, "REDIS_CONVERSATION_TTL_SECONDS", _CONVERSATION_TTL_DEFAULT)
+            or _CONVERSATION_TTL_DEFAULT
+        )
+    except (TypeError, ValueError):
+        return _CONVERSATION_TTL_DEFAULT
+    return value if value > 0 else _CONVERSATION_TTL_DEFAULT
+
+
+def conversation_ttl_seconds() -> int:
+    """Public accessor for the rolling per-conversation / per-user session TTL
+    in seconds (``settings.REDIS_CONVERSATION_TTL_SECONDS``, default 8 days).
+
+    Callers pass this to :func:`set_json` for any per-user key so it expires a
+    fixed window after the user's last activity, refreshed on every write."""
+    return _conversation_ttl()
 
 
 def _url_configured() -> bool:
@@ -187,15 +214,30 @@ def get_json(key: str) -> dict | None:
         return None
 
 
-def set_json(key: str, value: dict, ttl: int | None = None) -> bool:
-    """Write a JSON-safe value with optional TTL (defaults to settings.REDIS_TTL_SECONDS).
+def set_json(
+    key: str,
+    value: dict,
+    ttl_seconds: int | None = None,
+    *,
+    ttl: int | None = None,
+) -> bool:
+    """Write a JSON-safe value with an optional per-call TTL.
+
+    ``ttl_seconds`` — when provided (and > 0) the key is written with a Redis
+    ``EX`` expiry, which is REFRESHED on every write (a rolling window). When
+    ``None`` the behaviour is unchanged: it falls back to the module default
+    ``settings.REDIS_TTL_SECONDS``. ``ttl`` is a backward-compatible keyword
+    alias for ``ttl_seconds`` (kept for existing callers); ``ttl_seconds``
+    wins when both are given.
 
     Returns True on success, False on any failure. Never raises.
     """
     if not is_enabled():
         return False
-    if ttl is None:
-        ttl = _redis_ttl()
+    if ttl_seconds is None:
+        ttl_seconds = ttl
+    if ttl_seconds is None:
+        ttl_seconds = _redis_ttl()
     try:
         payload = json.dumps(value, ensure_ascii=False, default=str)
     except Exception as exc:
@@ -205,8 +247,8 @@ def set_json(key: str, value: dict, ttl: int | None = None) -> bool:
         )
         return False
     try:
-        if ttl and ttl > 0:
-            _client.set(key, payload, ex=ttl)
+        if ttl_seconds and ttl_seconds > 0:
+            _client.set(key, payload, ex=ttl_seconds)
         else:
             _client.set(key, payload)
         return True
