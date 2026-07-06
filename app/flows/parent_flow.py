@@ -7093,6 +7093,12 @@ def _maybe_handle_contact_collection(
             )
             if not (lead.phone or "").strip():
                 return _BOOKING_ASK_PHONE_ONLY
+            # BUG 1 (2026-07-06) — the user just gave a NAME, not a number.
+            # Thank by name and move to day/time; never repeat „ნომერი მივიღე"
+            # (which wrongly re-acknowledges the phone the user already gave).
+            first_name = cand_name.split()[0] if cand_name else ""
+            if first_name:
+                return _CONTACT_THANKS_NAME_ASK_TIME.format(name=first_name)
             return _CONTACT_GOT_NUMBER_ASK_TIME
 
     # A volunteered phone is the unambiguous trigger. Without a phone we

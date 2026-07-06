@@ -877,14 +877,37 @@ FORBIDDEN_PHRASE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
         "ჩამოუყალიბეთ",
         "მითხარით",
     ),
-    # "აზრი აქვს" → "გასაგებია" / "ეს გასაგები მოთხოვნაა".
+    # BUG 2 (2026-07-06) — animate-possession grammar. Children take „გყავთ"
+    # (animate), never „გაქვთ" (inanimate). The plural-children age question
+    # is LLM free-generation (in no template), so rewrite it here.
+    (
+        "შვილები გაქვთ",
+        "შვილები გყავთ",
+    ),
+    (
+        "ბავშვები გაქვთ",
+        "ბავშვები გყავთ",
+    ),
+    # BUG 3 (2026-07-06) — „ეს გასაგები მოთხოვნაა" is banned in user-facing
+    # replies. Catch the phrase (and its „ძალიან …" variant) straight from
+    # model output, and rewrite the whole „აზრი აქვს" family to the neutral
+    # „გასაგებია". Longer/more-specific forms are listed first so the bare
+    # entry never partially rewrites them.
+    (
+        "ეს გასაგები მოთხოვნაა",
+        "გასაგებია",
+    ),
+    (
+        "გასაგები მოთხოვნაა",
+        "გასაგებია",
+    ),
     (
         "ეს ძალიან აზრი აქვს",
-        "ეს ძალიან გასაგები მოთხოვნაა",
+        "გასაგებია",
     ),
     (
         "ამას აზრი აქვს",
-        "ეს გასაგებია",
+        "გასაგებია",
     ),
     (
         "აზრი აქვს",
