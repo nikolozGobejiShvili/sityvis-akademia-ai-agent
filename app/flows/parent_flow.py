@@ -762,6 +762,19 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             conversation, early_operational_response,
         )
 
+    # BUG 2 (2026-07-06) — the exact reservation/booking FEE amount is not
+    # configured. A „ჯავშნის საფასური რამდენია?" question must defer to the
+    # manager (unknown-detail pattern), never invent a vague „part of the full
+    # price" answer. Runs before the price/payment handling so it takes priority
+    # over the payment-method answer; the METHOD question is left untouched.
+    reservation_fee_response = _maybe_handle_reservation_fee_question(
+        conversation, message,
+    )
+    if reservation_fee_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, reservation_fee_response,
+        )
+
     # Client follow-up hotfix (2026-06-30) — political / party-identity bait →
     # neutral redirect; an unclear Georgian phrase → polished clarification. Both
     # run before the static welcome / engine so they preempt the funnel (no
@@ -3670,6 +3683,51 @@ def _maybe_handle_unknown_operational_early(
     return answer
 
 
+# BUG 2 (2026-07-06) — the exact reservation/booking FEE amount is not
+# configured, so a „how much is the reservation fee?" question must defer to the
+# manager (unknown-detail pattern), never invent a vague „it's part of the full
+# price" answer. Scoped to the AMOUNT question; the payment METHOD question
+# („როგორ ხდება გადახდა?") keeps its own approved answer.
+_RESERVATION_FEE_DEFER: str = (
+    "რაც შეეხება ჯავშნის საფასურს, ამ დეტალებს მენეჯერი გაგაცნობთ: 558 67 47 33"
+)
+
+
+def _is_reservation_fee_amount_question(message: str) -> bool:
+    """True for a reservation/booking-FEE AMOUNT question („ჯავშნის საფასური
+    რამდენია?" / „რამდენია ჯავშანი?" / „რამდენი უნდა გადავიხადო დასაჯავშნად?").
+    False for a payment-METHOD question („როგორ ხდება გადახდა?") and for a
+    consultation/camp price question that does not reference the reservation."""
+    low = (message or "").lower()
+    # Must reference the booking / reservation fee.
+    if not (("ჯავშ" in low) or ("დასაჯავშნ" in low) or ("დაჯავშნ" in low)):
+        return False
+    # Must ask the AMOUNT (how much / what does it cost), not the METHOD.
+    if not (("რამდენ" in low) or ("რა ღირ" in low) or ("ღირს" in low)):
+        return False
+    # A payment-METHOD question keeps its own approved wording elsewhere.
+    if "როგორ ხდება" in low:
+        return False
+    return True
+
+
+def _maybe_handle_reservation_fee_question(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Deterministic manager defer for an unknown reservation-FEE amount.
+    Returns None for everything else (incl. the payment-method question). ADULT
+    is skipped (adult flow owns its turns)."""
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    if not _is_reservation_fee_amount_question(message):
+        return None
+    logger.info(
+        "[parent_flow] reservation-fee amount unknown → manager defer (sender=%s)",
+        conversation.sender_id,
+    )
+    return _RESERVATION_FEE_DEFER
+
+
 def _maybe_handle_camp_topic_facts(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -5734,6 +5792,157 @@ def _today_consultation_closed(now: datetime) -> bool:
     return now + calendar_service.SLOT_BUFFER > last_slot_start
 
 
+# ── BUG 6/7 (2026-07-06) — consultation slots MUST come from the real calendar ──
+# Live bug: a bare day/daypart reply („ხვალ" / „საღამოს") was answered with
+# HARDCODED example times („მაგალითად 12:00, 15:00 ან 18:00") that were never
+# checked against Google Calendar, so a busy example was offered and then
+# rejected. These helpers resolve the requested day, query FreeBusy via the
+# existing `get_free_slots`, and offer ONLY real free slots. A flexible reply
+# („ნებისმიერი დრო" / „სულ ერთია", incl. common Latin transliteration) offers
+# today-first real slots. Manager fallback is NEVER used for scheduling; a
+# genuine calendar OUTAGE gets a technical retry line instead.
+
+# Technical fallback ONLY for a genuine Calendar API outage (never a manager
+# handoff — scheduling must stay calendar-driven).
+_BOOKING_SLOTS_TECH_FALLBACK: str = (
+    "ამ მომენტში თავისუფალი დროების შემოწმება ვერ ხერხდება. "
+    "სცადეთ რამდენიმე წუთში ან მომწერეთ სხვა სასურველი დღე."
+)
+
+# Narrow Georgian-in-Latin transliteration for booking availability phrases only
+# (NOT a general transliteration system). Applied to a lowercased copy for
+# DETECTION only — the reply is always composed from Georgian templates. Longer
+# keys first so „nebismier dros" is normalised before „nebismier".
+_BOOKING_TRANSLIT_MAP: tuple[tuple[str, str], ...] = (
+    ("sul ertia", "სულ ერთია"),
+    ("sulertia", "სულ ერთია"),
+    ("nebismier dros", "ნებისმიერ დროს"),
+    ("nebismierad", "ნებისმიერად"),
+    ("nebismieri", "ნებისმიერი"),
+    ("nebismier", "ნებისმიერ"),
+    ("mtsalia", "მცალია"),
+    ("mcalia", "მცალია"),
+    ("xval", "ხვალ"),
+    ("dges", "დღეს"),
+)
+
+# Flexible-availability markers („any time is fine"). „ნებისმიერ" covers the
+# declensions („ნებისმიერი"/„ნებისმიერ დროს"/„ნებისმიერად").
+_FLEXIBLE_AVAILABILITY_MARKERS: tuple[str, ...] = (
+    "ნებისმიერ", "სულ ერთია", "სულერთია",
+    "როდესაც მოგახერხებთ", "როცა მოგახერხებთ",
+)
+
+
+def _apply_booking_translit(low: str) -> str:
+    """Normalise the narrow booking-availability Latin translit patterns to
+    Georgian in an already-lowercased string (detection only, not display)."""
+    out = low or ""
+    for lat, geo in _BOOKING_TRANSLIT_MAP:
+        if lat in out:
+            out = out.replace(lat, geo)
+    return out
+
+
+def _looks_like_flexible_availability(message: str) -> bool:
+    """True when the user expresses NO time preference („ნებისმიერი დრო" /
+    „სულ ერთია", incl. Latin translit) — a signal to offer real free slots."""
+    norm = _apply_booking_translit((message or "").lower())
+    return any(m in norm for m in _FLEXIBLE_AVAILABILITY_MARKERS)
+
+
+def _resolve_booking_target_date(norm: str, now: datetime):
+    """Resolve a Georgian day phrase („ხვალ"/„ორშაბათს"/…) in `norm` to a date,
+    or None when no explicit day is named (→ caller uses today-first)."""
+    try:
+        from app.agent.services.timestamps import resolve_relative_datetime
+        dt = resolve_relative_datetime(norm, now=now)
+        return dt.date() if dt is not None else None
+    except Exception:  # pragma: no cover — defensive, never break a reply
+        return None
+
+
+def _detect_daypart(norm: str) -> str | None:
+    """Morning / afternoon / evening daypart in `norm`, or None."""
+    if any(s in norm for s in _BOOKING_EVENING_MARKERS):
+        return "evening"
+    if any(s in norm for s in _BOOKING_MORNING_MARKERS):
+        return "morning"
+    if any(s in norm for s in _BOOKING_AFTERNOON_MARKERS):
+        return "afternoon"
+    return None
+
+
+def _slot_hour(slot: dict) -> int:
+    m = re.match(r"\s*(\d{1,2})", str(slot.get("time", "")))
+    return int(m.group(1)) if m else -1
+
+
+def _slot_in_daypart(slot: dict, daypart: str) -> bool:
+    """True when a slot's start hour falls in the daypart. Mirrors the old
+    example bands: morning ≤12, afternoon 13–16, evening ≥17."""
+    h = _slot_hour(slot)
+    if h < 0:
+        return False
+    if daypart == "morning":
+        return h <= 12
+    if daypart == "afternoon":
+        return 13 <= h <= 16
+    if daypart == "evening":
+        return h >= 17
+    return True
+
+
+def _free_slots_for_date_safe(day) -> tuple[list[dict], bool]:
+    """Return (free_slots, ok). ok=False signals a genuine Calendar error so the
+    caller can surface the technical fallback (never a manager handoff)."""
+    try:
+        return (calendar_service.get_free_slots(day) or [], True)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.exception(
+            "[parent_flow] free-slot lookup failed for %s: %s", day, exc,
+        )
+        return ([], False)
+
+
+def _offer_real_free_slots(
+    conversation: Conversation, *, target_date, daypart: str | None,
+) -> str | None:
+    """Offer ONLY real Google-Calendar free slots. `target_date=None` → today
+    first, then nearest next days. When a daypart is given, filter to it. On a
+    genuine calendar outage → technical fallback. Returns None only when there is
+    nothing free anywhere in the next week (let the engine handle that edge)."""
+    now = calendar_service.now_tbilisi()
+    if target_date is None:
+        if calendar_service.is_closed_booking_day(now):
+            slots, ok = [], True
+        else:
+            slots, ok = _free_slots_for_date_safe(now.date())
+    else:
+        if target_date < now.date():
+            slots, ok = [], True          # a past day has no bookable slots
+        elif target_date == now.date() and calendar_service.is_closed_booking_day(now):
+            slots, ok = [], True
+        else:
+            slots, ok = _free_slots_for_date_safe(target_date)
+    if not ok:
+        return _BOOKING_SLOTS_TECH_FALLBACK
+    if daypart:
+        slots = [s for s in slots if _slot_in_daypart(s, daypart)]
+    if slots:
+        times = _join_georgian([s.get("time", "") for s in slots[:3]])
+        return f"თავისუფალია {times}. რომელი დრო გირჩევნიათ?"
+    # Nothing free on the requested day → offer the nearest real next-day slots.
+    next_slots = _next_days_free_slots(now)
+    if not next_slots:
+        return None
+    nearest = _format_next_free_slots(next_slots)
+    return (
+        "მითითებულ დღეს თავისუფალი დრო აღარ ჩანს. "
+        f"უახლოესი თავისუფალი დროებია: {nearest}. რომელი დრო გირჩევნიათ?"
+    )
+
+
 def _maybe_handle_availability_question(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -5846,35 +6055,53 @@ def _looks_like_booking_datetime_reply(message: str) -> bool:
 def _maybe_handle_booking_datetime_reply(
     conversation: Conversation, message: str,
 ) -> str | None:
-    """In consultation booking context, keep a day/date/time/daypart reply in the
-    booking flow. For a broad daypart WITH NO exact time, ask for the exact hour
-    (daypart-aware). For a reply that already carries an exact time, defer (None)
-    so the existing booking commit / engine resolves & books it. Returns None for
-    everything outside booking context (general detection, not phrase-specific)."""
+    """In consultation booking context, keep a day/date/time/daypart/flexible
+    reply in the booking flow and offer REAL Google-Calendar free slots.
+
+    BUG 6/7 (2026-07-06): a day/daypart WITH NO exact time (incl. „ნებისმიერი
+    დრო"/„სულ ერთია" and common Latin translit) is answered with actual free
+    slots for the requested day (filtered by daypart when given) — never a
+    hardcoded example. A reply that already carries an exact time defers (None)
+    so the existing booking commit / engine resolves & books it. An explicit
+    adult-event query and any non-booking message return None. Manager fallback
+    is NEVER used for scheduling; a genuine calendar outage → technical retry."""
     if not _in_consultation_booking_context(conversation):
         return None
-    if not _looks_like_booking_datetime_reply(message):
+    # Normalise the narrow booking-availability translit patterns for detection
+    # (reply is always composed from Georgian templates).
+    norm = _apply_booking_translit((message or "").lower())
+
+    # Flexible availability („ნებისმიერი დრო" / „სულ ერთია" / translit): offer
+    # real free slots (today-first), never a fixed example, never clarification.
+    if _looks_like_flexible_availability(message):
+        _ensure_lead(conversation)
+        logger.info(
+            "[parent_flow] flexible availability in booking context → real "
+            "calendar slots (sender=%s)", conversation.sender_id,
+        )
+        return _offer_real_free_slots(conversation, target_date=None, daypart=None)
+
+    if not _looks_like_booking_datetime_reply(norm):
         return None
     # An exact time is present → let the existing booking flow book/confirm it.
     try:
         from app.agent.services.timestamps import extract_colloquial_hour
-        if extract_colloquial_hour(message) is not None:
+        if extract_colloquial_hour(norm) is not None:
             return None
     except Exception:  # pragma: no cover — defensive
         pass
     _ensure_lead(conversation)
-    low = (message or "").lower()
+    now = calendar_service.now_tbilisi()
+    target_date = _resolve_booking_target_date(norm, now)
+    daypart = _detect_daypart(norm)
     logger.info(
-        "[parent_flow] booking daypart reply (no exact time) → ask exact hour "
-        "(sender=%s)", conversation.sender_id,
+        "[parent_flow] booking day/daypart reply (no exact time) → real calendar "
+        "slots (target=%s daypart=%s sender=%s)",
+        target_date, daypart, conversation.sender_id,
     )
-    if any(s in low for s in _BOOKING_EVENING_MARKERS):
-        return _BOOKING_ASK_TIME_EVENING
-    if any(s in low for s in _BOOKING_MORNING_MARKERS):
-        return _BOOKING_ASK_TIME_MORNING
-    if any(s in low for s in _BOOKING_AFTERNOON_MARKERS):
-        return _BOOKING_ASK_TIME_AFTERNOON
-    return _BOOKING_ASK_TIME_GENERIC
+    return _offer_real_free_slots(
+        conversation, target_date=target_date, daypart=daypart,
+    )
 
 
 def _maybe_handle_event_inquiry(
@@ -7663,7 +7890,11 @@ def _maybe_commit_pending_booking_engine(
 
     booked_date = (result.get("booked_date") or "").strip()
     booked_time = (result.get("booked_time") or "").strip()
-    first_name = (lead.name or "").split()[0] if lead.name else ""
+    # BUG 5 (2026-07-06) — only greet by name when the stored name is a VALID
+    # person name. A corrupted name (e.g. „მოგწერეთ") must never surface in the
+    # confirmation as „მივიღე, მოგწერეთ …" (belt-and-braces atop the BUG 3 fix).
+    _name_ok = bool(lead.name) and is_valid_person_name(lead.name)
+    first_name = (lead.name or "").split()[0] if _name_ok else ""
     greeting = f"მივიღე, {first_name}. " if first_name else "მივიღე. "
 
     # Live QA Session 7 Patch (2026-06-06) — Bug 1: reschedule
@@ -8391,6 +8622,13 @@ _NAME_REJECT_STEMS: tuple[str, ...] = (
     # name-colliding relationship words (მამა→მამუკა, ბიჭი→ბიჭიკო, გოგო→გოგა,
     # დედა) are handled by exact match in _RELATIONSHIP_NAME_BLOCK_EXACT below.
     "შვილ", "ბავშვ", "მშობ", "მეუღლ", "ასაკ", "საკონტაქტ", "ბანაკ",
+    # BUG 3 (2026-07-06) — generic LLM/tool-echo words that were being stored
+    # as the parent's NAME (live: name overwritten with „მოგწერეთ"). The token-
+    # level validator (`is_valid_person_name`) did NOT reject these (only the
+    # separate semantic classifier did), so the `save_lead_info` tool clobbered
+    # a real name. „მოგწერ" (I-wrote-to-you) mirrors the existing „მომწერ"
+    # (write-to-me); none of these is ever a real Georgian first name.
+    "მოგწერ", "გასაგებ", "ნებისმიერ", "მადლობ", "გმადლობ",
 )
 
 # Exact-token rejects — short ambiguous words that must NOT be matched by
@@ -8399,6 +8637,9 @@ _NAME_REJECT_STEMS: tuple[str, ...] = (
 _NAME_REJECT_EXACT: frozenset[str] = frozenset({
     "დრო", "დროზე", "ზე",
     "მინდა", "უნდა", "მსურს", "ვაპირებ",
+    # BUG 3 (2026-07-06) — „სულ ერთია" (any time is fine) must never be stored
+    # as a name. Exact-match so real names (e.g. „სულიკო") stay valid.
+    "სულ", "ერთია",
 })
 
 # Relationship / context words whose STEM would collide with a real Georgian

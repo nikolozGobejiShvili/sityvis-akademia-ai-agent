@@ -913,6 +913,19 @@ FORBIDDEN_PHRASE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
         "აზრი აქვს",
         "გასაგებია",
     ),
+    # BUG 4 (2026-07-06) — polite verb form: „გირჩევნიათ", never „გირჩევთ"
+    # („you prefer", 2nd-person plural). LLM free-generation grammar slip.
+    (
+        "რომელი დრო გირჩევთ",
+        "რომელი დრო გირჩევნიათ",
+    ),
+    # BUG 5 (2026-07-06) — a booking confirmation must never carry the stray
+    # „მოგწერეთ" the model sometimes emits („მივიღე, მოგწერეთ …"). The clean
+    # opener is „მივიღე" — the parent's name is added deterministically upstream.
+    (
+        "მივიღე, მოგწერეთ",
+        "მივიღე",
+    ),
     # Standalone "გეწყებათ?" is awkward.
     (
         "გეწყებათ?",
@@ -1732,6 +1745,12 @@ _AGE_RANGE_TYPO_RE = re.compile(r"(\d+)-დან (\d+) წლამდე")
 _AGE_SUITABILITY_BAND_RE = re.compile(r"სრულად ერგება \d+–\d+ წლის ბავშვების ბანაკს")
 # Sentinel for the harsh under-age rejection (both verb endings share a prefix).
 _HARSH_REJECTION_PREFIX = "ამ პროგრამაში თქვენი ბავშვის ჩაწერას ვერ და"
+# BUG 1 (2026-07-06) — a camp-price answer must never use the awkward
+# „გადახდა ბანაკში N ლარია" / bare „ბანაკში N ლარია" phrasing. Normalise to the
+# approved „ბანაკის ღირებულება N ლარია". Number-agnostic (keeps the model's
+# price); the payment form is listed first so the bare form never double-hits it.
+_BAD_PRICE_PAYMENT_RE = re.compile(r"გადახდა\s+ბანაკში\s+(\d[\d\s]*?)\s*ლარია")
+_BAD_PRICE_BARE_RE = re.compile(r"ბანაკში\s+(\d[\d\s]*?)\s*ლარია")
 
 
 def _apply_dynamic_fact_normalisations(text: str) -> str:
@@ -1750,6 +1769,10 @@ def _apply_dynamic_fact_normalisations(text: str) -> str:
     Idempotent.
     """
     out = text
+    # BUG 1 (2026-07-06) — awkward camp-price phrasing → approved wording.
+    # Payment form („გადახდა ბანაკში …") first, then the bare form.
+    out = _BAD_PRICE_PAYMENT_RE.sub(r"ბანაკის ღირებულება \1 ლარია", out)
+    out = _BAD_PRICE_BARE_RE.sub(r"ბანაკის ღირებულება \1 ლარია", out)
     # Location label only — keep whatever location the model produced.
     out = out.replace("ადგილი - ", "ლოკაცია — ")
     out = out.replace("ადგილი — ", "ლოკაცია — ")

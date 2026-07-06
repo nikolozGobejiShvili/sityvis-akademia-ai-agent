@@ -70,6 +70,25 @@ def _reset():
     parent_flow._sunday_school_notified_senders.clear()
 
 
+@pytest.fixture(autouse=True)
+def _mock_calendar(monkeypatch):
+    """BUG 6 (2026-07-06) — the daypart handler now offers REAL calendar free
+    slots. Mock the calendar so the daypart-in-booking test is deterministic."""
+    from datetime import datetime
+    from app.services import calendar_service
+
+    def _slots(day):
+        return [{"date": str(day), "time": f"{h:02d}:00"} for h in range(10, 21)]
+
+    monkeypatch.setattr(calendar_service, "get_free_slots", _slots)
+    monkeypatch.setattr(calendar_service, "is_closed_booking_day", lambda now: False)
+    monkeypatch.setattr(
+        calendar_service, "now_tbilisi",
+        lambda: datetime(2026, 7, 7, 9, 0, tzinfo=calendar_service.TIMEZONE),
+    )
+    yield
+
+
 @pytest.fixture
 def engine_on(monkeypatch):
     swapped = dataclasses.replace(
@@ -365,7 +384,11 @@ def test_21a_explicit_topic_in_booking_answers_topic(engine_on):
 def test_21b_daypart_reply_stays_in_booking(engine_on):
     conv = _booking_conv("bk21b")
     out = parent_flow.handle(conv, "ორშაბათს საღამოს")
-    assert ("რომელი საათი" in out) or ("რომელ საათზე" in out)  # stays in booking
+    # BUG 6 (2026-07-06) — stays in booking, now OFFERING real calendar slots
+    # („რომელი დრო გირჩევნიათ?") rather than a fixed example-hour ask.
+    assert (
+        ("რომელი საათი" in out) or ("რომელ საათზე" in out) or ("რომელი დრო" in out)
+    )
     for s in _SENTINELS.values():
         assert s not in out                                  # no camp topic facts
 

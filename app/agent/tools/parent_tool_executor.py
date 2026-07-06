@@ -1462,8 +1462,23 @@ class ParentToolExecutor:
             # directly (e.g. name="ივნის"). Same deterministic guard the
             # parser uses.
             if name and parent_flow.is_valid_person_name(name):
-                self.lead.name = name
-                saved.append("name")
+                # BUG 3 (2026-07-06) — never OVERWRITE an already-captured valid
+                # name from a tool echo. The LLM sometimes calls
+                # save_lead_info(name=<its own last word>) and clobbered the real
+                # name (live: „მარიამი" → „მოგწერეთ"). An explicit user name
+                # CORRECTION is handled deterministically pre-engine
+                # (`_maybe_handle_contact_correction`), not inferred here.
+                existing = (self.lead.name or "").strip()
+                if existing and parent_flow.is_valid_person_name(existing):
+                    if name != existing:
+                        logger.info(
+                            "[save_lead_info] kept existing valid name=%r, "
+                            "ignored tool name=%r", existing, name[:40],
+                        )
+                    # else: same name — nothing to do.
+                else:
+                    self.lead.name = name
+                    saved.append("name")
             else:
                 logger.info(
                     "[save_lead_info] rejected non-name value=%r", name[:40],

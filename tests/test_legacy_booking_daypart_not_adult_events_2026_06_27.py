@@ -44,6 +44,26 @@ def _reset():
     conversation_service.conversations.clear()
 
 
+@pytest.fixture(autouse=True)
+def _mock_calendar(monkeypatch):
+    """BUG 6 (2026-07-06) — the daypart handler now offers REAL calendar free
+    slots. Mock the calendar so tests are deterministic (hourly slots 10:00–20:00
+    on any day; not Sunday; a fixed Tuesday `now`)."""
+    from datetime import datetime
+    from app.services import calendar_service
+
+    def _slots(day):
+        return [{"date": str(day), "time": f"{h:02d}:00"} for h in range(10, 21)]
+
+    monkeypatch.setattr(calendar_service, "get_free_slots", _slots)
+    monkeypatch.setattr(calendar_service, "is_closed_booking_day", lambda now: False)
+    monkeypatch.setattr(
+        calendar_service, "now_tbilisi",
+        lambda: datetime(2026, 7, 7, 9, 0, tzinfo=calendar_service.TIMEZONE),
+    )
+    yield
+
+
 @pytest.fixture
 def engine_on(monkeypatch):
     swapped = dataclasses.replace(
@@ -80,8 +100,14 @@ def _booking_conv(sid="bk", name="სალომე", phone="558914814", child_
 
 
 def _asks_for_time(text: str) -> bool:
+    # BUG 6 (2026-07-06) — the handler now OFFERS real free slots and asks
+    # „რომელი დრო გირჩევნიათ?" (in addition to the legacy „რომელი საათი" form).
     low = (text or "").lower()
-    return ("რომელი საათი" in low) or ("რომელ საათზე" in low)
+    return (
+        ("რომელი საათი" in low)
+        or ("რომელ საათზე" in low)
+        or ("რომელი დრო" in low)
+    )
 
 
 def _no_adult_fallback(text: str) -> bool:
