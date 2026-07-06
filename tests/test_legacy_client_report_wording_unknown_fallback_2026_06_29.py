@@ -111,7 +111,14 @@ def test_3_hotel_guests(engine_on):
 
 def test_4_transport_departure(engine_on):
     out = parent_flow.handle(_conv("u4"), "ტრანსპორტი საიდან გავა?")
-    assert f"რაც შეეხება ტრანსპორტის გასვლის ზუსტ ადგილს, {_ENDING}" in out
+    # 2026-07-06 — transport is now answered by the deterministic transport
+    # interceptor (before the operational defer): it states the KNOWN fact
+    # (transport is included in the price) + a manager defer for the exact
+    # departure point/time (never invented, never the sports answer).
+    assert "ბანაკის ღირებულებაში ტრანსპორტირება შედის" in out
+    assert "ტრანსპორტის გასვლის ზუსტ ადგილს და დროს" in out
+    assert "558 67 47 33" in out
+    assert "სპორტული აქტივობები" not in out
     assert _no_hearts(out)
 
 

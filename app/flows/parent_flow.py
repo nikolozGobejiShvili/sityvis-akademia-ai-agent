@@ -747,6 +747,19 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     if multi_response is not None:
         return _sanitise_booking_confirmation(conversation, multi_response)
 
+    # ADDITIONAL LIVE BUG (2026-07-06) — a TRANSPORT / logistics question
+    # („ტრანსპორტირება როგორ მოხდება?" / „ტრანსპორტი საიდან გადის?" /
+    # „მე თელავში ვცხოვრობ …") must be answered as TRANSPORT, never as sports.
+    # Root cause: the sports camp-topic keyword „სპორტ" is a SUBSTRING of
+    # „ტრან-სპორტ-ირება", so every transport question matched the sports answer.
+    # This deterministic interceptor runs BEFORE the operational / camp-topic
+    # handlers and owns transport wording (known fact: transport is included in
+    # the price; exact regional pickup/route is deferred to the manager). It
+    # also corrects a „სპორტი რა შუაშია?" challenge after a wrong sports reply.
+    transport_response = _maybe_handle_transport_logistics(conversation, message)
+    if transport_response is not None:
+        return _sanitise_booking_confirmation(conversation, transport_response)
+
     # Client follow-up hotfix (2026-06-29) — GLOBAL anti-invention defer FIRST.
     # An unsupported OPERATIONAL detail question (seats / room count / towels /
     # hotel / transport / day schedule / direct-call rules / organizer / generic)
@@ -3693,39 +3706,267 @@ _RESERVATION_FEE_DEFER: str = (
 )
 
 
-def _is_reservation_fee_amount_question(message: str) -> bool:
-    """True for a reservation/booking-FEE AMOUNT question („ჯავშნის საფასური
-    რამდენია?" / „რამდენია ჯავშანი?" / „რამდენი უნდა გადავიხადო დასაჯავშნად?").
-    False for a payment-METHOD question („როგორ ხდება გადახდა?") and for a
-    consultation/camp price question that does not reference the reservation."""
+# Stretched-text / typo normalisation for the fee-amount detector (2026-07-06
+# widening). Live bug: „რამდენს ვიხდი წინასწარ?" / „წიანსწარ" / „ვიხდიიი" /
+# „გააავიიგეეეე" all slipped past the narrow „ჯავშ + რამდენ" detector and the
+# agent repeated the payment-METHOD answer or gave the full camp price.
+_FEE_STRETCH_RE = re.compile(r"(.)\1{1,}")
+
+
+def _normalise_fee_text(message: str) -> str:
+    """Lowercase + collapse stretched repeated letters („ვიხდიიი" → „ვიხდი",
+    „გააავიიგეეეე" → „გავიგე") + fix the common „წიანსწარ" typo → „წინასწარ".
+    DETECTION only — never used for display."""
     low = (message or "").lower()
-    # Must reference the booking / reservation fee.
-    if not (("ჯავშ" in low) or ("დასაჯავშნ" in low) or ("დაჯავშნ" in low)):
-        return False
-    # Must ask the AMOUNT (how much / what does it cost), not the METHOD.
-    if not (("რამდენ" in low) or ("რა ღირ" in low) or ("ღირს" in low)):
-        return False
+    low = _FEE_STRETCH_RE.sub(r"\1", low)
+    low = low.replace("წიანსწარ", "წინასწარ")
+    return low
+
+
+# Payment-AMOUNT phrasing („how much / what sum"). „რამდენ" covers
+# რამდენს/რამდენი/რამდენ.
+_FEE_AMOUNT_TOKENS: tuple[str, ...] = ("რამდენ", "რა თანხა", "თანხა რამდენ")
+# Cost phrasing („რა ღირს"). Allowed to defer ONLY with an explicit reservation
+# cue below — NOT with a bare „წინასწარ", so „წინასწარ ვნახოთ რა ღირს ბანაკი?"
+# (a camp-total price question) is not hijacked.
+_FEE_COST_TOKENS: tuple[str, ...] = ("რა ღირ", "ღირს")
+# Explicit reservation cue.
+_FEE_RESERVATION_TOKENS: tuple[str, ...] = ("ჯავშ", "დასაჯავშნ", "დაჯავშნ")
+# Advance-payment cue.
+_FEE_ADVANCE_TOKEN: str = "წინასწარ"
+# Payment verb stems used by the repeat-clarification path so a bare amount
+# question after the generic answer („რამდენს ვიხდი?") is read as an advance-
+# payment amount question (not the camp-total price question).
+_FEE_PAYMENT_VERB_STEMS: tuple[str, ...] = ("ვიხდ", "გადავიხად", "გადავიხდ")
+# Distinctive fragments of the generic payment-METHOD answer (the agent's prior
+# turn) — used to detect a repeat-clarification loop.
+_PAYMENT_METHOD_ANSWER_MARKERS: tuple[str, ...] = (
+    "გადახდა ხდება წინასწარ", "საფასურის გადახდა ხდება",
+)
+
+
+def _has_fee_amount_intent(low_norm: str) -> bool:
+    return any(t in low_norm for t in _FEE_AMOUNT_TOKENS)
+
+
+def _is_reservation_fee_amount_question(message: str) -> bool:
+    """True for a reservation / advance-payment FEE AMOUNT question — the amount
+    intent („რამდენ…" / „რა თანხა") together with an advance/reservation cue
+    („წინასწარ" / „ჯავშ…" / „დასაჯავშნ…"). Typo- and stretch-tolerant.
+
+    A pure payment-METHOD question („როგორ ხდება გადახდა?" / „სრულად ვიხდი თუ
+    ნაწილობრივ?") has no amount intent and is left to its own answer. A camp-
+    price / consultation-price question (no advance/reservation cue) is not this
+    handler."""
+    low = _normalise_fee_text(message)
     # A payment-METHOD question keeps its own approved wording elsewhere.
     if "როგორ ხდება" in low:
         return False
-    return True
+    has_amount = _has_fee_amount_intent(low)
+    has_cost = any(t in low for t in _FEE_COST_TOKENS)
+    has_reservation = any(t in low for t in _FEE_RESERVATION_TOKENS)
+    has_advance = _FEE_ADVANCE_TOKEN in low
+    # Reservation cue („ჯავშ…"/„დასაჯავშნ…") + any amount OR cost phrasing.
+    if has_reservation and (has_amount or has_cost):
+        return True
+    # Advance cue („წინასწარ") + a PAYMENT-amount phrasing („რამდენ…"). Cost
+    # phrasing („ღირს") alone with „წინასწარ" is intentionally NOT enough (that
+    # reads as a camp-total price question mentioning advance payment).
+    if has_advance and has_amount:
+        return True
+    return False
+
+
+def _bot_last_gave_payment_method_answer(conversation: Conversation) -> bool:
+    """True when the bot's MOST RECENT reply was the generic payment-METHOD
+    answer („…საფასურის გადახდა ხდება წინასწარ…") — the signal that a follow-up
+    amount question is a repeat-clarification, not a fresh method question."""
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "")
+        return any(m in content for m in _PAYMENT_METHOD_ANSWER_MARKERS)
+    return False
 
 
 def _maybe_handle_reservation_fee_question(
     conversation: Conversation, message: str,
 ) -> str | None:
-    """Deterministic manager defer for an unknown reservation-FEE amount.
-    Returns None for everything else (incl. the payment-method question). ADULT
-    is skipped (adult flow owns its turns)."""
+    """Deterministic manager defer for an unknown reservation / advance-payment
+    FEE amount. Returns None for everything else (incl. the payment-method
+    question). ADULT is skipped (adult flow owns its turns)."""
     if getattr(conversation, "segment", "") == "ADULT":
         return None
-    if not _is_reservation_fee_amount_question(message):
-        return None
-    logger.info(
-        "[parent_flow] reservation-fee amount unknown → manager defer (sender=%s)",
-        conversation.sender_id,
+    if _is_reservation_fee_amount_question(message):
+        logger.info(
+            "[parent_flow] reservation-fee amount unknown → manager defer "
+            "(sender=%s)", conversation.sender_id,
+        )
+        return _RESERVATION_FEE_DEFER
+    # Repeat-clarification / frustration: after the generic payment-METHOD
+    # answer, a follow-up ADVANCE-PAYMENT amount question („რამდენს ვიხდი?") must
+    # NOT get the same answer again → the manager fee defer.
+    low = _normalise_fee_text(message)
+    if (
+        _bot_last_gave_payment_method_answer(conversation)
+        and _has_fee_amount_intent(low)
+        and any(s in low for s in _FEE_PAYMENT_VERB_STEMS)
+    ):
+        logger.info(
+            "[parent_flow] repeat advance-payment amount question after generic "
+            "answer → manager defer (sender=%s)", conversation.sender_id,
+        )
+        return _RESERVATION_FEE_DEFER
+    return None
+
+
+# ── ADDITIONAL LIVE BUG (2026-07-06) — transport/logistics vs sports ──────────
+# The sports camp-topic keyword „სპორტ" is a SUBSTRING of „ტრან·სპორტ·ირება", so
+# every transport question matched the sports answer. This deterministic handler
+# answers transport as transport: the KNOWN fact (transport is included in the
+# camp price) + a manager defer for the unknown exact regional pickup / route.
+_TRANSPORT_INCLUDED_PREFIX: str = "ბანაკის ღირებულებაში ტრანსპორტირება შედის. "
+
+# Transport / travel-logistics stems — these WIN over the sports/activity answer.
+_TRANSPORT_STEMS: tuple[str, ...] = (
+    "ტრანსპორტ", "წაყვან", "წამოყვან", "წამოსვლ", "მარშრუტ",
+    "რეგიონიდან", "საიდან გადის", "როგორ მივა", "როგორ მოვა",
+)
+# Pickup-location / departure question markers.
+_TRANSPORT_PICKUP_MARKERS: tuple[str, ...] = (
+    "საიდან", "სად გადის", "გასვლის ადგილ", "გასვლის ზუსტ",
+    "სად იკრიბებ", "სად შევხვდე",
+)
+# City stem → ablative („from <city>") form, for a location-specific defer.
+_TRANSPORT_CITY_ABLATIVE: tuple[tuple[str, str], ...] = (
+    ("თელავ", "თელავიდან"),
+    ("თბილის", "თბილისიდან"),
+    ("ქუთაის", "ქუთაისიდან"),
+    ("ბათუმ", "ბათუმიდან"),
+    ("რუსთავ", "რუსთავიდან"),
+    ("ზუგდიდ", "ზუგდიდიდან"),
+    ("ოზურგეთ", "ოზურგეთიდან"),
+    ("ახალციხ", "ახალციხიდან"),
+    ("ქობულეთ", "ქობულეთიდან"),
+    ("ბორჯომ", "ბორჯომიდან"),
+    ("მცხეთ", "მცხეთიდან"),
+    ("გურჯაან", "გურჯაანიდან"),
+    ("სიღნაღ", "სიღნაღიდან"),
+    ("ხაშურ", "ხაშურიდან"),
+    ("მარნეულ", "მარნეულიდან"),
+)
+# The wrong sports answer the bot may have given + the user's challenge markers.
+_SPORTS_ANSWER_MARKER: str = "სპორტული აქტივობები"
+_SPORTS_CHALLENGE_MARKERS: tuple[str, ...] = (
+    "რა შუაშ", "რა შუშ", "შუაშია", "შუშია", "რა კავშირ",
+)
+
+
+def _is_transport_question(low: str) -> bool:
+    return any(s in low for s in _TRANSPORT_STEMS)
+
+
+def _is_transport_pickup_question(low: str) -> bool:
+    return any(m in low for m in _TRANSPORT_PICKUP_MARKERS)
+
+
+def _extract_transport_city(low: str) -> str:
+    for stem, ablative in _TRANSPORT_CITY_ABLATIVE:
+        if stem in low:
+            return ablative
+    return ""
+
+
+def _transport_answer(city_ablative: str, *, pickup: bool) -> str:
+    """Compose the transport answer: the known included-in-price fact + a manager
+    defer for the unknown exact detail (city-specific > pickup-location >
+    generic). Never invents a pickup location / time / route."""
+    if city_ablative:
+        return (
+            _TRANSPORT_INCLUDED_PREFIX
+            + f"რაც შეეხება {city_ablative} ტრანსპორტირების ზუსტ დეტალებს, "
+            "ამ ინფორმაციას მენეჯერი გაგაცნობთ: 558 67 47 33"
+        )
+    if pickup:
+        return (
+            _TRANSPORT_INCLUDED_PREFIX
+            + "რაც შეეხება ტრანსპორტის გასვლის ზუსტ ადგილს და დროს, "
+            "ამ დეტალებს მენეჯერი გაგაცნობთ: 558 67 47 33"
+        )
+    return (
+        _TRANSPORT_INCLUDED_PREFIX
+        + "ტრანსპორტირების ზუსტ დეტალებს მენეჯერი გაგაცნობთ: 558 67 47 33"
     )
-    return _RESERVATION_FEE_DEFER
+
+
+def _is_sports_challenge(low: str) -> bool:
+    """True for „სპორტი რა შუაშია?" — a challenge to a wrong sports answer."""
+    return ("სპორტ" in low) and any(m in low for m in _SPORTS_CHALLENGE_MARKERS)
+
+
+def _bot_recently_gave_sports_answer(conversation: Conversation) -> bool:
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        return _SPORTS_ANSWER_MARKER in str(turn.get("content") or "")
+    return False
+
+
+def _recent_transport_city(conversation: Conversation) -> str:
+    """Scan recent USER turns for a mentioned city (to personalise a transport
+    correction after the bot wrongly answered sports)."""
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "user":
+            continue
+        city = _extract_transport_city(str(turn.get("content") or "").lower())
+        if city:
+            return city
+    return ""
+
+
+def _recent_transport_question(conversation: Conversation) -> bool:
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "user":
+            continue
+        if _is_transport_question(str(turn.get("content") or "").lower()):
+            return True
+    return False
+
+
+def _maybe_handle_transport_logistics(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Deterministic transport/logistics answer — wins over the sports/activity
+    answer. Returns None for a non-transport message (incl. a real sports
+    question) so the normal flow / sports answer runs. ADULT is skipped."""
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    low = (message or "").lower()
+    # Correction: the user challenges a wrong sports answer („სპორტი რა შუაშია?")
+    # after a transport question / a sports reply — acknowledge + answer transport.
+    if _is_sports_challenge(low) and (
+        _bot_recently_gave_sports_answer(conversation)
+        or _recent_transport_question(conversation)
+    ):
+        city = _extract_transport_city(low) or _recent_transport_city(conversation)
+        logger.info(
+            "[parent_flow] sports-challenge after transport question → transport "
+            "correction (sender=%s)", conversation.sender_id,
+        )
+        return (
+            "მართალი ხართ, ტრანსპორტირებაზე მეკითხებოდით. "
+            + _transport_answer(city, pickup=False)
+        )
+    # Direct transport / logistics question → transport answer (wins over sports).
+    if _is_transport_question(low):
+        city = _extract_transport_city(low)
+        pickup = _is_transport_pickup_question(low)
+        logger.info(
+            "[parent_flow] transport/logistics question → transport answer "
+            "(city=%s pickup=%s sender=%s)", city, pickup, conversation.sender_id,
+        )
+        return _transport_answer(city, pickup=pickup)
+    return None
 
 
 def _maybe_handle_camp_topic_facts(
