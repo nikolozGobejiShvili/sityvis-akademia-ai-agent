@@ -107,15 +107,4 @@ sections:
     status: active
   discovery_questions:
   - რომელი ღონისძიება გაინტერესებთ?
-  events:
-  - id: fromula_1
-    title: fromula 1
-    status: active
-    date_text: 28 აგვისტო  19:00
-    location: monaco
-    price_text: '5000'
-    reservation_url: https://wordacademy.ge/courses/cart/
-    tags:
-    - '#formula 1'
-    min_age: 13
-    price_gel: 4999
+  events: []
