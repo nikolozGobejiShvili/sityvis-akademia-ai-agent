@@ -67,6 +67,80 @@ def _mark_comment_processed_local(comment_id: str) -> None:
         _processed_comments_lru.popitem(last=False)
 
 
+# In-process duplicate-DM guard (2026-07-08). Meta can redeliver the SAME
+# messaging event (retries on 5xx, App-Review tooling, page-level backfills) →
+# without a message-id (`mid`) idempotency guard the bot sends the same reply
+# twice. Modelled EXACTLY on the comment dedup above: a bounded in-process LRU
+# (belt-and-braces when Redis is off) plus Redis when enabled. The dedup key
+# includes platform + page_id + sender_id + mid so distinct messages never
+# collapse. A message with NO mid is never deduped (process normally).
+_PROCESSED_DMS_LRU_MAX = 2000
+_processed_dms_lru: "OrderedDict[str, float]" = OrderedDict()
+
+
+def _is_dm_processed_local(dm_key: str) -> bool:
+    """Return True iff this DM ``dm_key`` was already handled in the current
+    process. Bumps the entry's LRU position on hit."""
+    if not dm_key:
+        return False
+    if dm_key in _processed_dms_lru:
+        _processed_dms_lru.move_to_end(dm_key)
+        return True
+    return False
+
+
+def _mark_dm_processed_local(dm_key: str) -> None:
+    """Insert ``dm_key`` into the in-process LRU and evict the oldest entries
+    past the cap."""
+    if not dm_key:
+        return
+    _processed_dms_lru[dm_key] = time.time()
+    _processed_dms_lru.move_to_end(dm_key)
+    while len(_processed_dms_lru) > _PROCESSED_DMS_LRU_MAX:
+        _processed_dms_lru.popitem(last=False)
+
+
+def _dm_dedup_key(platform: str, page_id: str, sender_id: str, mid: str) -> str:
+    """Redis / LRU key for a Messenger message. Empty when no ``mid`` — the
+    caller must NOT dedup a message that carries no id (never collapse distinct
+    messages that happen to lack a mid)."""
+    if not mid:
+        return ""
+    return f"processed_dm:{platform}:{page_id}:{sender_id}:{mid}"
+
+
+def _dm_already_seen(dm_key: str) -> bool:
+    """True when this DM was already processed (in-process LRU OR Redis). No-op
+    (False) for an empty key. Mirrors the comment dedup's two-layer check."""
+    if not dm_key:
+        return False
+    if _is_dm_processed_local(dm_key):
+        return True
+    try:
+        if redis_state_service.is_enabled() and redis_state_service.exists(dm_key):
+            _mark_dm_processed_local(dm_key)  # mirror into the LRU for speed
+            return True
+    except Exception:  # pragma: no cover — dedup must never break intake
+        logger.warning("[webhook] DM Redis dedup check failed — continuing", exc_info=True)
+    return False
+
+
+def _mark_dm_seen(dm_key: str) -> None:
+    """Persist the processed-DM marker in the in-process LRU (always) and Redis
+    (when enabled), so a later redelivery of the same mid is skipped."""
+    if not dm_key:
+        return
+    _mark_dm_processed_local(dm_key)
+    try:
+        if redis_state_service.is_enabled():
+            redis_state_service.set_json(
+                dm_key, {"seen": True},
+                redis_state_service.conversation_ttl_seconds(),
+            )
+    except Exception:  # pragma: no cover — persistence failure is non-fatal
+        logger.warning("[webhook] DM Redis dedup mark failed — continuing", exc_info=True)
+
+
 # Instagram Webhook Signature Patch (2026-06-08): top-level payload
 # field names the existing handler routes on. Anything outside this
 # set surfaces in the diagnostic log as "unsupported" — the handler
@@ -330,6 +404,18 @@ async def _process_payload(payload: dict[str, Any]) -> None:
             sender_id = incoming["sender_id"]
             message_text = incoming["message_text"]
             platform = incoming["platform"]
+
+            # Bug D (2026-07-08) — DM idempotency. A message that carries a `mid`
+            # and was already processed (redelivery) is skipped so the bot never
+            # sends the same reply twice. A message WITHOUT a mid is processed
+            # normally (never collapse distinct messages that lack an id).
+            _mid = incoming.get("mid", "")
+            _dm_key = _dm_dedup_key(platform, incoming.get("page_id", ""), sender_id, _mid)
+            if _dm_key and _dm_already_seen(_dm_key):
+                logger.info("[webhook] duplicate DM mid=%s skipped", _mid)
+                continue
+            if _dm_key:
+                _mark_dm_seen(_dm_key)
 
             logger.info("[%s] Message from %s: %s", platform, sender_id, message_text[:120])
             # Observability (2026-07-07): a single greppable line tying platform +
@@ -693,7 +779,11 @@ def _extract_meta_messages(payload: dict[str, Any], entry: dict[str, Any]) -> li
     messages: list[dict[str, str]] = []
 
     for event in entry.get("messaging", []):
-        message_text = event.get("message", {}).get("text")
+        message_obj = event.get("message", {}) or {}
+        message_text = message_obj.get("text")
+        # Messenger message id — used for DM idempotency (Bug D, 2026-07-08).
+        # Missing/empty mid keeps the message but disables dedup for it.
+        mid = str(message_obj.get("mid") or "")
         sender_id = event.get("sender", {}).get("id")
         if sender_id and message_text:
             messages.append(
@@ -702,6 +792,7 @@ def _extract_meta_messages(payload: dict[str, Any], entry: dict[str, Any]) -> li
                     "message_text": message_text,
                     "platform": platform,
                     "page_id": page_id,
+                    "mid": mid,
                 },
             )
 

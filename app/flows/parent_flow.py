@@ -805,6 +805,16 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # „შვილი" appears (a child can be an adult child). Keep adult-events context:
     # offer adult events when the participant is known-adult, else ask the
     # participant's age. A hard camp keyword / in-band camp age still wins (camp).
+    # ADDITIONAL LIVE BUG (2026-07-08) — a camp parent's CALL / VISIT question
+    # („შემიძლია ბავშვს დავურეკო ან ჩამოვიდე და ვნახო?") must be answered as CAMP
+    # (daily updates + manager defer for the exact call/visit rules), never the
+    # adult participant-age question. Runs BEFORE the adult-context handler so a
+    # genuine camp contact question in camp context wins. Returns None for a
+    # non-contact/visit message or outside camp context.
+    contact_visit_response = _maybe_handle_parent_contact_visit(conversation, message)
+    if contact_visit_response is not None:
+        return _sanitise_booking_confirmation(conversation, contact_visit_response)
+
     adult_ctx_response = _maybe_handle_adult_context_relative(conversation, message)
     if adult_ctx_response is not None:
         return adult_ctx_response
@@ -1873,6 +1883,68 @@ def _maybe_handle_multi_child_age(
     if not (lead.challenge or "").strip():
         return f"{ack} {_CAMP_GOAL_QUESTION_CONTINUE}"
     return ack
+
+
+# Bug C (2026-07-08) — child age asked twice during booking. When the parent
+# sends „name / phone / age" as one contact-intake message, the name+phone parse
+# (`_parse_name_phone`) drops the age line, so lead.child_age stays empty and the
+# slot confirmation re-asks „რამდენი წლისაა შვილი?". This idempotent helper
+# captures an IN-BAND child age from the SAME message at the contact-intake sites.
+#
+# The single-age matcher is ANCHORED to the explicit age word („N წლ/წელ"), which
+# makes it inherently phone-/date-/range-safe (a phone or a calendar date is never
+# followed by „წლ"; the „9-17" band's numbers are guarded by the leading
+# digit/dash lookbehind) — it is NOT a bare-number regex. The engine's
+# `maybe_capture_child_age_fallback` is deliberately NOT used for the digit case:
+# its `_strip_phone_numbers` greedily removes an age digit that sits right after a
+# phone (e.g. „558070088\n12" → the „12" is eaten), so it misses exactly this
+# intake shape.
+_CONTACT_AGE_RE = re.compile(r"(?<![\d\-–—])(\d{1,2})(?!\d)\s*წ(?:ლ|ელ)")
+# A two-child age group ending in „წლ/წელ" with „და"/comma separators only. The
+# deliberate exclusion of the dash separator means the advertised „9-17" BAND
+# (dash) is never read as two children; anchoring to the age word keeps it
+# phone-/date-safe (a phone or a date is never followed by „წლ").
+_CONTACT_MULTI_AGE_RE = re.compile(r"(\d{1,2}(?:\s*(?:და|,)\s*\d{1,2})+)\s*წ(?:ლ|ელ)")
+
+
+def _capture_child_age_from_contact(lead: "Lead | None", message: str) -> None:
+    """Idempotently capture an IN-BAND child age (9–17) stated alongside name +
+    phone in a booking contact-intake message („მარიამი / 558070088 / 12 წლის").
+    Phone-/date-/range-safe (see the module comment above). Multiple ages reuse
+    the existing multi-child recorder. No-op when the age is already known; never
+    overwrites."""
+    if lead is None or _child_age_known(lead):
+        return
+    try:
+        from app.services import admin_config_service
+        age_min, age_max = admin_config_service.get_camp_age_bounds()
+    except Exception:  # pragma: no cover — defensive
+        age_min, age_max = 9, 17
+    # Multi-child („12 და 14 წლის") → record ALL ages (child_age = first in-band,
+    # full list in the manager-visible deeper_concern) via the existing recorder.
+    multi = _CONTACT_MULTI_AGE_RE.search(message or "")
+    if multi:
+        nums = [int(x) for x in re.findall(r"\d{1,2}", multi.group(1))]
+        in_band_multi = [a for a in nums if age_min <= a <= age_max]
+        if len(in_band_multi) >= 2:
+            _record_multi_child_ages(lead, nums, in_band_multi)
+            logger.info(
+                "[parent_flow] contact intake: captured multi child ages %s",
+                in_band_multi,
+            )
+            return
+    # Single age anchored to „წლ/წელ" — the first in-band match wins.
+    for m in _CONTACT_AGE_RE.finditer(message or ""):
+        try:
+            age = int(m.group(1))
+        except ValueError:  # pragma: no cover — regex guarantees digits
+            continue
+        if age_min <= age <= age_max:
+            lead.child_age = str(age)
+            logger.info(
+                "[parent_flow] contact intake: captured child_age=%s", age,
+            )
+            return
 
 
 def _strip_redundant_age_question_if_known(
@@ -3689,6 +3761,12 @@ _ADULT_CTX_ASSISTANT_MARKERS: tuple[str, ...] = (
     "ზრდასრულთა ღონისძიებ", "ზრდასრულთა კულტურულ", "კულტურულ საღამო",
     "ღონისძიების შერჩევა", "ზრდასრულთა პროგრამ",
 )
+# The neutral two-option welcome menu lists BOTH „ბავშვების საზაფხულო ბანაკი" and
+# „ზრდასრულთა კულტურული საღამოები". That adult LINE matches the markers above, so
+# a shown menu used to lock the conversation into adult context forever (live bug
+# 2026-07-08). A turn carrying this camp-menu marker is NOT active adult steering
+# and must never count as adult context.
+_ADULT_CTX_NEUTRAL_MENU_MARKER: str = "ბავშვების საზაფხულო ბანაკი"
 # A relative / participant reference (someone the event is FOR) — none of these
 # is a camp signal on its own in adult context.
 _ADULT_CTX_RELATIVE_MARKERS: tuple[str, ...] = (
@@ -3709,11 +3787,17 @@ _ADULT_CTX_AGE_RE = re.compile(r"(?<!\d)(\d{1,3})(?!\d)\s*წ(?:ლ|ელ)")
 
 
 def _bot_recently_in_adult_context(conversation: Conversation) -> bool:
-    """True when a recent ASSISTANT turn steered to adult events."""
+    """True when a recent ASSISTANT turn steered to adult events. The neutral
+    two-option welcome menu (which lists the adult LINE alongside the camp line)
+    is NOT adult steering — a turn carrying the camp-menu marker is skipped so a
+    shown menu never locks the conversation into adult context (live bug
+    2026-07-08)."""
     for turn in reversed(list(getattr(conversation, "history", []) or [])):
         if not isinstance(turn, dict) or turn.get("role") != "assistant":
             continue
         content = str(turn.get("content") or "")
+        if _ADULT_CTX_NEUTRAL_MENU_MARKER in content:
+            continue
         if any(m in content for m in _ADULT_CTX_ASSISTANT_MARKERS):
             return True
     return False
@@ -3751,6 +3835,15 @@ def _maybe_handle_adult_context_relative(
     m = _ADULT_CTX_AGE_RE.search(low)
     if m and 9 <= int(m.group(1)) <= 17:
         return None
+    # Class-level fix (live bug 2026-07-08): a SAVED in-band camp child age means
+    # this is a CAMP conversation — a relative message („ჩემი შვილისთვის",
+    # „ბავშვს დავურეკო") stays camp and must never be flipped to the adult
+    # participant-age question just because a stale menu turn looked adult.
+    lead = getattr(conversation, "lead", None)
+    if _child_age_known(lead):
+        saved_age = _extract_age_digits((getattr(lead, "child_age", "") or ""))
+        if saved_age and 9 <= int(saved_age) <= 17:
+            return None
     if not _bot_recently_in_adult_context(conversation):
         return None
     if not any(r in low for r in _ADULT_CTX_RELATIVE_MARKERS):
@@ -3766,6 +3859,100 @@ def _maybe_handle_adult_context_relative(
         "(sender=%s)", conversation.sender_id,
     )
     return _ADULT_CTX_ASK_AGE
+
+
+# ADDITIONAL LIVE BUG (2026-07-08) — a camp parent's CALL / VISIT question
+# („შემიძლია ბავშვს დავურეკო ან ჩამოვიდე და ვნახო?") was routed to the adult
+# participant-age question because a stale welcome-menu turn had locked the
+# conversation into adult context. This deterministic handler answers such a
+# call/visit question as CAMP: the daily-updates fact + a manager defer for the
+# exact call/visit rules. Runs BEFORE `_maybe_handle_adult_context_relative` so
+# a genuine camp contact question is never treated as adult. Composed only from
+# EXISTING approved sources (parent_communication block + configured manager
+# phone) — nothing invented.
+_PARENT_CONTACT_VISIT_TRIGGERS: tuple[str, ...] = (
+    "დავურეკ", "დაურეკ", "დარეკვ", "ვურეკ",              # call the child
+    "ჩამოვ", "ჩამოს",                                      # come („ჩამოვიდე"/„ჩამოსვლა")
+    "მოვინახულ", "მოვნახულ", "მოსანახულ", "ნახვა",         # visit / see
+)
+# „ვნახო" (I'll come and see) — but NOT „ვნახოთ" („let's see the dates"), which is
+# a normal booking-flow phrase, so the negative lookahead keeps the flow intact.
+_PARENT_VISIT_SEE_RE = re.compile(r"ვნახო(?!თ)")
+
+
+def _in_camp_context(conversation: Conversation) -> bool:
+    """True when the conversation is clearly in CAMP context — a saved in-band
+    child age (9–17), the bot recently asked the child age, or a camp booking is
+    pending. Used to gate the parent contact/visit answer so it never fires on an
+    out-of-context first message."""
+    lead = getattr(conversation, "lead", None)
+    if _child_age_known(lead):
+        age = _extract_age_digits((getattr(lead, "child_age", "") or ""))
+        if age and 9 <= int(age) <= 17:
+            return True
+    try:
+        from app.agent.llm.parent_llm_engine import _bot_recently_asked_child_age
+        if _bot_recently_asked_child_age(conversation):
+            return True
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return bool(getattr(conversation, "pending_booking", None))
+
+
+def _maybe_handle_parent_contact_visit(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Deterministic CAMP answer for a parent's call/visit question. Fires ONLY
+    in camp context AND when the message asks about calling/visiting the child.
+    Returns the daily-updates fact + a manager defer for the exact call/visit
+    rules. Returns None for everything else (adult segment, non-camp context, or a
+    non-contact/visit message) so no other flow is affected."""
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    low = (message or "").lower()
+    if not (
+        any(t in low for t in _PARENT_CONTACT_VISIT_TRIGGERS)
+        or _PARENT_VISIT_SEE_RE.search(low)
+    ):
+        return None
+    if not _in_camp_context(conversation):
+        return None
+    # Daily-updates sentence from the approved parent_communication block — take
+    # its core (photo/video daily program) clause, which carries no „მონაწილე"
+    # token (that word belongs to the adult participant-age question).
+    daily = ""
+    try:
+        from app.reasoning.camp_topic_facts import answer_for_topic
+        pc = answer_for_topic("parent_communication") or ""
+        paras = [p.strip() for p in pc.split("\n\n") if p.strip()]
+        picked = next((p for p in paras if "ყოველდღიურ" in p), (paras[1] if len(paras) > 1 else ""))
+        daily = picked.split(",")[0].strip() if picked else ""
+        if daily and not daily.endswith("."):
+            daily += "."
+    except Exception:  # pragma: no cover — defensive
+        daily = ""
+    if not daily:
+        daily = (
+            "მშობლებს ბანაკის განმავლობაში ყოველდღიურად ეგზავნებათ დღის პროგრამა "
+            "და ფოტო-ვიდეო მასალა."
+        )
+    try:
+        from app.services import admin_config_service
+        phone = (admin_config_service.get_manager_phone() or "").strip()
+    except Exception:  # pragma: no cover — defensive
+        phone = ""
+    defer = (
+        "რაც შეეხება ბავშვთან პირდაპირი დარეკვის ან ჩამოსვლის წესებს, "
+        "ამ დეტალებს მენეჯერი გაგაცნობთ"
+    )
+    if phone:
+        defer += f": {phone}"
+    _ensure_lead(conversation)
+    logger.info(
+        "[parent_flow] parent contact/visit question → camp answer (sender=%s)",
+        conversation.sender_id,
+    )
+    return f"{daily}\n\n{defer}"
 
 
 # ADDITIONAL LIVE BUG (2026-07-07) — identity / bot self questions must get the
@@ -9762,6 +9949,10 @@ def _handle_ask_name(conversation: Conversation, lead: Lead, message: str) -> st
         "[parent_flow] _parse_name_phone input=%r → name=%r phone=%r",
         message, name, phone,
     )
+    # Bug C (2026-07-08) — capture a child age stated in the SAME intake message
+    # („მარიამი / 558070088 / 12 წლის") so the slot confirmation never re-asks it.
+    # Idempotent + phone-/date-safe; no-op when the age is already known.
+    _capture_child_age_from_contact(lead, message)
 
     has_digits = bool(re.search(r"\d", message))
     phone_rejected = has_digits and not phone
