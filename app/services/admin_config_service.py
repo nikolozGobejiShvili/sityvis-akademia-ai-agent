@@ -1061,10 +1061,17 @@ def get_adult_events() -> list[dict[str, Any]]:
             out.append(normalised)
 
     # Live QA Patch (2026-06-05) — Bug 1A: section-level fallback.
-    # Only fires when events[] produced ZERO events (so the operator
-    # who used the old section-level form still gets surfaced).
+    # Hardened (2026-07-07): the fallback fires ONLY when the operator has NOT
+    # provided an explicit ``events`` key. An explicit ``events: []`` (or any
+    # ``events`` value) means the operator intentionally manages the events list
+    # — NEVER fabricate an ``adult_events_default`` from section-level fields in
+    # that case. Previously ``events: []`` still synthesised a fallback, which
+    # let a DELETED event reappear via section-level fields with a future date.
+    # Legacy configs edited only through the old section-level form (no
+    # ``events`` key at all) keep the fallback so their event still surfaces.
     fallback_count = 0
-    if not out:
+    events_key_present = "events" in section
+    if not out and not events_key_present:
         fallback = _build_fallback_event_from_section(section)
         if fallback is not None:
             out.append(fallback)

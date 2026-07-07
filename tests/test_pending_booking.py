@@ -503,7 +503,7 @@ def test_11_identity_during_pending_preserves_pending(driver):
 
     convo = conversation_service.conversations[sender]
     # Identity reply.
-    assert "ასისტენტი" in response
+    assert "ასისტენტი" in response or "კონსულტანტი" in response  # identity wording (2026-07-07)
     # Pending preserved.
     assert convo.pending_booking is not None
     # State preserved.

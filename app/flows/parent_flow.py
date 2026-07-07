@@ -788,6 +788,27 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             conversation, reservation_fee_response,
         )
 
+    # ADDITIONAL LIVE BUG (2026-07-07) — an IDENTITY / bot question
+    # („შენ gpt ხარ?" / „ჩატჯიპიტი ხარ?" / „რობოტი ხარ?" / „ვინ ხარ?" /
+    # „ადამიანი ხარ?") is NOT political and must NEVER hit the politics refusal
+    # or the camp-age question. Answer with the brand consultant identity. Runs
+    # BEFORE the political / off-topic guard and the engine. Organizer questions
+    # („ვინ ხართ ორგანიზატორები?") are already caught by the operational defer
+    # above, so this never hijacks them.
+    identity_response = _maybe_handle_identity(conversation, message)
+    if identity_response is not None:
+        return identity_response
+
+    # ADDITIONAL LIVE BUG (2026-07-07) — once the conversation is in ADULT-EVENTS
+    # context (out-of-camp participant age, user opted into adult events),
+    # „ჩემი შვილისთვის" must NOT route back to summer camp just because the word
+    # „შვილი" appears (a child can be an adult child). Keep adult-events context:
+    # offer adult events when the participant is known-adult, else ask the
+    # participant's age. A hard camp keyword / in-band camp age still wins (camp).
+    adult_ctx_response = _maybe_handle_adult_context_relative(conversation, message)
+    if adult_ctx_response is not None:
+        return adult_ctx_response
+
     # Client follow-up hotfix (2026-06-30) — political / party-identity bait →
     # neutral redirect; an unclear Georgian phrase → polished clarification. Both
     # run before the static welcome / engine so they preempt the funnel (no
@@ -3607,6 +3628,134 @@ def _maybe_handle_exact_detail(
     return f"{general}\n\n{fallback}" if general else fallback
 
 
+# ADDITIONAL LIVE BUG (2026-07-07) — ADULT-EVENTS sticky context. When the bot
+# has steered the conversation to adult events (out-of-camp participant), a
+# „ჩემი შვილისთვის" / relative message must NOT flip back to summer camp just
+# because „შვილი" is a CAMP keyword. Keep adult context.
+_ADULT_CTX_ASSISTANT_MARKERS: tuple[str, ...] = (
+    "ზრდასრულთა ღონისძიებ", "ზრდასრულთა კულტურულ", "კულტურულ საღამო",
+    "ღონისძიების შერჩევა", "ზრდასრულთა პროგრამ",
+)
+# A relative / participant reference (someone the event is FOR) — none of these
+# is a camp signal on its own in adult context.
+_ADULT_CTX_RELATIVE_MARKERS: tuple[str, ...] = (
+    "შვილ", "ბავშვ", "და-ძმ", "დისთვის", "ძმისთვის", "მეგობ",
+    "დედ", "მამ", "მშობ", "მეუღლ", "ჩემთვის", "ჩემი",
+)
+# Hard camp keywords / markers that ALWAYS win (genuine camp intent).
+_ADULT_CTX_CAMP_OVERRIDE: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ")
+_ADULT_CTX_ADULT_PARTICIPANT: str = (
+    "გასაგებია. რადგან მონაწილე ზრდასრულია, ზრდასრულთა ღონისძიებებს გაგაცნობთ. "
+    "რომელი ტიპის ღონისძიება გაინტერესებთ?"
+)
+_ADULT_CTX_ASK_AGE: str = (
+    "რამდენი წლის არის მონაწილე? ზრდასრულთა ღონისძიებებს ასაკობრივი შეზღუდვა "
+    "შეიძლება ჰქონდეს."
+)
+_ADULT_CTX_AGE_RE = re.compile(r"(?<!\d)(\d{1,3})(?!\d)\s*წ(?:ლ|ელ)")
+
+
+def _bot_recently_in_adult_context(conversation: Conversation) -> bool:
+    """True when a recent ASSISTANT turn steered to adult events."""
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "")
+        if any(m in content for m in _ADULT_CTX_ASSISTANT_MARKERS):
+            return True
+    return False
+
+
+def _recent_out_of_camp_participant_age(conversation: Conversation):
+    """The most recent stated participant age that is OUT of the camp band
+    (>17), from the lead or the conversation history, or None."""
+    lead = getattr(conversation, "lead", None)
+    for field in ("adult_age", "adult_target_age"):
+        raw = str(getattr(lead, field, "") or "").strip()
+        if raw.isdigit() and int(raw) > 17:
+            return int(raw)
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "user":
+            continue
+        m = _ADULT_CTX_AGE_RE.search(str(turn.get("content") or ""))
+        if m and int(m.group(1)) > 17:
+            return int(m.group(1))
+    return None
+
+
+def _maybe_handle_adult_context_relative(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """In adult-events context, a relative/participant message („ჩემი
+    შვილისთვის") stays in adult events instead of flipping to camp. Returns None
+    for a genuine camp intent (hard camp keyword / in-band camp age) and for any
+    message outside adult context."""
+    low = (message or "").lower()
+    # Genuine camp intent always wins.
+    if any(k in low for k in _ADULT_CTX_CAMP_OVERRIDE):
+        return None
+    # An in-band camp age („12 წლისაა") is a real camp qualification.
+    m = _ADULT_CTX_AGE_RE.search(low)
+    if m and 9 <= int(m.group(1)) <= 17:
+        return None
+    if not _bot_recently_in_adult_context(conversation):
+        return None
+    if not any(r in low for r in _ADULT_CTX_RELATIVE_MARKERS):
+        return None
+    if _recent_out_of_camp_participant_age(conversation) is not None:
+        logger.info(
+            "[parent_flow] adult-context relative → keep adult events "
+            "(known adult participant, sender=%s)", conversation.sender_id,
+        )
+        return _ADULT_CTX_ADULT_PARTICIPANT
+    logger.info(
+        "[parent_flow] adult-context relative → ask participant age "
+        "(sender=%s)", conversation.sender_id,
+    )
+    return _ADULT_CTX_ASK_AGE
+
+
+# ADDITIONAL LIVE BUG (2026-07-07) — identity / bot self questions must get the
+# brand consultant answer, never the politics refusal and never a camp-age
+# question. Deterministic, runs before the political / off-topic guard + engine.
+_IDENTITY_ANSWER: str = (
+    "მე სიტყვის აკადემიის ონლაინ-კონსულტანტი ვარ და ბანაკისა და ღონისძიებების "
+    "შესახებ დაგეხმარებით."
+)
+# Markers each carry a self-reference („ხარ"/„ხართ") or a model/AI name, so an
+# organizer question („ვინ არის ორგანიზატორი?", handled by the operational
+# defer) is not matched.
+_IDENTITY_QUESTION_MARKERS: tuple[str, ...] = (
+    "gpt", "chatgpt", "ჩატჯიპიტ", "ჩატ ჯიპიტ", "ჯიპიტი ხარ",
+    "რობოტი ხარ", "რობოტ ხარ", "ბოტი ხარ", "ბოტ ხარ", "ბოტი ხართ",
+    "ai ხარ", "ხელოვნური ინტელექტ", "ნეირონ", "მანქანა ხარ", "პროგრამა ხარ",
+    "ვინ ხარ", "ვინ ხართ", "შენ ვინ", "ადამიანი ხარ", "ადამიან ხარ",
+    "ცოცხალი ხარ", "ნამდვილი ადამიან",
+)
+
+
+def _is_identity_question(message: str) -> bool:
+    """True for a short bot/identity question about the assistant itself."""
+    low = (message or "").lower().strip()
+    if not low or len(low) > 100:
+        return False
+    return any(m in low for m in _IDENTITY_QUESTION_MARKERS)
+
+
+def _maybe_handle_identity(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Deterministic brand-consultant identity answer. Returns None for a
+    non-identity message. No politics refusal, no camp-age question."""
+    if not _is_identity_question(message):
+        return None
+    logger.info(
+        "[parent_flow] identity/bot question → consultant identity (sender=%s)",
+        conversation.sender_id,
+    )
+    return _IDENTITY_ANSWER
+
+
 def _maybe_handle_political(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -5057,7 +5206,26 @@ def _has_explicit_georgian_camp_intent(message: str) -> bool:
         return False
     if not any(kw in text for kw in _CAMP_INTENT_KEYWORDS):
         return False
-    return any(m in text for m in _CAMP_INTENT_MARKERS)
+    if any(m in text for m in _CAMP_INTENT_MARKERS):
+        return True
+    # BUG 1/6 (2026-07-07) — a SPECIFIC camp QUESTION (price / topic fact /
+    # operational-detail / exact-detail) also skips the disambiguation menu: the
+    # camp intent is clear, so answer the question rather than re-asking the
+    # camp-vs-adult menu. A BARE camp keyword („ბანაკი") with no question still
+    # shows the branded menu (no marker, no specific-question detector matches).
+    try:
+        if _is_camp_price_intent(message):
+            return True
+        from app.reasoning import camp_topic_facts as _ctf
+        if (
+            _ctf.detect_camp_topic(message) is not None
+            or _ctf.resolve_operational(message) is not None
+            or _ctf.resolve_exact_detail(message) is not None
+        ):
+            return True
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return False
 
 
 def _has_explicit_english_camp_intent(message: str) -> bool:
@@ -8869,7 +9037,7 @@ _NAME_REJECT_STEMS: tuple[str, ...] = (
     # separate semantic classifier did), so the `save_lead_info` tool clobbered
     # a real name. „მოგწერ" (I-wrote-to-you) mirrors the existing „მომწერ"
     # (write-to-me); none of these is ever a real Georgian first name.
-    "მოგწერ", "გასაგებ", "ნებისმიერ", "მადლობ", "გმადლობ",
+    "მოგწერ", "გასაგებ", "ნებისმიერ", "მადლობ", "გმადლობ", "გავიგ",
 )
 
 # Exact-token rejects — short ambiguous words that must NOT be matched by
