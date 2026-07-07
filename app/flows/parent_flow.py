@@ -820,6 +820,17 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     if unclear_response is not None:
         return unclear_response
 
+    # Camp stream/cohort direct answer (live bug 2026-07-07) — a message that
+    # names a camp STREAM/cohort („ნაკადი" / „მესამე ნაკადი" / „3 ნაკადი") and
+    # asks the age limit and/or price is unambiguous camp intent. Answer it
+    # directly (stream date + age band + price + inclusions) BEFORE the static
+    # welcome so it is never shown the generic camp-vs-adult menu. Typo-tolerant
+    # („ასოკობრივი" → „ასაკობრივი"). Seats/operational stream questions and a
+    # bare stream-dates question (no age/price) return None (own handler/engine).
+    camp_stream_response = _maybe_handle_camp_stream_query(conversation, message)
+    if camp_stream_response is not None:
+        return _sanitise_booking_confirmation(conversation, camp_stream_response)
+
     # Static welcome bypass.
     # On the bot's first reply at state=START, return the static
     # PARENT_WELCOME menu — NEVER the LLM. Live QA showed the engine
@@ -3423,6 +3434,37 @@ def _camp_price_short_answer() -> str:
     return f"როგორც ზემოთ მოგწერეთ, ბანაკის ღირებულებაა {_camp_price_value()}₾."
 
 
+def _camp_price_direct_answer() -> str:
+    """Direct camp-price answer (price + inclusions) with NO „as above" back-
+    reference. Used when a price question repeats but the assistant NEVER actually
+    stated the price before (live bug 2026-07-07 — the price was asked twice while
+    only the menu/an age question was ever shown, so the „ზემოთ მოგწერეთ" claim was
+    false)."""
+    return (
+        f"ბანაკის ღირებულება არის {_camp_price_value()} ლარი.\n\n"
+        "ამ თანხაში შედის ტრანსპორტირება, განთავსება, კვება და სრული პროგრამა."
+    )
+
+
+def _assistant_gave_camp_price(conversation: Conversation) -> bool:
+    """True when an EARLIER assistant turn actually stated the camp price — the
+    price value together with a price context word — so a „როგორც ზემოთ მოგწერეთ"
+    repeat is truthful. Guards the live bug (2026-07-07) where the price was asked
+    twice but the assistant only ever showed the generic menu / an age question and
+    the repeat handler still falsely claimed „as above"."""
+    price = _camp_price_value()
+    for turn in (getattr(conversation, "history", []) or []):
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "")
+        low = content.lower()
+        if (price in content or "2150" in content) and any(
+            w in low for w in ("ღირებულ", "ფას", "ლარ")
+        ):
+            return True
+    return False
+
+
 def _camp_price_question_count(conversation: Conversation) -> int:
     """How many USER turns in this conversation were camp_price questions.
     History-based (no module state — survives a Redis reload, never leaks across
@@ -3453,6 +3495,17 @@ def _maybe_handle_repeat_camp_price(
         return None
     if _camp_price_question_count(conversation) < 2:
         return None
+    # Only claim „როგორც ზემოთ მოგწერეთ" when the assistant ACTUALLY gave the price
+    # earlier. Live bug (2026-07-07): the price was asked twice but only the menu /
+    # an age question was ever shown, so the „as above" back-reference was false —
+    # answer directly instead (price + inclusions, no false claim).
+    if not _assistant_gave_camp_price(conversation):
+        logger.info(
+            "[parent_flow] repeat camp_price w/o prior price answer → direct "
+            "answer, no false back-reference (sender=%s)",
+            conversation.sender_id,
+        )
+        return _camp_price_direct_answer()
     logger.info(
         "[parent_flow] repeat camp_price → short answer (sender=%s)",
         conversation.sender_id,
@@ -5191,6 +5244,166 @@ def _maybe_handle_contact_correction(
     return None
 
 
+# ── Camp stream / cohort direct answer (live bug 2026-07-07) ─────────────────
+# Live bug: „მაინტერესებს 3 ნაკადის ასოკობრივი ზღვარი და ფასი" was shown the
+# generic camp-vs-adult menu because the message named a camp STREAM/cohort
+# („ნაკადი") WITHOUT the word „ბანაკი" and carried a typo („ასოკობრივი"). A
+# stream question combined with an AGE-limit and/or PRICE ask is unambiguous camp
+# intent → answer it directly (stream date + age band + price + inclusions),
+# never the menu. Seats / operational stream questions defer to their own handler;
+# a bare stream-dates question (no age/price) defers to the engine.
+_CAMP_STREAM_TERMS: tuple[str, ...] = ("ნაკად",)
+# Age-limit ask markers („ასაკობრივი ზღვარი" / „ასაკი" / „რამდენი წლის").
+_CAMP_STREAM_AGE_MARKERS: tuple[str, ...] = ("ასაკ", "წლ")
+# Georgian ordinal stems → stream number („მესამე ნაკადი" → 3).
+_STREAM_ORDINAL_STEMS: tuple[tuple[str, int], ...] = (
+    ("პირველ", 1), ("მეორე", 2), ("მესამე", 3), ("მეოთხე", 4), ("მეხუთე", 5),
+)
+_STREAM_ROMAN: dict[str, int] = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5}
+# Nominative → dative month, for the „… ტარდება 14–20 ივლისს" stream-date line.
+_STREAM_MONTH_DATIVE: tuple[tuple[str, str], ...] = (
+    ("ივნისი", "ივნისს"), ("ივლისი", "ივლისს"), ("აგვისტო", "აგვისტოს"),
+)
+# Ordinal-first regex („მე-3 ნაკად") then bare digit („3 ნაკად" / „3-ე ნაკად").
+_STREAM_ME_NUM_RE = re.compile(r"მე-?\s*(\d{1,2})\s*ნაკად")
+_STREAM_NUM_RE = re.compile(r"(\d{1,2})\s*(?:-?ე)?\s*ნაკად")
+_STREAM_ROMAN_RE = re.compile(r"\b(iii|ii|iv|i|v)\s*ნაკად")
+
+
+def _normalise_camp_typos(message: str) -> str:
+    """Fix the live camp typo „ასოკობრივ(ი)" → „ასაკობრივ(ი)" so an age-limit ask
+    is recognised. DETECTION/answer helper only — narrow and safe."""
+    return (message or "").replace("ასოკობრივ", "ასაკობრივ")
+
+
+def _mentions_camp_stream(text_low: str) -> bool:
+    """True when the message names a camp STREAM/cohort („ნაკადი")."""
+    return any(t in (text_low or "") for t in _CAMP_STREAM_TERMS)
+
+
+def _extract_camp_stream_number(text_low: str) -> int | None:
+    """Return the named camp stream number (1-based) from „მე-3 ნაკად" / „3 ნაკად"
+    / „მესამე ნაკად" / „III ნაკად", or None when no specific stream is named."""
+    low = text_low or ""
+    m = _STREAM_ME_NUM_RE.search(low)
+    if m:
+        return int(m.group(1))
+    m = _STREAM_NUM_RE.search(low)
+    if m:
+        return int(m.group(1))
+    for stem, n in _STREAM_ORDINAL_STEMS:
+        if stem in low:
+            return n
+    m = _STREAM_ROMAN_RE.search(low)
+    if m:
+        return _STREAM_ROMAN.get(m.group(1))
+    return None
+
+
+def _camp_stream_dates_text(number: int | None) -> str | None:
+    """The canonical (admin-first) dates_text of the N-th camp stream, or None.
+    Never hard-codes a date — reads ``get_camp_facts()['streams']``."""
+    if not number or number < 1:
+        return None
+    try:
+        from app.services import admin_config_service
+        facts = admin_config_service.get_camp_facts() or {}
+    except Exception:  # pragma: no cover — defensive
+        return None
+    streams = facts.get("streams") or []
+    if not isinstance(streams, list) or number > len(streams):
+        return None
+    stream = streams[number - 1]
+    if not isinstance(stream, dict):
+        return None
+    return (stream.get("dates_text") or "").strip() or None
+
+
+def _format_stream_dates_dative(dates_text: str) -> str:
+    """„14-20 ივლისი" → „14–20 ივლისს" (dative month + en-dash), for the stream
+    date line. Mirrors the existing camp_topic_facts stream-confirm wording."""
+    out = (dates_text or "").strip()
+    for nom, dat in _STREAM_MONTH_DATIVE:
+        if nom in out:
+            out = out.replace(nom, dat)
+            break
+    return out.replace("-", "–")
+
+
+def _maybe_handle_camp_stream_query(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Direct answer for a camp STREAM/cohort question that also asks the age
+    limit and/or price („3 ნაკადის ასაკობრივი ზღვარი და ფასი"). Runs BEFORE the
+    static welcome so it is never shown the generic menu. Returns None (defer) for:
+    a non-stream message, a seats/operational stream question (own handler), an
+    ADULT conversation, or a bare stream-dates question with no age/price ask."""
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    text = _normalise_camp_typos(message)
+    low = text.lower()
+    if not _mentions_camp_stream(low):
+        return None
+    # Seats / operational unknown-detail questions (even when a stream is named,
+    # e.g. „მე-2 ნაკადზე ადგილები გაქვთ?") belong to the operational handler.
+    try:
+        from app.reasoning import camp_topic_facts as _ctf
+        if _ctf.resolve_operational(text) is not None:
+            return None
+    except Exception:  # pragma: no cover — defensive
+        pass
+    want_age = any(m in low for m in _CAMP_STREAM_AGE_MARKERS)
+    want_price = _is_camp_price_intent(text) and not _is_payment_question(text)
+    if not (want_age or want_price):
+        return None
+
+    try:
+        from app.services import admin_config_service
+        facts = admin_config_service.get_camp_facts() or {}
+    except Exception:  # pragma: no cover — defensive
+        facts = {}
+    age_min = str(facts.get("age_min") or "9").strip()
+    age_max = str(facts.get("age_max") or "17").strip()
+    price = _camp_price_value()
+
+    stream_no = _extract_camp_stream_number(low)
+    sentences: list[str] = []
+    if stream_no is not None:
+        dates = _camp_stream_dates_text(stream_no)
+        if dates:
+            sentences.append(
+                f"ბანაკის მე-{stream_no} ნაკადი ტარდება "
+                f"{_format_stream_dates_dative(dates)}."
+            )
+    if want_age and want_price:
+        sentences.append(
+            f"ბანაკი განკუთვნილია {age_min}–{age_max} წლის ბავშვებისთვის, "
+            f"ხოლო ღირებულება არის {price} ლარი."
+        )
+    elif want_age:
+        sentences.append(
+            f"ბანაკი განკუთვნილია {age_min}–{age_max} წლის ბავშვებისთვის."
+        )
+    elif want_price:
+        sentences.append(f"ბანაკის ღირებულება არის {price} ლარი.")
+
+    if not sentences:
+        return None
+    paras = [" ".join(sentences)]
+    if want_price:
+        paras.append(
+            "ამ თანხაში შედის ტრანსპორტირება, განთავსება, კვება და სრული პროგრამა."
+        )
+    paras.append("თუ გსურთ, კონსულტაციაზე ჩაგწერთ.")
+    _ensure_lead(conversation)
+    logger.info(
+        "[parent_flow] camp stream query → direct answer "
+        "(stream=%s age=%s price=%s sender=%s)",
+        stream_no, want_age, want_price, conversation.sender_id,
+    )
+    return "\n\n".join(paras)
+
+
 def _has_explicit_georgian_camp_intent(message: str) -> bool:
     """True when the FIRST message clearly states camp interest — a camp
     keyword PLUS an interest / info / sign-up marker. Lets the static
@@ -5204,6 +5417,11 @@ def _has_explicit_georgian_camp_intent(message: str) -> bool:
     text = (message or "").lower()
     if not text:
         return False
+    # BUG (2026-07-07) — a STREAM/cohort term („ნაკადი" / „მესამე ნაკადი" /
+    # „3 ნაკადი") is unambiguous camp intent even without the word „ბანაკი";
+    # skip the disambiguation menu so the specific question is answered.
+    if _mentions_camp_stream(text):
+        return True
     if not any(kw in text for kw in _CAMP_INTENT_KEYWORDS):
         return False
     if any(m in text for m in _CAMP_INTENT_MARKERS):

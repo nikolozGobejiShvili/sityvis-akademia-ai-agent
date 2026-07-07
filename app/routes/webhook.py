@@ -332,6 +332,15 @@ async def _process_payload(payload: dict[str, Any]) -> None:
             platform = incoming["platform"]
 
             logger.info("[%s] Message from %s: %s", platform, sender_id, message_text[:120])
+            # Observability (2026-07-07): a single greppable line tying platform +
+            # page_id + sender_id to the incoming text (300 chars) so an operator
+            # can match a live Page-Inbox conversation to the sender_id. NEVER logs
+            # tokens/secrets/access_token.
+            logger.info(
+                "[messenger_debug] incoming platform=%s page_id=%s sender=%s text=%r",
+                platform, incoming.get("page_id", ""), sender_id,
+                (message_text or "")[:300],
+            )
             await message_buffer.buffer_message(
                 sender_id=sender_id,
                 message=message_text,
@@ -367,6 +376,37 @@ async def _dispatch_buffered_reply(sender_id: str, combined_message: str, platfo
         "[webhook] process_message returned response (len=%d): %s",
         len(response or ""),
         (response or "")[:120],
+    )
+
+    # Observability (2026-07-07): resolve the user's display name (so an operator
+    # can match a live Page-Inbox conversation like „Davit Makasarashvili" to this
+    # sender_id) and emit ONE consolidated line tying the incoming text, chosen
+    # route (when the trace flag is on), and the outgoing response (300 chars each)
+    # to the sender. get_user_profile masks the access_token itself and returns {}
+    # on any failure — a fetch failure is a non-fatal warning, never a break.
+    user_name = ""
+    try:
+        profile = messenger_service.get_user_profile(sender_id, platform) or {}
+        user_name = profile.get("name") or profile.get("username") or ""
+    except Exception as exc:  # pragma: no cover — profile lookup must never break
+        logger.warning(
+            "[messenger_debug] get_user_profile failed for sender=%s: %s "
+            "— continuing", sender_id, exc,
+        )
+    route = ""
+    try:
+        from app.reasoning import conversation_trace as _ct
+        _hist = _ct.history()
+        if _hist:
+            _last = _hist[-1]
+            route = str(_last.get("answered_by") or _last.get("handler") or "")
+    except Exception:  # pragma: no cover — trace is best-effort observability
+        route = ""
+    logger.info(
+        "[messenger_debug] turn platform=%s sender=%s name=%r route=%s "
+        "in=%r out=%r",
+        platform, sender_id, user_name, route or "-",
+        (combined_message or "")[:300], (response or "")[:300],
     )
 
     if not response:
@@ -647,6 +687,9 @@ async def handle_comment(
 
 def _extract_meta_messages(payload: dict[str, Any], entry: dict[str, Any]) -> list[dict[str, str]]:
     platform = _meta_platform(payload)
+    # For Messenger/Instagram the entry id IS the Page / IG-account id — carry it
+    # through so the observability log can identify which Page a DM landed on.
+    page_id = str(entry.get("id") or "") if isinstance(entry, dict) else ""
     messages: list[dict[str, str]] = []
 
     for event in entry.get("messaging", []):
@@ -658,6 +701,7 @@ def _extract_meta_messages(payload: dict[str, Any], entry: dict[str, Any]) -> li
                     "sender_id": sender_id,
                     "message_text": message_text,
                     "platform": platform,
+                    "page_id": page_id,
                 },
             )
 
@@ -669,6 +713,10 @@ def _extract_whatsapp_messages(entry: dict[str, Any]) -> list[dict[str, str]]:
 
     for change in entry.get("changes", []):
         value = change.get("value", {})
+        # WhatsApp: the business phone-number id lives in value.metadata.
+        page_id = str(
+            (value.get("metadata", {}) or {}).get("phone_number_id") or "",
+        )
         for message in value.get("messages", []):
             message_text = message.get("text", {}).get("body")
             sender_id = message.get("from")
@@ -678,6 +726,7 @@ def _extract_whatsapp_messages(entry: dict[str, Any]) -> list[dict[str, str]]:
                         "sender_id": sender_id,
                         "message_text": message_text,
                         "platform": "whatsapp",
+                        "page_id": page_id,
                     },
                 )
 
