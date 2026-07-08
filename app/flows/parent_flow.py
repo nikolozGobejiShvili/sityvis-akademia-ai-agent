@@ -5023,6 +5023,16 @@ _CAMP_INTENT_MARKERS: tuple[str, ...] = (
     "ლინკ",        # „ლინკი მომწერეთ"
     "გავიგ",       # გავიგო, გავიგებ
     "დამაინტერეს",
+    # First-turn camp-INFO phrasings (2026-07-08) — a clear camp-info / question
+    # opener („ბანაკის შესახებ მინდოდა კითხვა") must skip the disambiguation menu
+    # and continue the camp flow. Past-tense „მინდოდა" is NOT a substring of the
+    # existing „მინდა" marker, and „შესახებ" / „კითხვა" were not markers at all,
+    # so these phrasings previously fell through to the menu. Still requires a
+    # camp keyword too (so a bare „შესახებ" / „კითხვა" with no camp context — and
+    # a bare „ბანაკი" with no marker — does NOT match).
+    "შესახებ",     # „ბანაკის შესახებ"
+    "კითხვა",      # „ბანაკზე მაქვს კითხვა" / „კითხვა მაქვს ბანაკზე"
+    "მინდოდა",     # past-tense want („მინდოდა კითხვა")
     "interested",
     "info",
     "want",
@@ -5654,6 +5664,27 @@ def _has_explicit_english_camp_intent(message: str) -> bool:
     return any(tok in text for tok in _ENGLISH_CAMP_INTENT_TOKENS)
 
 
+# First-turn ADULT-events intent (2026-07-08). NARROW by design: an explicit
+# adult marker („ზრდასრულ") AND an event / culture marker. Deliberately
+# conservative — a bare „ზრდასრულ" / „კულტურ" alone, or a camp message, is NOT
+# read as an adult-events opener, so only a clear adults-cultural-events question
+# skips the disambiguation menu.
+_FIRST_TURN_ADULT_EVENT_MARKERS: tuple[str, ...] = (
+    "ღონისძიებ", "კულტურ", "საღამო", "ივენთ", "event",
+)
+
+
+def _first_turn_adult_events_intent(message: str) -> bool:
+    """True when the FIRST message clearly asks about ADULT cultural events —
+    an adult marker („ზრდასრულ") PLUS an event / culture marker
+    („ღონისძიებ" / „კულტურ" / „საღამო" / „ივენთ" / „event"). Lets the static
+    welcome step aside so the adult path answers instead of the camp menu."""
+    low = (message or "").lower()
+    if "ზრდასრულ" not in low:
+        return False
+    return any(m in low for m in _FIRST_TURN_ADULT_EVENT_MARKERS)
+
+
 def _maybe_static_welcome(conversation: Conversation, message: str) -> str | None:
     """Return the static PARENT_WELCOME menu on the bot's first reply
     at ``state == "START"``; otherwise None so the normal flow runs.
@@ -5683,6 +5714,19 @@ def _maybe_static_welcome(conversation: Conversation, message: str) -> str | Non
     # P0 Live Demo UX — ISSUE 1: clear Georgian camp intent skips the
     # generic disambiguation menu and continues the camp flow.
     if _has_explicit_georgian_camp_intent(message):
+        return None
+    # First-turn specific-intent yields (2026-07-08) — the two-option menu is the
+    # LAST resort. A clear first-turn PRICE or ADULT-events question is answered
+    # by its real handler instead of being bounced to the disambiguation menu.
+    #   (a) PRICE — in the PARENT context a first-turn „ფასი მაინტერესებს" /
+    #       „რა ღირს" means CAMP price (even without a camp keyword); the START
+    #       PRICE branch then answers with PARENT_PRICE_FIRST_RESPONSE.
+    if _is_price_question(message) or _is_camp_price_intent(message):
+        return None
+    #   (b) ADULT cultural events — an explicit adults + event/culture question
+    #       routes to the adult path (an events answer or the „no active event"
+    #       line), never the camp menu.
+    if _first_turn_adult_events_intent(message):
         return None
     try:
         return PARENT_WELCOME.strip()
