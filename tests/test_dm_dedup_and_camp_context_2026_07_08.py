@@ -67,10 +67,15 @@ def dm_buffer(monkeypatch):
     """LRU-only dedup (Redis off) + a buffer_message spy that records each call."""
     webhook._processed_dms_lru.clear()
     monkeypatch.setattr(webhook.redis_state_service, "is_enabled", lambda: False)
-    calls: list[str] = []
+    calls: list[dict[str, str]] = []
 
-    async def _fake_buffer(*, sender_id, message, platform, on_ready):
-        calls.append(message)
+    async def _fake_buffer(*, sender_id, message, platform, page_id, on_ready):
+        calls.append({
+            "sender_id": sender_id,
+            "message": message,
+            "platform": platform,
+            "page_id": page_id,
+        })
 
     monkeypatch.setattr(webhook.message_buffer, "buffer_message", _fake_buffer)
     return calls
@@ -86,7 +91,7 @@ def test_d_same_mid_twice_processed_once(dm_buffer):
 def test_d_same_text_different_mid_processed_twice(dm_buffer):
     asyncio.run(webhook._process_payload(_dm_payload("m1", text="კი")))
     asyncio.run(webhook._process_payload(_dm_payload("m2", text="კი")))  # legit repeat
-    assert dm_buffer == ["კი", "კი"]
+    assert [call["message"] for call in dm_buffer] == ["კი", "კი"]
 
 
 def test_d_missing_mid_never_deduped(dm_buffer):
@@ -105,6 +110,13 @@ def test_d_extract_reads_mid_and_page():
         {"object": "page"}, _dm_payload("mZ", sender="S", page="PG")["entry"][0],
     )
     assert msgs and msgs[0]["mid"] == "mZ" and msgs[0]["page_id"] == "PG"
+
+
+def test_d_webhook_passes_page_id_to_buffer(dm_buffer):
+    asyncio.run(webhook._process_payload(_dm_payload("m-page", sender="S", page="PAGE-A")))
+    assert dm_buffer[0]["sender_id"] == "S"
+    assert dm_buffer[0]["platform"] == "messenger"
+    assert dm_buffer[0]["page_id"] == "PAGE-A"
 
 
 def test_d_comment_dedup_not_regressed():

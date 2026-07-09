@@ -15,6 +15,7 @@ from fastapi.responses import PlainTextResponse
 
 from app.agent.services.timestamps import now_tbilisi_iso
 from app.config import settings
+from app.services.session_key_service import canonical_session_key
 from app.services import (
     comment_service,
     conversation_service,
@@ -404,13 +405,22 @@ async def _process_payload(payload: dict[str, Any]) -> None:
             sender_id = incoming["sender_id"]
             message_text = incoming["message_text"]
             platform = incoming["platform"]
+            page_id = incoming.get("page_id", "")
+            try:
+                canonical_session_key(platform, page_id, sender_id, require_page_id=True)
+            except ValueError:
+                logger.warning(
+                    "[webhook] missing page_id for platform=%s sender=%s -- skipping DM",
+                    platform, sender_id,
+                )
+                continue
 
             # Bug D (2026-07-08) — DM idempotency. A message that carries a `mid`
             # and was already processed (redelivery) is skipped so the bot never
             # sends the same reply twice. A message WITHOUT a mid is processed
             # normally (never collapse distinct messages that lack an id).
             _mid = incoming.get("mid", "")
-            _dm_key = _dm_dedup_key(platform, incoming.get("page_id", ""), sender_id, _mid)
+            _dm_key = _dm_dedup_key(platform, page_id, sender_id, _mid)
             if _dm_key and _dm_already_seen(_dm_key):
                 logger.info("[webhook] duplicate DM mid=%s skipped", _mid)
                 continue
@@ -424,13 +434,14 @@ async def _process_payload(payload: dict[str, Any]) -> None:
             # tokens/secrets/access_token.
             logger.info(
                 "[messenger_debug] incoming platform=%s page_id=%s sender=%s text=%r",
-                platform, incoming.get("page_id", ""), sender_id,
+                platform, page_id, sender_id,
                 (message_text or "")[:300],
             )
             await message_buffer.buffer_message(
                 sender_id=sender_id,
                 message=message_text,
                 platform=platform,
+                page_id=page_id,
                 on_ready=_dispatch_buffered_reply,
             )
     except Exception as exc:
@@ -442,17 +453,23 @@ async def _process_payload(payload: dict[str, Any]) -> None:
         logger.exception("[webhook] Comment processing error: %s", exc)
 
 
-async def _dispatch_buffered_reply(sender_id: str, combined_message: str, platform: str) -> None:
+async def _dispatch_buffered_reply(
+    sender_id: str,
+    combined_message: str,
+    platform: str,
+    page_id: str = "",
+) -> None:
     """Called once per debounced batch — sends a single response for joined fragments."""
     logger.info(
-        "[webhook] Dispatching buffered reply for sender=%s combined=%r",
-        sender_id, combined_message[:120],
+        "[webhook] Dispatching buffered reply for sender=%s page_id=%s combined=%r",
+        sender_id, page_id, combined_message[:120],
     )
     try:
         response = conversation_service.process_message(
             sender_id=sender_id,
             message_text=combined_message,
             platform=platform,
+            page_id=page_id,
         )
     except Exception as exc:
         logger.exception("[webhook] process_message raised for sender=%s: %s", sender_id, exc)
@@ -489,9 +506,9 @@ async def _dispatch_buffered_reply(sender_id: str, combined_message: str, platfo
     except Exception:  # pragma: no cover — trace is best-effort observability
         route = ""
     logger.info(
-        "[messenger_debug] turn platform=%s sender=%s name=%r route=%s "
+        "[messenger_debug] turn platform=%s page_id=%s sender=%s name=%r route=%s "
         "in=%r out=%r",
-        platform, sender_id, user_name, route or "-",
+        platform, page_id, sender_id, user_name, route or "-",
         (combined_message or "")[:300], (response or "")[:300],
     )
 

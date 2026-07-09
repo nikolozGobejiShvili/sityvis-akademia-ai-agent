@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 # every field already defaults safely via ``.get`` in ``from_dict``, so
 # this is diagnostics only, never a migration step.
 _CURRENT_SNAPSHOT_KEYS: frozenset[str] = frozenset({
-    "sender_id", "platform", "segment", "state", "history", "lead",
+    "sender_id", "platform", "page_id", "session_key", "segment", "state",
+    "history", "lead",
     "created_at", "last_activity", "pending_booking", "last_bot_message_at",
     "followup_stage", "followup_blocked_reason", "last_meaningful_interest",
     "stopped_after", "adult_subscription_status",
@@ -90,6 +91,8 @@ class Conversation:
     # this field exists purely to avoid noisy re-asks within ONE
     # conversation turn.
     adult_subscription_status: str = ""
+    page_id: str = ""
+    session_key: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe dict representation.
@@ -102,6 +105,8 @@ class Conversation:
         return {
             "sender_id": self.sender_id,
             "platform": self.platform,
+            "page_id": self.page_id,
+            "session_key": self.session_key,
             "segment": self.segment,
             "state": self.state,
             "history": list(self.history),
@@ -157,6 +162,8 @@ class Conversation:
             last_meaningful_interest=str(data.get("last_meaningful_interest", "") or ""),
             stopped_after=str(data.get("stopped_after", "") or ""),
             adult_subscription_status=str(data.get("adult_subscription_status", "") or ""),
+            page_id=str(data.get("page_id", "") or ""),
+            session_key=str(data.get("session_key", "") or ""),
         )
 
 

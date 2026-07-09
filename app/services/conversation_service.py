@@ -9,59 +9,193 @@ from app.config import DATA_DIR, settings
 from app.flows import adult_flow, parent_flow
 from app.models.conversation import Conversation
 from app.services import kill_switch, redis_state_service, sentry_service
+from app.services.session_key_service import canonical_platform_key, canonical_session_key
 from data.prompts import UNCLEAR_ROUTING
 
 logger = logging.getLogger(__name__)
 
-conversations = {}  # {sender_id: Conversation}
+class _ConversationStore(dict):
+    """In-memory store keyed by canonical session key.
+
+    Existing tests and a few legacy helpers still read by raw sender_id.
+    Those lookups are allowed only when exactly one live conversation has
+    that sender_id; ambiguous sender-only lookups fail closed.
+    """
+
+    def _legacy_sender_key(self, key: object) -> str | None:
+        if not isinstance(key, str) or ":" in key:
+            return None
+        matches = [
+            store_key for store_key, conv in dict.items(self)
+            if getattr(conv, "sender_id", None) == key
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def __contains__(self, key: object) -> bool:
+        return dict.__contains__(self, key) or self._legacy_sender_key(key) is not None
+
+    def __setitem__(self, key: str, value: Conversation) -> None:
+        if isinstance(value, Conversation):
+            try:
+                if not value.session_key:
+                    _ensure_conversation_identity(value)
+                if key in {value.sender_id, value.session_key}:
+                    key = value.session_key
+            except Exception:
+                pass
+        dict.__setitem__(self, key, value)
+
+    def __getitem__(self, key: str) -> Conversation:
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        legacy_key = self._legacy_sender_key(key)
+        if legacy_key is not None:
+            return dict.__getitem__(self, legacy_key)
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Conversation | Any:
+        if dict.__contains__(self, key):
+            return dict.get(self, key, default)
+        legacy_key = self._legacy_sender_key(key)
+        if legacy_key is not None:
+            return dict.get(self, legacy_key, default)
+        return default
+
+    def pop(self, key: str, default: Any = None) -> Conversation | Any:
+        if dict.__contains__(self, key):
+            return dict.pop(self, key, default)
+        legacy_key = self._legacy_sender_key(key)
+        if legacy_key is not None:
+            return dict.pop(self, legacy_key, default)
+        return default
+
+
+conversations: _ConversationStore = _ConversationStore()
 
 
 # -- P3-B Redis-backed persistence helpers --------------------------------
 #
-# `conversations` (above) is the in-memory working store and remains the
-# fast path / source of truth during a single process lifetime. Redis is
-# a write-through mirror: every successful message handling saves the
-# Conversation as JSON under `conversation:{platform}:{sender_id}`. On
-# load, if the sender is missing from the in-memory dict we ask Redis
-# first; a hit re-hydrates and re-populates the in-memory dict so the
-# rest of the code path is unchanged.
+# `conversations` is the in-memory working store and is keyed by the
+# canonical `platform:page_id:sender_id` session key. Redis mirrors each
+# Conversation under `conversation:{platform}:{page_id}:{sender_id}`.
+# During migration, Redis reads fall back to the legacy
+# `conversation:{platform}:{sender_id}` key and write back the canonical key.
 #
-# Redis disabled / unavailable → these helpers are no-ops and the legacy
-# in-memory dict behaviour is preserved exactly.
+# Redis disabled / unavailable -> these helpers are no-ops and the in-memory
+# store remains the source of truth during a single process lifetime.
 
 
-def _conversation_redis_key(platform: str, sender_id: str) -> str:
-    # Platform first so per-platform key scans / dashboards are easier.
-    # Sender_id second so a key can be derived without knowing platform
-    # in the rare case where it differs (we always know platform at
-    # callsite though).
-    return f"conversation:{platform or 'unknown'}:{sender_id}"
+def _conversation_session_key(
+    sender_id: str,
+    platform: str,
+    page_id: str = "",
+    *,
+    require_page_id: bool = False,
+) -> str:
+    return canonical_session_key(
+        platform, page_id, sender_id, require_page_id=require_page_id,
+    )
 
 
-def _load_conversation_from_redis(sender_id: str, platform: str) -> Conversation | None:
+def _ensure_conversation_identity(
+    conversation: Conversation,
+    *,
+    page_id: str | None = None,
+    require_page_id: bool = False,
+) -> str:
+    if page_id is not None:
+        conversation.page_id = str(page_id or "").strip()
+    conversation.session_key = _conversation_session_key(
+        conversation.sender_id,
+        conversation.platform,
+        conversation.page_id,
+        require_page_id=require_page_id,
+    )
+    return conversation.session_key
+
+
+def _conversation_redis_key(
+    platform_or_session_key: str,
+    page_id: str | None = None,
+    sender_id: str | None = None,
+) -> str:
+    """Return the Redis key for a canonical conversation session.
+
+    Preferred call shape is ``_conversation_redis_key(platform, page_id, sender)``.
+    The two-argument legacy shape is retained for older tests/helpers and maps
+    to the canonical key with an ``unknown`` page id.
+    """
+    if sender_id is None:
+        if page_id is None:
+            session_key = str(platform_or_session_key or "").strip()
+            if session_key.startswith("conversation:"):
+                return session_key
+            return f"conversation:{session_key}"
+        sender_id = page_id
+        page_id = ""
+    return f"conversation:{_conversation_session_key(sender_id, platform_or_session_key, page_id or '')}"
+
+
+def _legacy_conversation_redis_keys(platform: str, sender_id: str) -> list[str]:
+    raw_platform = str(platform or "unknown").strip() or "unknown"
+    candidates = [f"conversation:{raw_platform}:{sender_id}"]
+    normalized = canonical_platform_key(platform)
+    normalized_key = f"conversation:{normalized}:{sender_id}"
+    if normalized_key not in candidates:
+        candidates.append(normalized_key)
+    return candidates
+
+
+def _redis_get_json_safely(key: str) -> Any | None:
+    try:
+        return redis_state_service.get_json(key)
+    except Exception as exc:
+        logger.warning("[redis] conversation %s read failed: %s", key, exc)
+        return None
+
+
+def _load_conversation_from_redis(
+    sender_id: str,
+    platform: str,
+    page_id: str = "",
+) -> Conversation | None:
     """Try to restore a Conversation from Redis. None on miss / disabled / error."""
     if not redis_state_service.is_enabled():
         return None
-    key = _conversation_redis_key(platform, sender_id)
-    payload = redis_state_service.get_json(key)
-    if not payload:
-        return None
-    try:
-        return Conversation.from_dict(payload)
-    except Exception as exc:
-        # Unknown / corrupt payload — log and drop so the next message
-        # creates a fresh Conversation. Never crash on bad JSON.
-        logger.warning(
-            "[redis] conversation %s deserialise failed — discarding: %s",
-            key, exc,
-        )
-        return None
+
+    canonical_key = _conversation_redis_key(platform, page_id, sender_id)
+    read_keys = [canonical_key]
+    read_keys.extend(
+        key for key in _legacy_conversation_redis_keys(platform, sender_id)
+        if key not in read_keys
+    )
+
+    for key in read_keys:
+        payload = _redis_get_json_safely(key)
+        if not payload:
+            continue
+        try:
+            restored = Conversation.from_dict(payload)
+            _ensure_conversation_identity(restored, page_id=page_id)
+            if key != canonical_key:
+                _save_conversation_to_redis(restored)
+            return restored
+        except Exception as exc:
+            logger.warning(
+                "[redis] conversation %s deserialise failed -- discarding: %s",
+                key, exc,
+            )
+            return None
+    return None
 
 
 def _save_conversation_to_redis(conversation: Conversation) -> None:
     if not redis_state_service.is_enabled():
         return
-    key = _conversation_redis_key(conversation.platform, conversation.sender_id)
+    key = _conversation_redis_key(
+        conversation.platform, conversation.page_id, conversation.sender_id,
+    )
+    _ensure_conversation_identity(conversation)
     try:
         payload = conversation.to_dict()
     except Exception as exc:
@@ -75,7 +209,6 @@ def _save_conversation_to_redis(conversation: Conversation) -> None:
     redis_state_service.set_json(
         key, payload, redis_state_service.conversation_ttl_seconds(),
     )
-
 # -- Segment classification (Phase 3.6A — owner-confirmed policy) -----------
 #
 # Bare greetings ("გამარჯობა", "Hi") now route to UNCLEAR. The user is asked
@@ -630,7 +763,7 @@ def _mask_user_phone_in_response(conversation, response: str) -> str:
         return response
 
 
-def process_message(sender_id: str, message_text: str, platform: str) -> str:
+def process_message(sender_id: str, message_text: str, platform: str, page_id: str = "") -> str:
     """Public entry — wraps the real implementation with an exception
     capture so production errors reach Sentry with a privacy-safe
     context. The wrapper re-raises so the webhook layer's existing
@@ -642,7 +775,7 @@ def process_message(sender_id: str, message_text: str, platform: str) -> str:
         "[conversation] start platform=%s sender=%s", platform, masked,
     )
     try:
-        response = _process_message_impl(sender_id, message_text, platform)
+        response = _process_message_impl(sender_id, message_text, platform, page_id)
         logger.info(
             "[conversation] completed platform=%s sender=%s reply_len=%d",
             platform, masked, len(response or ""),
@@ -667,7 +800,7 @@ def process_message(sender_id: str, message_text: str, platform: str) -> str:
         raise
 
 
-def _process_message_impl(sender_id: str, message_text: str, platform: str) -> str:
+def _process_message_impl(sender_id: str, message_text: str, platform: str, page_id: str = "") -> str:
     # Emergency Kill Switch (operator-controlled via AGENT_ENABLED env).
     # Returns the safe offline message BEFORE creating a Conversation,
     # classifying the segment, calling the LLM engine, looking up
@@ -680,7 +813,7 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str) -> s
         )
         return kill_switch.AGENT_DISABLED_MESSAGE
 
-    conversation = _get_or_create_conversation(sender_id, platform)
+    conversation = _get_or_create_conversation(sender_id, platform, page_id)
     conversation.last_activity = datetime.utcnow()
     conversation.history.append({"role": "user", "content": message_text})
 
@@ -1091,7 +1224,7 @@ def hydrate_from_redis() -> int:
     """Follow-up Live-Test Hydrate Patch (2026-06-06).
 
     Load every Redis-persisted Conversation into the in-memory
-    ``conversations`` dict. Idempotent — a sender that already lives
+    ``conversations`` dict. Idempotent -- a session that already lives
     in memory is left untouched (the live process is the source of
     truth for fresh state).
 
@@ -1103,7 +1236,7 @@ def hydrate_from_redis() -> int:
     sees the same conversations the live server is holding.
     """
     if not redis_state_service.is_enabled():
-        logger.info("[FOLLOWUP] hydrate skipped — redis disabled/unavailable")
+        logger.info("[FOLLOWUP] hydrate skipped -- redis disabled/unavailable")
         return 0
     try:
         keys = redis_state_service.scan_keys("conversation:*")
@@ -1115,19 +1248,6 @@ def hydrate_from_redis() -> int:
     skipped_existing = 0
     skipped_invalid = 0
     for key in keys:
-        # Key shape: ``conversation:{platform}:{sender_id}``. We need
-        # the sender_id to seed the in-memory dict.
-        parts = key.split(":", 2)
-        if len(parts) != 3:
-            skipped_invalid += 1
-            continue
-        _, _, sender_id = parts
-        if not sender_id:
-            skipped_invalid += 1
-            continue
-        if sender_id in conversations:
-            skipped_existing += 1
-            continue
         try:
             payload = redis_state_service.get_json(key)
         except Exception as exc:
@@ -1141,6 +1261,7 @@ def hydrate_from_redis() -> int:
             continue
         try:
             conv = Conversation.from_dict(payload)
+            session_key = _ensure_conversation_identity(conv)
         except Exception as exc:
             logger.warning(
                 "[FOLLOWUP] hydrate deserialise key=%s failed: %s",
@@ -1148,7 +1269,10 @@ def hydrate_from_redis() -> int:
             )
             skipped_invalid += 1
             continue
-        conversations[sender_id] = conv
+        if session_key in conversations:
+            skipped_existing += 1
+            continue
+        conversations[session_key] = conv
         loaded += 1
 
     logger.info(
@@ -1159,27 +1283,33 @@ def hydrate_from_redis() -> int:
     return loaded
 
 
-def _get_or_create_conversation(sender_id: str, platform: str) -> Conversation:
-    if sender_id in conversations:
-        return conversations[sender_id]
+def _get_or_create_conversation(
+    sender_id: str,
+    platform: str,
+    page_id: str = "",
+) -> Conversation:
+    session_key = _conversation_session_key(sender_id, platform, page_id)
+    if session_key in conversations:
+        return conversations[session_key]
 
-    # In-memory miss — try Redis restore before creating a fresh one.
+    # In-memory miss -- try Redis restore before creating a fresh one.
     # This is the P3-B restart-safety path: server restart wipes the
     # in-memory dict but Redis still holds the last-known Conversation.
-    restored = _load_conversation_from_redis(sender_id, platform)
+    restored = _load_conversation_from_redis(sender_id, platform, page_id)
     if restored is not None:
         logger.info(
-            "[redis] conversation restored sender=%s platform=%s state=%s segment=%s "
-            "pending_booking=%s",
-            sender_id, platform, restored.state, restored.segment,
+            "[redis] conversation restored sender=%s platform=%s page_id=%s "
+            "state=%s segment=%s pending_booking=%s",
+            sender_id, platform, page_id, restored.state, restored.segment,
             bool(restored.pending_booking),
         )
-        conversations[sender_id] = restored
+        conversations[restored.session_key] = restored
         return restored
 
-    conversations[sender_id] = Conversation(sender_id=sender_id, platform=platform)
-    return conversations[sender_id]
-
+    conversation = Conversation(sender_id=sender_id, platform=platform, page_id=page_id)
+    _ensure_conversation_identity(conversation)
+    conversations[conversation.session_key] = conversation
+    return conversation
 
 def reset_conversation_for_sender(sender_id: str) -> bool:
     """P3-C PATCH 7 — clear ALL per-sender state for QA / tests.
@@ -1198,8 +1328,12 @@ def reset_conversation_for_sender(sender_id: str) -> bool:
     truly clean lead in the CRM.
     """
     cleared = False
-    if sender_id in conversations:
-        conversations.pop(sender_id, None)
+    conversation_keys = [
+        key for key, conv in list(conversations.items())
+        if key == sender_id or getattr(conv, "sender_id", None) == sender_id
+    ]
+    for key in conversation_keys:
+        conversations.pop(key, None)
         cleared = True
 
     try:
@@ -1247,9 +1381,14 @@ def reset_conversation_for_sender(sender_id: str) -> bool:
             "_locks",
         ):
             d = getattr(message_buffer, attr, None)
-            if isinstance(d, dict) and sender_id in d:
-                d.pop(sender_id, None)
-                cleared = True
+            if isinstance(d, dict):
+                keys = [
+                    key for key in list(d.keys())
+                    if key == sender_id or str(key).endswith(f":{sender_id}")
+                ]
+                for key in keys:
+                    d.pop(key, None)
+                    cleared = True
     except Exception:
         pass
 

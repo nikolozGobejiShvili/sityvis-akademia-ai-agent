@@ -183,6 +183,7 @@ def test_conversation_roundtrip_preserves_fields():
     conv = Conversation(
         sender_id="s1",
         platform="messenger",
+        page_id="PAGE-1",
         segment="PARENT",
         state="DONE",
         history=[{"role": "user", "content": "გამარჯობა"}],
@@ -276,6 +277,7 @@ def test_conversation_persists_through_restart(fake_redis):
     conv = Conversation(
         sender_id="sim-1",
         platform="messenger",
+        page_id="PAGE-1",
         segment="PARENT",
         state="DONE",
         pending_booking={
@@ -290,13 +292,14 @@ def test_conversation_persists_through_restart(fake_redis):
     conversation_service.conversations.clear()
 
     # Stage 3 — request the same sender, expect a Redis restore.
-    restored = conversation_service._get_or_create_conversation("sim-1", "messenger")
+    restored = conversation_service._get_or_create_conversation("sim-1", "messenger", "PAGE-1")
 
     assert restored.state == "DONE"
     assert restored.segment == "PARENT"
     assert restored.pending_booking == conv.pending_booking
     # And the in-memory dict was re-populated as a side effect.
-    assert "sim-1" in conversation_service.conversations
+    assert "facebook:PAGE-1:sim-1" in conversation_service.conversations
+    assert conversation_service.conversations["sim-1"] is restored
 
 
 # -- (8) Conversation save/load uses correct Redis key ---------------------
@@ -305,9 +308,30 @@ def test_conversation_persists_through_restart(fake_redis):
 def test_conversation_redis_key_format():
     from app.services.conversation_service import _conversation_redis_key
     assert (
-        _conversation_redis_key("messenger", "27309128242013890")
-        == "conversation:messenger:27309128242013890"
+        _conversation_redis_key("messenger", "1716573211895723", "27309128242013890")
+        == "conversation:facebook:1716573211895723:27309128242013890"
     )
+
+
+def test_conversation_dual_reads_legacy_redis_key(fake_redis):
+    from app.services import conversation_service
+
+    conversation_service.conversations.clear()
+    conv = Conversation(
+        sender_id="legacy-1", platform="messenger", segment="PARENT", state="ASK_NAME",
+    )
+    legacy_key = "conversation:messenger:legacy-1"
+    fake_redis.store[legacy_key] = json.dumps(conv.to_dict(), default=str)
+
+    restored = conversation_service._get_or_create_conversation(
+        "legacy-1", "messenger", "PAGE-LEGACY",
+    )
+
+    assert restored.state == "ASK_NAME"
+    assert restored.page_id == "PAGE-LEGACY"
+    assert restored.session_key == "facebook:PAGE-LEGACY:legacy-1"
+    assert legacy_key in fake_redis.store
+    assert "conversation:facebook:PAGE-LEGACY:legacy-1" in fake_redis.store
 
 
 # -- (9) Redis failure is invisible to the caller --------------------------
