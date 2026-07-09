@@ -838,6 +838,15 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
         ),
     )
 
+    _trace.set_route_decision(
+        route_owner="conversation_service",
+        domain="unknown",
+        intent="incoming_turn",
+        segment_before=conversation.segment or "",
+        state_before=conversation.state or "",
+        answer_source="unknown",
+        deterministic_reason="conversation_service_entry",
+    )
     # P3-C PATCH 3 — capture pre-response follow-up markers based on
     # what the user *just* said. These are data-only flags for a future
     # scheduler; no message is sent from here.
@@ -975,6 +984,13 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
         # #6 — the user confirmed → save via the existing subscription service.
         response = _handle_subscription_save(conversation)
     elif route_segment == "UNCLEAR":
+        _trace.set_route_decision(
+            route_owner="conversation_service",
+            domain="unknown",
+            intent="unclear_routing",
+            answer_source="unclear_menu",
+            deterministic_reason="top_level_segment_route",
+        )
         # Identity-question short-circuit: when the user asks "ბოტი
         # ხარ?" / "AI ხარ?" while still in the unclear-segment menu,
         # answer briefly with the brand identity instead of just
@@ -994,6 +1010,13 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
             response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
     elif route_segment == "PARENT":
         _trace.set(route="parent_flow", segment="PARENT")
+        _trace.set_route_decision(
+            route_owner="parent_flow",
+            domain="camp",
+            segment_after="PARENT",
+            answer_source="unknown",
+            deterministic_reason="top_level_segment_route",
+        )
         response = parent_flow.handle(conversation, message_text)
     elif route_segment == "ADULT":
         # The Conversation Planner is authoritative inside parent_flow.handle;
@@ -1004,9 +1027,24 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
             route="adult_flow", segment="ADULT",
             planner_applies_on_route=bool(plan is not None and _planner_authoritative()),
         )
+        _trace.set_route_decision(
+            route_owner="adult_flow",
+            domain="adult_events",
+            segment_after="ADULT",
+            answer_source="unknown",
+            deterministic_reason="top_level_segment_route",
+        )
         response = adult_flow.handle(conversation, message_text)
     else:
         _trace.set(route="unclear_routing", segment=route_segment)
+        _trace.set_route_decision(
+            route_owner="conversation_service",
+            domain="unknown",
+            intent="unclear_routing",
+            segment_after=route_segment,
+            answer_source="unclear_menu",
+            deterministic_reason="top_level_segment_route",
+        )
         response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
 
     # Response composer policy (Stage 3) — consultant-quality refinement of the
@@ -1048,6 +1086,11 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
     # P3-B — write-through to Redis so a server restart can restore
     # state. TTL refreshes on every save (rolling 8-day conversation window).
     _save_conversation_to_redis(conversation)
+
+    _trace.set_route_decision(
+        segment_after=conversation.segment or route_segment or "",
+        state_after=conversation.state or "",
+    )
 
     _lead = conversation.lead
     _trace.set(

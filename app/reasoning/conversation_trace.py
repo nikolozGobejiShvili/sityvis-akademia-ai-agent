@@ -18,6 +18,7 @@ import json
 import logging
 import re
 
+from app.reasoning.route_decision import RouteDecision
 from app.services.session_key_service import canonical_session_key
 
 logger = logging.getLogger(__name__)
@@ -97,12 +98,33 @@ def begin(
         "session_hash": _session_hash(session),
         "text": (text or "")[:200],
         "side_effects": [],
+        "route_decision": RouteDecision.from_turn(
+            session_key=session,
+            platform=platform,
+            page_id=page_id,
+            sender_id=sid,
+        ).to_trace_dict(),
     }
 
 
 def set(**kwargs) -> None:  # noqa: A003 — deliberate compact API
     if _turn is not None:
         _turn.update(kwargs)
+
+
+def set_route_decision(**kwargs) -> None:
+    """Merge safe RouteDecision fields into the current trace block.
+
+    Observability must never affect reply behavior, so malformed updates are
+    ignored instead of raising.
+    """
+    if _turn is None:
+        return
+    try:
+        current = RouteDecision.from_trace_dict(_turn.get("route_decision"))
+        _turn["route_decision"] = current.with_updates(**kwargs).to_trace_dict()
+    except Exception:
+        return
 
 
 def note_side_effect(name: str) -> None:
