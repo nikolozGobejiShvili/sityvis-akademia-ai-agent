@@ -24,6 +24,8 @@ import pytest
 
 from app.config import settings
 from app.flows import parent_flow, parent_turn_router
+from app.models.conversation import Conversation
+from app.models.lead import Lead
 from app.services import conversation_service
 
 
@@ -34,6 +36,41 @@ ROBOTIC_PHRASES: tuple[str, ...] = (
     "აირჩიეთ სასურველი ვარიანტი",
     "როგორ შემიძლია დაგეხმაროთ",
 )
+
+CANONICAL_PRICE_TOKENS: tuple[str, ...] = (
+    "2150",
+    "ტრანსპორტირება",
+    "განთავსება",
+    "კვება",
+    "სრული პროგრამა",
+    "გადახდის გადანაწილება",
+    "TBC",
+    "საქართველოს ბანკ",
+    "10%",
+    "დეტალებს მენეჯერი გაგაცნობთ",
+)
+PAYMENT_PROCESS_ANSWER = (
+    "ბანაკის ჯავშნის საფასურის გადახდა ხდება წინასწარ, ხოლო სრული თანხის — "
+    "ხელშეკრულებით გათვალისწინებულ დროში. გადახდის გადანაწილება შესაძლებელია "
+    "6 თვემდე TBC-ისა და საქართველოს ბანკის საშუალებით"
+)
+RESERVATION_FEE_DEFER = (
+    "რაც შეეხება ჯავშნის საფასურს, ამ დეტალებს მენეჯერი გაგაცნობთ: 558 67 47 33"
+)
+LEGACY_PRICE_FALLBACK_FORBIDDEN: tuple[str, ...] = (
+    "ბანაკის ღირებულებაა",
+    "მენეჯერი აგიხსნით",
+    "როგორც ზემოთ",
+    "როგორც უკვე გითხარით",
+    "ზემოთ მოგწერეთ",
+)
+
+
+def _assert_canonical_price_block(response: str) -> None:
+    for token in CANONICAL_PRICE_TOKENS:
+        assert token in response, token
+    for forbidden in LEGACY_PRICE_FALLBACK_FORBIDDEN:
+        assert forbidden not in response
 
 
 # -- fixtures --------------------------------------------------------------
@@ -271,7 +308,7 @@ def test_8_manager_wins_over_price(driver):
 # -- test 9. Price question — value framing -------------------------------
 
 
-def test_9_price_question_returns_value_framed_answer(driver):
+def test_9_price_question_returns_canonical_full_block(driver):
     sender = "p9"
     driver(sender, ["გამარჯობა, ბანაკი მაინტერესებს", "8"])
     _force_state(sender, "ASK_DEEPER")
@@ -279,12 +316,67 @@ def test_9_price_question_returns_value_framed_answer(driver):
     response = conversation_service.process_message(
         sender, "ფასი რა არის?", "instagram",
     )
-    # Includes the actual price + value framing (what it covers).
-    assert "2150" in response
-    # At least one included item — value framing, not "dry price only".
-    assert any(t in response for t in ("ტრანსპორტი", "განთავსება", "კვება", "პროგრამა"))
+    _assert_canonical_price_block(response)
     # State preserved.
     assert conversation_service.conversations[sender].state == "ASK_DEEPER"
+
+
+def test_9b_payment_process_router_fallback_has_no_price(driver):
+    sender = "p9-payment"
+    driver(sender, ["გამარჯობა, ბანაკი მაინტერესებს", "8"])
+    _force_state(sender, "ASK_DEEPER")
+
+    response = conversation_service.process_message(
+        sender, "გადახდა როგორ ხდება?", "instagram",
+    )
+    assert PAYMENT_PROCESS_ANSWER in response
+    assert "2150" not in response
+    assert "ბანაკის ფასი" not in response
+    assert conversation_service.conversations[sender].state == "ASK_DEEPER"
+
+
+def test_9c_reservation_exact_amount_router_fallback_defers_only(driver):
+    sender = "p9-reservation"
+    driver(sender, ["გამარჯობა, ბანაკი მაინტერესებს", "8"])
+    _force_state(sender, "ASK_DEEPER")
+
+    response = conversation_service.process_message(
+        sender, "ჯავშნის ღირებულება რამდენია?", "instagram",
+    )
+    assert response == RESERVATION_FEE_DEFER
+    assert "2150" not in response
+    assert conversation_service.conversations[sender].state == "ASK_DEEPER"
+
+
+def test_9d_analyzer_no_concern_price_fact_uses_canonical_delegate(monkeypatch):
+    conversation = Conversation(sender_id="p9-analyzer", platform="instagram")
+    conversation.segment = "PARENT"
+    conversation.state = "ASK_DEEPER"
+    lead = Lead(sender_id="p9-analyzer", platform="instagram", segment="PARENT")
+    conversation.lead = lead
+
+    monkeypatch.setattr(parent_turn_router, "detect_parent_interrupt_intent", lambda m: None)
+    monkeypatch.setattr(parent_turn_router, "_analyzer_enabled", lambda: True)
+
+    def _fake_analyze(**_: Any) -> dict[str, Any]:
+        return {
+            "primary_intent": "no_concern",
+            "provided_fields": {},
+            "user_wants_human": False,
+            "user_rejects_discovery": True,
+            "fact_types_requested": ["price"],
+            "suggested_backend_action": "answer_facts",
+            "confidence": 0.95,
+            "reason_short": "price fact after no concern",
+        }
+
+    monkeypatch.setattr(parent_turn_router, "analyze_parent_turn", _fake_analyze)
+
+    response = parent_turn_router.maybe_handle_analyzer_interrupt(
+        conversation, lead, "არაფერი, ფასი მაინტერესებს",
+    )
+    assert response is not None
+    _assert_canonical_price_block(response)
 
 
 # -- test 10. Dates question --------------------------------------------

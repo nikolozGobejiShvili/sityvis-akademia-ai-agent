@@ -243,59 +243,25 @@ def _build_identity_answer() -> str:
     )
 
 
-def _build_premium_price_answer() -> str:
-    """Value-framed price answer from knowledge. PART 5.D + PART 7 polish.
+def _build_premium_price_answer(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Delegate camp price/payment rendering to the canonical parent flow.
 
-    Renders the price, what it covers, payment-split + discount details
-    if they appear in `camp_2026.yaml`, and ends with a soft (non-pushy)
-    consultation CTA. Uses the locative case for the location so the
-    reply reads as natural Georgian.
+    `parent_flow` imports this router at module load, so the reverse import must
+    stay function-local to avoid a circular import. The helper name remains for
+    legacy call sites, but it no longer owns Georgian price copy.
     """
-    camp = _camp()
-    includes = ", ".join(camp.get("includes") or [])
-    locative = _locative_location(camp.get("location", ""))
-    duration = camp.get("duration_days", "")
-    price = camp.get("price_gel", "")
-    payment = camp.get("payment") or {}
-    discounts = camp.get("discounts") or []
+    from app.flows import parent_flow as canonical_parent_flow
 
-    lines: list[str] = [
-        f"ბანაკის ღირებულებაა {price} ლარი.",
-        (
-            f"თანხაში შედის {includes} და {duration}-დღიანი პროგრამა "
-            f"{locative}."
-        ),
-    ]
-
-    months = payment.get("installments_months")
-    if months:
-        bank_names = payment.get("banks") or []
-        if bank_names:
-            # Render each bank in the instrumental case ("ბანკი" →
-            # "ბანკით"; "TBC" → "TBC-ით") so the suffix attaches to the
-            # individual word, not to the whole "BankA or BankB" string.
-            banks_text = " ან ".join(
-                _instrumental_bank(name) for name in bank_names
-            )
-            lines.append(
-                f"გადახდის გადანაწილება შესაძლებელია {months} თვემდე — "
-                f"{banks_text}."
-            )
-        else:
-            lines.append(
-                f"გადახდის გადანაწილება შესაძლებელია {months} თვემდე."
-            )
-
-    if discounts:
-        disc_text = ", ".join(
-            f"{d.get('name')} {d.get('percent')}%" for d in discounts
-        )
-        lines.append(f"ფასდაკლება: {disc_text}.")
-
-    lines.append(
-        "თუ გსურთ, კონსულტაციაზეც ჩაგწერთ და დეტალებს მენეჯერი აგიხსნით."
+    canonical = canonical_parent_flow._maybe_handle_repeat_camp_price(
+        conversation, message,
     )
-    return "\n\n".join(lines)
+    if canonical is not None:
+        return canonical
+    if canonical_parent_flow._is_camp_price_amount_question(message):
+        return canonical_parent_flow._camp_price_direct_answer()
+    return None
 
 
 def _build_premium_dates_answer() -> str:
@@ -827,7 +793,7 @@ def _response_for_intent(
         return _build_identity_answer()
 
     if intent == INTENT_PRICE_QUESTION:
-        return _build_premium_price_answer()
+        return _build_premium_price_answer(conversation, message)
 
     if intent == INTENT_DATES_QUESTION:
         return _build_premium_dates_answer()
@@ -993,7 +959,9 @@ def maybe_handle_analyzer_interrupt(
     if primary_intent == "no_concern":
         fact_types = result.get("fact_types_requested") or []
         if "price" in fact_types:
-            return _build_premium_price_answer()
+            return _build_premium_price_answer(conversation, message) or (
+                _build_clarifying_question()
+            )
         if "dates" in fact_types:
             return _build_premium_dates_answer()
         if "location" in fact_types:
