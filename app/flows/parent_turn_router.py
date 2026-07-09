@@ -70,6 +70,7 @@ from app.agent.services.timestamps import extract_colloquial_hour
 from app.config import settings
 from app.models.conversation import Conversation
 from app.models.lead import Lead
+from app.services.session_key_service import conversation_cache_key
 
 logger = logging.getLogger(__name__)
 
@@ -654,7 +655,7 @@ def _attempt_router_booking(
 
     conversation.state = "DONE"
     conversation.pending_booking = None
-    slots_shown_for_state.pop(conversation.sender_id, None)
+    slots_shown_for_state.pop(conversation_cache_key(conversation), None)
 
     date_text = f"{slot_dt.day} {GEORGIAN_MONTHS_NOM[slot_dt.month]}"
     time_text = slot_dt.strftime("%H:%M")

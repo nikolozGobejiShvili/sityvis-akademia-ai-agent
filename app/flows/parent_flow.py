@@ -37,6 +37,7 @@ from app.services import (
     openai_service,
     sheets_service,
 )
+from app.services.session_key_service import conversation_cache_key
 from data.prompts import (
     ERROR_MESSAGE,
     PARENT_ASK_CHALLENGE,
@@ -1015,7 +1016,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                 book_consultation_success_for_conversation,
             )
             book_consultation_success_for_conversation[
-                conversation.sender_id
+                conversation_cache_key(conversation)
             ] = False
         except Exception:
             pass
@@ -1444,7 +1445,7 @@ def _booking_success_this_turn(conversation: Conversation) -> bool:
         )
         return bool(
             book_consultation_success_for_conversation.get(
-                conversation.sender_id, False,
+                conversation_cache_key(conversation), False,
             ),
         )
     except Exception:
@@ -1511,7 +1512,7 @@ def _sanitise_booking_confirmation(
         )
         tool_success_this_turn = bool(
             book_consultation_success_for_conversation.get(
-                conversation.sender_id, False,
+                conversation_cache_key(conversation), False,
             ),
         )
     except Exception:
@@ -1673,7 +1674,7 @@ def _trim_booking_success_response(
         )
         tool_success_this_turn = bool(
             book_consultation_success_for_conversation.get(
-                conversation.sender_id, False,
+                conversation_cache_key(conversation), False,
             ),
         )
     except Exception:
@@ -4783,7 +4784,8 @@ def _maybe_handle_underage_manager_handoff(
     have_name = name_known
 
     # Idempotent — never dispatch twice for one conversation.
-    if _pte._is_manager_notified(conversation.sender_id):
+    cache_key = conversation_cache_key(conversation)
+    if _pte._is_manager_notified(cache_key, legacy_sender_id=conversation.sender_id):
         return _UNDERAGE_HANDOFF_ALREADY
 
     if have_name and have_phone:
@@ -4797,7 +4799,7 @@ def _maybe_handle_underage_manager_handoff(
             logger.exception("[parent_flow] under-age handoff dispatch raised")
             dispatched = False
         if dispatched:
-            _pte._mark_manager_notified(conversation.sender_id)
+            _pte._mark_manager_notified(cache_key, legacy_sender_id=conversation.sender_id)
             logger.info(
                 "[parent_flow] under-age manager handoff dispatched (age=%d)", age,
             )
@@ -8642,7 +8644,7 @@ def _maybe_commit_pending_booking_engine(
     # message like "13:00 საათზე იყოს" is a time pick, not a contact
     # disclosure — without this skip, `_parse_name_phone` would happily
     # capture "საათზე იყოს" as the parent's name).
-    matched_slot = _user_explicit_slot_choice(conversation.sender_id, message)
+    matched_slot = _user_explicit_slot_choice(conversation_cache_key(conversation), message)
     if matched_slot is not None:
         _record_pending_booking_for_slot(conversation, lead, matched_slot)
 
@@ -8811,7 +8813,7 @@ def _maybe_commit_pending_booking_engine(
         )
         return None
 
-    book_consultation_success_for_conversation[conversation.sender_id] = False
+    book_consultation_success_for_conversation[conversation_cache_key(conversation)] = False
 
     executor = ParentToolExecutor(
         conversation=conversation,
@@ -9226,7 +9228,7 @@ def _handle_impl(conversation: Conversation, message: str) -> str:
         return _handle_ask_name(conversation, lead, message)
 
     if conversation.state in ("PRESENT_VALUE", "OFFER_BOOKING"):
-        if not slots_shown_for_state.get(conversation.sender_id):
+        if not slots_shown_for_state.get(conversation_cache_key(conversation)):
             logger.info(
                 "[parent_flow] %s entry — slots not yet shown, rendering once",
                 conversation.state,
@@ -9494,7 +9496,7 @@ def _handle_custom_slot_request(
         if not _book_selected_slot(conversation, lead, slot_dict):
             return PARENT_BOOKING_FAILED.strip()
         conversation.state = "DONE"
-        slots_shown_for_state.pop(conversation.sender_id, None)
+        slots_shown_for_state.pop(conversation_cache_key(conversation), None)
         logger.info(
             "[parent_flow] state transition: → DONE (custom slot booked %s, slot promo flag cleared)",
             custom_dt.isoformat(),
@@ -9502,7 +9504,7 @@ def _handle_custom_slot_request(
         return PARENT_BOOKING_CONFIRMED.format(date=display_date, time=display_time).strip()
 
     logger.info("[parent_flow] Custom slot %s busy — offering alternatives", custom_dt.isoformat())
-    slots = _load_available_slots(conversation.sender_id)
+    slots = _load_available_slots(conversation_cache_key(conversation))
     calendar_slots = (
         calendar_service.format_slots_for_chat(slots[:3]) if slots else ""
     )
@@ -10043,11 +10045,12 @@ def _format_phone_display(phone: str) -> str:
 
 
 def _present_value_response(conversation: Conversation) -> str:
-    slots = _load_available_slots(conversation.sender_id)
+    cache_key = conversation_cache_key(conversation)
+    slots = _load_available_slots(cache_key)
     calendar_slots = (
         calendar_service.format_slots_for_chat(slots[:3]) if slots else ""
     )
-    slots_shown_for_state[conversation.sender_id] = True
+    slots_shown_for_state[cache_key] = True
     logger.info(
         "[parent_flow] Slot promo rendered (first time) for sender=%s — flag set",
         conversation.sender_id,
@@ -10068,7 +10071,7 @@ def _attempt_booking(conversation: Conversation, lead: Lead, slot: dict) -> str:
         return PARENT_BOOKING_FAILED.strip()
 
     conversation.state = "DONE"
-    slots_shown_for_state.pop(conversation.sender_id, None)
+    slots_shown_for_state.pop(conversation_cache_key(conversation), None)
     logger.info(
         "[parent_flow] _attempt_booking SUCCESS for sender=%s — transition to DONE, slot promo flag cleared",
         conversation.sender_id,
@@ -10082,6 +10085,7 @@ def _handle_slot_selection(
     conversation: Conversation, lead: Lead, message: str,
 ) -> str:
     sender_id = conversation.sender_id
+    cache_key = conversation_cache_key(conversation)
 
     custom_response = _handle_custom_slot_request(conversation, lead, message)
     if custom_response is not None:
@@ -10093,7 +10097,7 @@ def _handle_slot_selection(
 
     looks_choice = _looks_like_slot_choice(message)
     if looks_choice:
-        slot = _parse_slot(sender_id, message)
+        slot = _parse_slot(cache_key, message)
         logger.info(
             "[parent_flow] OFFER_BOOKING return path: slot_choice=True parse_slot=%s "
             "(sender=%s, message=%r)",
@@ -10148,7 +10152,7 @@ def _handle_ask_name(conversation: Conversation, lead: Lead, message: str) -> st
     if phone_rejected and not lead.phone:
         if name and not lead.name:
             lead.name = name
-        retry_key = conversation.sender_id
+        retry_key = conversation_cache_key(conversation)
         if not invalid_phone_retries.get(retry_key):
             invalid_phone_retries[retry_key] = True
             first = _first_name(lead.name) if lead.name else "მეგობარო"
@@ -10199,9 +10203,10 @@ def _handle_ask_name(conversation: Conversation, lead: Lead, message: str) -> st
         )
         return _present_value_response(conversation)
 
-    retried = ask_name_retries.get(conversation.sender_id, False)
+    retry_key = conversation_cache_key(conversation)
+    retried = ask_name_retries.get(retry_key, False)
     if not retried:
-        ask_name_retries[conversation.sender_id] = True
+        ask_name_retries[retry_key] = True
         logger.warning(
             "[parent_flow] ASK_NAME retry triggered for sender_id=%s",
             conversation.sender_id,

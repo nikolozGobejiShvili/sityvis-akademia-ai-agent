@@ -9,7 +9,11 @@ from app.config import DATA_DIR, settings
 from app.flows import adult_flow, parent_flow
 from app.models.conversation import Conversation
 from app.services import kill_switch, redis_state_service, sentry_service
-from app.services.session_key_service import canonical_platform_key, canonical_session_key
+from app.services.session_key_service import (
+    canonical_platform_key,
+    canonical_session_key,
+    conversation_cache_key,
+)
 from data.prompts import UNCLEAR_ROUTING
 
 logger = logging.getLogger(__name__)
@@ -819,7 +823,13 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
 
     # Per-turn diagnostic trace (CONVERSATION_TRACE_DEBUG) — observability only.
     from app.reasoning import conversation_trace as _trace
-    _trace.begin(sender_id, message_text, platform)
+    _trace.begin(
+        sender_id,
+        message_text,
+        platform,
+        page_id=conversation.page_id,
+        session_key=conversation.session_key,
+    )
     _trace.set(
         flow_before=conversation.segment or "(empty)",
         use_planner=getattr(settings, "USE_CONVERSATION_PLANNER", False),
@@ -1183,7 +1193,11 @@ def _record_post_response_followup_markers(conversation) -> None:
             from app.agent.tools.parent_tool_executor import (
                 manager_notified_for_conversation,
             )
-            if manager_notified_for_conversation.get(conversation.sender_id):
+            cache_key = conversation_cache_key(conversation)
+            if (
+                manager_notified_for_conversation.get(cache_key)
+                or manager_notified_for_conversation.get(conversation.sender_id)
+            ):
                 # Only block follow-ups if the user has not been declined;
                 # decline takes priority.
                 if conversation.followup_blocked_reason not in {
@@ -1328,6 +1342,11 @@ def reset_conversation_for_sender(sender_id: str) -> bool:
     truly clean lead in the CRM.
     """
     cleared = False
+
+    def _cache_key_matches_sender(key: object) -> bool:
+        key_text = str(key or "")
+        return key_text == sender_id or key_text.endswith(f":{sender_id}")
+
     conversation_keys = [
         key for key, conv in list(conversations.items())
         if key == sender_id or getattr(conv, "sender_id", None) == sender_id
@@ -1345,16 +1364,21 @@ def reset_conversation_for_sender(sender_id: str) -> bool:
             parent_flow.slots_shown_for_state,
             parent_turn_router.manager_offer_shown,
         ):
-            if sender_id in d:
-                d.pop(sender_id, None)
+            keys = [key for key in list(d.keys()) if _cache_key_matches_sender(key)]
+            for key in keys:
+                d.pop(key, None)
                 cleared = True
     except Exception:
         pass
 
     try:
         from app.flows import adult_flow
-        if sender_id in adult_flow.selected_events:
-            adult_flow.selected_events.pop(sender_id, None)
+        keys = [
+            key for key in list(adult_flow.selected_events.keys())
+            if _cache_key_matches_sender(key)
+        ]
+        for key in keys:
+            adult_flow.selected_events.pop(key, None)
             cleared = True
     except Exception:
         pass
@@ -1366,8 +1390,9 @@ def reset_conversation_for_sender(sender_id: str) -> bool:
             parent_tool_executor._last_slots_by_sender,
             parent_tool_executor.book_consultation_success_for_conversation,
         ):
-            if sender_id in d:
-                d.pop(sender_id, None)
+            keys = [key for key in list(d.keys()) if _cache_key_matches_sender(key)]
+            for key in keys:
+                d.pop(key, None)
                 cleared = True
     except Exception:
         pass
@@ -1384,7 +1409,7 @@ def reset_conversation_for_sender(sender_id: str) -> bool:
             if isinstance(d, dict):
                 keys = [
                     key for key in list(d.keys())
-                    if key == sender_id or str(key).endswith(f":{sender_id}")
+                    if _cache_key_matches_sender(key)
                 ]
                 for key in keys:
                     d.pop(key, None)

@@ -5,6 +5,7 @@ from app.config import settings
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.services import admin_config_service, notification_service, openai_service, sheets_service
+from app.services.session_key_service import conversation_cache_key
 from data.prompts import (
     ADULT_BOOKING_FORWARDED,
     ADULT_CLARIFY_EVENT,
@@ -32,6 +33,19 @@ selected_events = {}
 
 def _no_active_events_reply() -> str:
     return admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
+
+
+def _selected_event_keys(conversation: Conversation) -> list[str]:
+    keys = [conversation_cache_key(conversation)]
+    raw_sender = str(getattr(conversation, "sender_id", "") or "").strip()
+    if raw_sender and raw_sender not in keys:
+        keys.append(raw_sender)
+    return keys
+
+
+def _clear_selected_event(conversation: Conversation) -> None:
+    for key in _selected_event_keys(conversation):
+        selected_events.pop(key, None)
 
 
 def _visible_events(events: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -254,7 +268,7 @@ def handle(conversation: Conversation, message: str) -> str:
                 events_list=_format_event_list(events),
             ).strip()
 
-        selected_events[conversation.sender_id] = event
+        selected_events[conversation_cache_key(conversation)] = event
         lead.event_interest = event["name"]
         response = _generate_event_response(conversation, message, event)
         conversation.state = "ANSWER_QUESTIONS"
@@ -448,20 +462,30 @@ def _detect_event(message: str, events: list[dict[str, str]] | None = None) -> d
 def _current_event(conversation: Conversation) -> dict[str, str] | None:
     events = _load_events()
     visible_events = _visible_events(events)
-    selected = selected_events.get(conversation.sender_id)
+    keys = _selected_event_keys(conversation)
+    cache_key = keys[0]
+    selected = None
+    for key in keys:
+        if key in selected_events:
+            selected = selected_events.get(key)
+            break
     selected_id = str((selected or {}).get("id") or "").strip()
     if selected_id:
         for event in visible_events:
             if event.get("id") == selected_id:
-                selected_events[conversation.sender_id] = event
+                selected_events[cache_key] = event
+                for legacy_key in keys[1:]:
+                    selected_events.pop(legacy_key, None)
                 return event
-        selected_events.pop(conversation.sender_id, None)
+        _clear_selected_event(conversation)
 
     if visible_events:
-        selected_events[conversation.sender_id] = visible_events[0]
+        selected_events[cache_key] = visible_events[0]
+        for legacy_key in keys[1:]:
+            selected_events.pop(legacy_key, None)
         return visible_events[0]
 
-    selected_events.pop(conversation.sender_id, None)
+    _clear_selected_event(conversation)
     return None
 
 

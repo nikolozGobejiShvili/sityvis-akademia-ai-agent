@@ -13,9 +13,12 @@ notification/calendar/sheets (side effects).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+
+from app.services.session_key_service import canonical_session_key
 
 logger = logging.getLogger(__name__)
 
@@ -37,16 +40,61 @@ def mask_phone(phone: str | None) -> str:
     return ("***" + digits[-3:]) if len(digits) >= 3 else ("***" if digits else "")
 
 
-def begin(sender_id: str, text: str, platform: str) -> None:
+def _mask_identifier(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "?"
+    if len(raw) <= 4:
+        return raw[:1] + "***"
+    if len(raw) <= 8:
+        return raw[:2] + "***" + raw[-1:]
+    return raw[:4] + "***" + raw[-2:]
+
+
+def _mask_session_key(session_key: str | None) -> str:
+    raw = str(session_key or "").strip()
+    if not raw:
+        return "?"
+    parts = raw.split(":")
+    if len(parts) == 3:
+        return f"{parts[0]}:{_mask_identifier(parts[1])}:{_mask_identifier(parts[2])}"
+    return _mask_identifier(raw)
+
+
+def _session_hash(session_key: str | None) -> str:
+    raw = str(session_key or "").strip()
+    if not raw:
+        return ""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def begin(
+    sender_id: str,
+    text: str,
+    platform: str,
+    page_id: str = "",
+    session_key: str = "",
+) -> None:
     """Start a trace for an inbound turn. No-op when disabled."""
     global _turn
     if not _enabled():
         _turn = None
         return
     sid = sender_id or ""
+    session = str(session_key or "").strip()
+    if not session:
+        try:
+            session = canonical_session_key(
+                platform, page_id, sender_id, require_page_id=False,
+            )
+        except Exception:
+            session = ""
     _turn = {
-        "sender": (sid[:4] + "***") if sid else "?",
+        "sender": _mask_identifier(sid),
         "platform": platform,
+        "page": _mask_identifier(page_id) if page_id else "",
+        "session": _mask_session_key(session),
+        "session_hash": _session_hash(session),
         "text": (text or "")[:200],
         "side_effects": [],
     }

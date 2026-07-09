@@ -53,6 +53,7 @@ from app.agent.tools.parent_tools import (
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.services import sentry_service
+from app.services.session_key_service import conversation_cache_key
 
 logger = logging.getLogger(__name__)
 
@@ -64,48 +65,64 @@ logger = logging.getLogger(__name__)
 manager_notified_for_conversation: dict[str, bool] = {}
 
 
-def _manager_notified_redis_key(sender_id: str) -> str:
-    return f"manager_notified:{sender_id}"
+def _manager_notified_redis_key(cache_key: str) -> str:
+    return f"manager_notified:{cache_key}"
 
 
-def _is_manager_notified(sender_id: str) -> bool:
-    """In-memory dict first (fast path); Redis fallback for restart-safety."""
-    if manager_notified_for_conversation.get(sender_id, False):
+def _is_manager_notified(
+    cache_key: str, legacy_sender_id: str | None = None,
+) -> bool:
+    """In-memory dict first; Redis fallback with legacy sender migration."""
+    if manager_notified_for_conversation.get(cache_key, False):
         return True
     try:
         from app.services import redis_state_service
-        if redis_state_service.is_enabled() and redis_state_service.exists(
-            _manager_notified_redis_key(sender_id),
-        ):
-            # Re-populate the in-memory dict so subsequent same-process
-            # checks stay on the fast path.
-            manager_notified_for_conversation[sender_id] = True
+        if not redis_state_service.is_enabled():
+            return False
+
+        canonical_redis_key = _manager_notified_redis_key(cache_key)
+        if redis_state_service.exists(canonical_redis_key):
+            manager_notified_for_conversation[cache_key] = True
             return True
+
+        legacy_sender = str(legacy_sender_id or "").strip()
+        if legacy_sender and legacy_sender != cache_key:
+            legacy_redis_key = _manager_notified_redis_key(legacy_sender)
+            if redis_state_service.exists(legacy_redis_key):
+                _mark_manager_notified(cache_key, legacy_sender_id=legacy_sender)
+                return True
     except Exception as exc:
         logger.warning(
-            "[redis] manager_notified read failed for sender=%s: %s",
-            sender_id, exc,
+            "[redis] manager_notified read failed for cache_key=%s: %s",
+            cache_key, exc,
         )
     return False
 
 
-def _mark_manager_notified(sender_id: str) -> None:
+def _mark_manager_notified(
+    cache_key: str, legacy_sender_id: str | None = None,
+) -> None:
     """Write the duplicate-notification guard in both stores."""
-    manager_notified_for_conversation[sender_id] = True
+    manager_notified_for_conversation[cache_key] = True
     try:
         from app.services import redis_state_service
         if redis_state_service.is_enabled():
-            # Per-user session guard — expire on the same rolling window as the
+            payload = {
+                "sender_id": legacy_sender_id or cache_key,
+                "session_key": cache_key,
+                "notified": True,
+            }
+            # Per-session guard: expire on the same rolling window as the
             # conversation (8-day default). Positional TTL for mock-compat.
             redis_state_service.set_json(
-                _manager_notified_redis_key(sender_id),
-                {"sender_id": sender_id, "notified": True},
+                _manager_notified_redis_key(cache_key),
+                payload,
                 redis_state_service.conversation_ttl_seconds(),
             )
     except Exception as exc:
         logger.warning(
-            "[redis] manager_notified write failed for sender=%s: %s",
-            sender_id, exc,
+            "[redis] manager_notified write failed for cache_key=%s: %s",
+            cache_key, exc,
         )
 
 
@@ -161,6 +178,12 @@ class ParentToolExecutor:
     sender_id: str
     platform: str
     user_message: str = ""
+
+    @property
+    def cache_key(self) -> str:
+        return conversation_cache_key(
+            self.conversation, platform=self.platform, sender_id=self.sender_id,
+        )
 
     def _normalise_datetime_iso_from_message(self, datetime_iso: str) -> str:
         """Booking Date Parse Patch (2026-06-04).
@@ -490,7 +513,7 @@ class ParentToolExecutor:
                 return {"success": False, "reason": "calendar_error", "slots": []}
         else:
             try:
-                slots = parent_flow._load_available_slots(self.sender_id)
+                slots = parent_flow._load_available_slots(self.cache_key)
             except Exception as exc:
                 logger.exception(
                     "[parent_executor] _load_available_slots failed: %s", exc,
@@ -509,7 +532,7 @@ class ParentToolExecutor:
                 "display": f"{slot.get('date', '')}, {slot.get('time', '')}".strip(", "),
             })
 
-        _last_slots_by_sender[self.sender_id] = list(formatted)
+        _last_slots_by_sender[self.cache_key] = list(formatted)
         return {
             "success": True,
             "slots": formatted,
@@ -740,7 +763,7 @@ class ParentToolExecutor:
 
         if not candidates:
             try:
-                candidates = parent_flow._load_available_slots(self.sender_id) or []
+                candidates = parent_flow._load_available_slots(self.cache_key) or []
             except Exception as exc:
                 logger.warning(
                     "[slot_check] alt-slots fallback failed: %s", exc,
@@ -810,7 +833,7 @@ class ParentToolExecutor:
 
         # Default the per-conversation success flag to False for this turn;
         # only set True at the very end on a confirmed Calendar+state write.
-        book_consultation_success_for_conversation[self.sender_id] = False
+        book_consultation_success_for_conversation[self.cache_key] = False
 
         # 1. Required fields ------------------------------------------------
         if not name and not (self.lead.name or "").strip():
@@ -1005,7 +1028,7 @@ class ParentToolExecutor:
 
         if not is_available:
             try:
-                alternatives = parent_flow._load_available_slots(self.sender_id)
+                alternatives = parent_flow._load_available_slots(self.cache_key)
             except Exception as exc:
                 logger.exception(
                     "[book_consultation] alternatives load failed: %s", exc,
@@ -1071,7 +1094,7 @@ class ParentToolExecutor:
                 reschedule_args,
             )
             if reschedule_result.get("success"):
-                book_consultation_success_for_conversation[self.sender_id] = True
+                book_consultation_success_for_conversation[self.cache_key] = True
                 booked_date_out = reschedule_result.get("new_date") or _display_date(slot_dt_tz)
                 booked_time_out = (
                     reschedule_result.get("new_time")
@@ -1174,7 +1197,7 @@ class ParentToolExecutor:
             # sets ``lead.calendly_booked = True`` BEFORE checking
             # event_id, so the empty-event_id branch needs to roll back
             # those side-effects.
-            book_consultation_success_for_conversation[self.sender_id] = False
+            book_consultation_success_for_conversation[self.cache_key] = False
             try:
                 self.lead.calendly_booked = False
                 self.lead.booked_datetime_iso = ""
@@ -1232,7 +1255,7 @@ class ParentToolExecutor:
                 )
             except Exception:  # pragma: no cover — Sentry must never raise
                 pass
-            book_consultation_success_for_conversation[self.sender_id] = False
+            book_consultation_success_for_conversation[self.cache_key] = False
             try:
                 self.lead.calendly_booked = False
                 self.lead.booked_datetime_iso = ""
@@ -1264,13 +1287,13 @@ class ParentToolExecutor:
         # Mirror parent_flow._attempt_booking's state side-effects:
         self.conversation.state = "DONE"
         self.conversation.pending_booking = None
-        parent_flow.slots_shown_for_state.pop(self.sender_id, None)
+        parent_flow.slots_shown_for_state.pop(self.cache_key, None)
 
         # P3-C PATCH 5 — record the tool success so the final-stage
         # guard in parent_flow can tell the difference between an LLM
         # response that follows a real Calendar write and an LLM response
         # that hallucinates confirmation language without a tool call.
-        book_consultation_success_for_conversation[self.sender_id] = True
+        book_consultation_success_for_conversation[self.cache_key] = True
 
         # Live QA Patch (2026-06-05) — Bug 5: derive the confirmation
         # display strings from the ACTUAL booked datetime on the lead,
@@ -1347,7 +1370,7 @@ class ParentToolExecutor:
 
         # Already notified this conversation? Don't double-fire.
         # P3-B — checks Redis as a fallback so the guard survives restart.
-        already = _is_manager_notified(self.sender_id)
+        already = _is_manager_notified(self.cache_key, legacy_sender_id=self.sender_id)
         if already:
             return {
                 "success": True,
@@ -1410,7 +1433,7 @@ class ParentToolExecutor:
                 "[parent_executor] sheets_service.create_lead raised: %s", exc,
             )
 
-        _mark_manager_notified(self.sender_id)
+        _mark_manager_notified(self.cache_key, legacy_sender_id=self.sender_id)
         return {"success": True, "manager_notified": True}
 
     # -- save_lead_info ---------------------------------------------------
@@ -1891,7 +1914,7 @@ class ParentToolExecutor:
         # notice appears once on a reschedule done via
         # manage_consultation_booking too (the _book_consultation reroute
         # path also sets this after the call — redundant but harmless).
-        book_consultation_success_for_conversation[self.sender_id] = True
+        book_consultation_success_for_conversation[self.cache_key] = True
 
         # New booking succeeded with a valid event_id. Now (and only
         # now) attempt to cancel the OLD Calendar event.
@@ -2068,7 +2091,7 @@ class ParentToolExecutor:
             )
 
         if not silent:
-            _mark_manager_notified(self.sender_id)
+            _mark_manager_notified(self.cache_key, legacy_sender_id=self.sender_id)
 
     # -- switch_to_adult_flow ---------------------------------------------
 
