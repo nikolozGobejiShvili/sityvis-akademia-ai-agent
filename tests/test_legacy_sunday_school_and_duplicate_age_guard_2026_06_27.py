@@ -4,8 +4,8 @@ Bug A — Sunday School intent must route to the Sunday-School coming_soon
         response, NOT camp; and coming_soon must NOT reveal details.
 Bug B1 — an out-of-range child age („6 წლის…") must not be stored as a name
          and must get the eligibility + manager-consultation answer.
-Bug B2 — a repeated same-intent CAMP price question must get a short repeat,
-         not the full duplicate block. SS / adult price are NOT camp_price.
+Bug B2 — repeated same-intent CAMP price questions return the approved full
+         price block. Pure payment-process and exact reservation amount stay separate.
 
 Legacy/giant-prompt path: engine ON, planner + slim OFF.
 """
@@ -30,7 +30,7 @@ _FULL_PRICE = (
     "განთავსება, კვება და პროგრამა. 10%-იანი ფასდაკლება. გადახდა 6 თვემდე TBC."
 )
 _DATES_ANSWER = "[DATES] ბანაკი ტარდება 23–29 ივნისი, 5–11 ივლისი, 14–20 ივლისი."
-_PAYMENT_ANSWER = "[PAYMENT] გადახდა შესაძლებელია 6 თვემდე TBC-ისა და საქართველოს ბანკის განვადებით."
+_PAYMENT_ANSWER = "ბანაკის ჯავშნის საფასურის გადახდა ხდება წინასწარ, ხოლო სრული თანხის — ხელშეკრულებით გათვალისწინებულ დროში. გადახდის გადანაწილება შესაძლებელია 6 თვემდე TBC-ისა და საქართველოს ბანკის საშუალებით"
 
 
 @pytest.fixture(autouse=True)
@@ -206,22 +206,28 @@ def test_10_eligible_age_still_works(engine_on):
 # =====================================================================
 # Bug B2 — duplicate camp price → short repeat
 # =====================================================================
-def test_11_repeat_price_short(engine_on):
+def test_11_repeat_price_full_block(engine_on):
     conv = _price_conv("b11")
     out1 = _turn(conv, "ღირებულება რომ მომწეროთ")
     assert "2150" in out1 and "ტრანსპორტი" in out1     # full first answer
     out2 = _turn(conv, "რა ღირს?")
-    assert "2150" in out2                              # still states the price
-    assert "ტრანსპორტი" not in out2                    # NOT the full duplicate block
-    assert "როგორც ზემოთ" in out2                       # short repeat wording
+    # Full-price-block change (2026-07-08): a REPEAT price question returns the
+    # FULL block again (price + installments + discount) — NOT a „როგორც ზემოთ
+    # მოგწერეთ" short back-reference.
+    assert "2150" in out2 and "ტრანსპორტი" in out2
+    assert "გადანაწილება" in out2 and "TBC" in out2 and "10%" in out2
+    assert "როგორც ზემოთ" not in out2
 
 
-def test_12_same_intent_variants_short_on_repeat(engine_on):
+def test_12_same_intent_variants_full_block_on_repeat(engine_on):
     conv = _price_conv("b12")
     out1 = _turn(conv, "ფასი რა არის?")
     assert "ტრანსპორტი" in out1                         # full first
-    out2 = _turn(conv, "რამდენია გადასახადი?")
-    assert "ტრანსპორტი" not in out2 and "2150" in out2  # short repeat
+    out2 = _turn(conv, "ღირებულება რამდენია?")
+    # Repeat → full block (installments + discount), not a short duplicate.
+    assert "ტრანსპორტი" in out2 and "2150" in out2
+    assert "გადანაწილება" in out2 and "10%" in out2
+    assert "როგორც ზემოთ" not in out2
 
 
 def test_13_dates_after_price_not_suppressed(engine_on):
@@ -232,13 +238,13 @@ def test_13_dates_after_price_not_suppressed(engine_on):
     assert "როგორც ზემოთ" not in out
 
 
-def test_14_payment_after_price_not_suppressed(engine_on):
+def test_14_payment_after_price_process_not_suppressed(engine_on):
     conv = _price_conv("b14")
     _turn(conv, "რა ღირს?")
     out = _turn(conv, "გადახდა როგორ ხდება?")
-    assert out == _PAYMENT_ANSWER                      # related but distinct → not suppressed
+    assert out == _PAYMENT_ANSWER
+    assert "2150" not in out
     assert "როგორც ზემოთ" not in out
-
 
 def test_15_sunday_school_price_not_camp_price():
     assert parent_flow._is_camp_price_intent("საკვირაო სკოლის ფასი რა არის?") is False

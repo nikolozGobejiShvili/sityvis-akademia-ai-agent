@@ -1153,19 +1153,28 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                 conversation, exact_detail_response,
             )
 
-        # Duplicate camp-price question (live bug 2026-06-27): the FIRST camp
-        # price question keeps its full answer (the engine, below); a SUBSEQUENT
-        # same-intent camp_price question gets a short repeat instead of the full
-        # duplicate block. New questions / payment-method / dates / SS+adult
-        # price are never suppressed.
+        # Camp price/payment split: price amount, payment process, and
+        # reservation exact amount are handled before topic/engine paths.
         repeat_price_response = _maybe_handle_repeat_camp_price(
             conversation, message,
         )
         if repeat_price_response is not None:
+            if _is_camp_price_full_block_question(message):
+                repeat_price_response = _strip_redundant_age_question_if_known(
+                    conversation, repeat_price_response,
+                )
+                repeat_price_response = _ensure_camp_age_question(
+                    conversation, message, repeat_price_response,
+                )
+                repeat_price_response = _dedupe_child_age_questions(
+                    repeat_price_response,
+                )
+                repeat_price_response = _format_multipoint_paragraphs(
+                    repeat_price_response,
+                )
             return _sanitise_booking_confirmation(
                 conversation, repeat_price_response,
             )
-
         # Structured camp TOPIC facts (2026-06-28): a camp-related QUESTION about
         # a SPECIFIC concern (safety / food / gadgets / confidence / …) is
         # answered with ONLY the 1 relevant focused block — never the whole camp
@@ -3322,22 +3331,13 @@ def _maybe_handle_out_of_range_age(
     )
 
 
-# ── Duplicate CAMP-PRICE question → short repeat (live bug 2026-06-27) ─────────
+# ── CAMP price/payment intent split (2026-07-09) ─────────────────────────────
 #
-# „ღირებულება რომ მომწეროთ" got the full price+transport+discount+installment
-# block; the immediate follow-up „რა ღირს?" (same semantic intent) got the EXACT
-# same full block again. The first camp_price question keeps its full answer
-# (the LLM engine); a SUBSEQUENT same-intent camp_price question gets a short
-# repeat instead of the full duplicate. NOT phrase-specific — normalized intent
-# detection. Sunday-School and adult-event price questions are explicitly NOT
-# camp_price (separated below).
-#
-# Webhook event-id dedupe: there is NO message-id/event-id dedupe for DMs today
-# (only `processed_comment:{id}` for comments), so an identical re-delivered
-# webhook event cannot be suppressed at the transport layer here. This handler
-# implements SEMANTIC duplicate shortening only; transport-level dedupe is
-# deferred (see report).
-
+# price_amount → approved full camp price block.
+# payment_process → approved payment-process answer, without the camp price.
+# reservation_exact_amount → manager deferral only; never invent an amount.
+# combined price + payment stays in price_amount, so the full block is allowed.
+# Sunday-School and adult-event price questions remain excluded.
 _CAMP_PRICE_MARKERS: tuple[str, ...] = (
     "ფასი", "ღირებულება", "ღირს", "გადასახად",
 )
@@ -3359,13 +3359,13 @@ def _is_camp_price_intent(message: str) -> bool:
     return True
 
 
-# ── Simple price vs payment separation (client follow-up hotfix 2026-06-29) ──
-# A SIMPLE price question („ფასი?" / „რა ღირს?" / „ბანაკის ფასი რა არის?") must
-# answer ONLY: price + inclusions + consultation CTA. Payment / installment /
-# upfront details (TBC / Bank of Georgia / განვადება / წინასწარ / ხელშეკრულებ /
-# ჯავშნის საფასურ) belong to a PAYMENT question, never a simple price answer.
-# The system prompt already instructs this; this deterministic post-engine
-# sanitizer is the safety net that strips a leaked payment SENTENCE.
+# ── Price/payment post-engine sanitizer (client follow-up hotfix 2026-06-29) ──
+# The deterministic camp price owner now returns the full block for explicit
+# price-amount questions only. This legacy sanitizer
+# remains as a post-engine safety net for older paths only: it strips exact
+# booking-schedule details (reservation fee / contract / upfront terms) from a
+# simple price answer when the model leaks them, while preserving the approved
+# installment and bank sentences that are now part of every price answer.
 # „ერთიანად" intentionally NOT a standalone marker — it is ambiguous („all at
 # once" in a payment question vs „in total" in a price question). A real payment
 # question always also carries „გადახდა"/etc., so it is still caught.
@@ -3373,11 +3373,25 @@ _PAYMENT_QUESTION_MARKERS: tuple[str, ...] = (
     "გადახდა", "გადავიხად", "გადაიხდ", "გადახდის პირობ", "შეძენა", "ვიყიდ",
     "ყიდვ", "ჯავშანი როგორ", "ჯავშნის გაკეთ", "წინასწარ უნდა",
 )
+_CAMP_PRICE_INSTALLMENT_MARKERS: tuple[str, ...] = (
+    "გადანაწილ", "განვად", "თვემდე", "თვეზე",
+)
+_CAMP_PRICE_BANK_MARKERS: tuple[str, ...] = (
+    "tbc", "თი-ბი-სი", "საქართველოს ბანკ", "bank of georgia", "ბანკ",
+)
+_CAMP_PRICE_DISCOUNT_MARKERS: tuple[str, ...] = (
+    "ფასდაკლებ", "დედმამიშვილ", "და-ძმ", "და ძმ", "წინა ბანაკ", "მონაწილეებისთვის",
+)
 # „წინასწარ" (upfront) is included so a paraphrased upfront-payment leak into a
 # simple price answer is stripped even without the TBC/განვადება anchors.
 _SIMPLE_PRICE_STRIP_MARKERS: tuple[str, ...] = (
-    "tbc", "თი-ბი-სი", "საქართველოს ბანკ", "bank of georgia",
-    "განვადებ", "გადანაწილ", "ჯავშნის საფასურ", "ხელშეკრულებ", "წინასწარ",
+    # Full-price-block change (2026-07-08): installments („გადანაწილ" / „განვად")
+    # and the banks (TBC / საქართველოს ბანკი) are now APPROVED, config-backed
+    # PARTS of every price answer, so they are NO LONGER stripped. Only the
+    # specific booking-schedule details that MUST be deferred to a manager
+    # (exact reservation fee / contract / upfront terms) are stripped from a
+    # simple price answer.
+    "ჯავშნის საფასურ", "ხელშეკრულებ", "წინასწარ",
 )
 
 
@@ -3395,6 +3409,58 @@ def _is_payment_question(message: str) -> bool:
         return True
     return False
 
+
+_CAMP_PAYMENT_PROCESS_ANSWER: str = (
+    "ბანაკის ჯავშნის საფასურის გადახდა ხდება წინასწარ, ხოლო სრული თანხის — "
+    "ხელშეკრულებით გათვალისწინებულ დროში. გადახდის გადანაწილება შესაძლებელია "
+    "6 თვემდე TBC-ისა და საქართველოს ბანკის საშუალებით"
+)
+
+
+def _camp_payment_process_answer() -> str:
+    return _CAMP_PAYMENT_PROCESS_ANSWER
+
+def _has_camp_price_installment_question(message: str) -> bool:
+    low = (message or "").lower()
+    return any(m in low for m in _CAMP_PRICE_INSTALLMENT_MARKERS)
+
+
+def _has_camp_price_bank_question(message: str) -> bool:
+    low = (message or "").lower()
+    return any(m in low for m in _CAMP_PRICE_BANK_MARKERS)
+
+
+def _has_camp_price_discount_question(message: str) -> bool:
+    low = (message or "").lower()
+    return any(m in low for m in _CAMP_PRICE_DISCOUNT_MARKERS)
+
+
+def _is_camp_price_amount_question(message: str) -> bool:
+    """True for explicit camp-total price amount requests."""
+    low = (message or "").lower()
+    if any(w in low for w in _CAMP_PRICE_OTHER_DOMAIN):
+        return False
+    if _is_reservation_fee_amount_question(message):
+        return False
+    return any(m in low for m in ("ფასი", "ღირებულება", "რა ღირს", "ღირს"))
+
+
+def _is_camp_payment_process_question(message: str) -> bool:
+    """True for pure payment-process questions that must not mention 2150."""
+    if _is_reservation_fee_amount_question(message):
+        return False
+    if _is_camp_price_amount_question(message):
+        return False
+    return (
+        _is_payment_question(message)
+        or _has_camp_price_installment_question(message)
+        or _has_camp_price_bank_question(message)
+    )
+
+
+def _is_camp_price_full_block_question(message: str) -> bool:
+    """True only when the user explicitly asks the camp price amount."""
+    return _is_camp_price_amount_question(message)
 
 def _strip_payment_terms_from_simple_price(message: str, response: str) -> str:
     """For a SIMPLE camp-price answer, drop any sentence carrying payment /
@@ -3502,28 +3568,125 @@ def _camp_price_value() -> str:
         return "2150"
 
 
-def _camp_price_short_answer() -> str:
-    return f"როგორც ზემოთ მოგწერეთ, ბანაკის ღირებულებაა {_camp_price_value()}₾."
+def _camp_price_banks() -> list[str]:
+    """Configured payment banks, via the canonical `admin_config_service.get_camp_facts()`
+    (`camp.payment.banks`) — never a direct camp_2026 read, never hard-coded.
+    Safe fallback to the two live banks."""
+    try:
+        from app.services import admin_config_service
+        facts = admin_config_service.get_camp_facts() or {}
+        banks = (facts.get("payment") or {}).get("banks") or facts.get("banks")
+        if isinstance(banks, list):
+            cleaned = [str(b).strip() for b in banks if str(b).strip()]
+            if cleaned:
+                return cleaned
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return ["TBC", "საქართველოს ბანკი"]
 
 
-def _camp_price_direct_answer() -> str:
-    """Direct camp-price answer (price + inclusions) with NO „as above" back-
-    reference. Used when a price question repeats but the assistant NEVER actually
-    stated the price before (live bug 2026-07-07 — the price was asked twice while
-    only the menu/an age question was ever shown, so the „ზემოთ მოგწერეთ" claim was
-    false)."""
+def _camp_installments_months() -> int:
+    """Configured installment length in months, via the canonical
+    `admin_config_service.get_camp_facts()` (`camp.payment.installments_months`) —
+    never a direct camp_2026 read, never hard-coded. Fallback 6."""
+    try:
+        from app.services import admin_config_service
+        facts = admin_config_service.get_camp_facts() or {}
+        months = (facts.get("payment") or {}).get("installments_months") \
+            or facts.get("installments_months")
+        if months:
+            return int(months)
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return 6
+
+
+def _bank_genitive(bank: str) -> str:
+    """Genitive form for the installment sentence („საქართველოს ბანკი" →
+    „საქართველოს ბანკის"; „TBC" → „TBC-ის"). Keeps the approved wording while the
+    bank NAMES stay config-driven."""
+    b = (bank or "").strip()
+    if not b:
+        return b
+    return (b[:-1] + "ის") if b[-1] == "ი" else (b + "-ის")
+
+
+def _camp_price_full_block() -> str:
+    """The APPROVED full camp-price block (2026-07-08) — used for EVERY camp
+    price / installment / discount answer: price + inclusions + 6-month
+    installments via TBC / Bank of Georgia + 10% discount + consultation offer.
+    Price, banks and installment length all come from config
+    (`_camp_price_value` / `_camp_price_banks` / `_camp_installments_months`) —
+    never hard-coded. The trailing child-age question is NOT part of this block;
+    the existing `_ensure_camp_age_question` / `_strip_redundant_age_question_if_known`
+    post-processors add / strip it so a known age is never re-asked."""
+    price = _camp_price_value()
+    months = _camp_installments_months()
+    banks_phrase = " და ".join(_bank_genitive(b) for b in _camp_price_banks()) or "ბანკის"
     return (
-        f"ბანაკის ღირებულება არის {_camp_price_value()} ლარი.\n\n"
-        "ამ თანხაში შედის ტრანსპორტირება, განთავსება, კვება და სრული პროგრამა."
+        f"ბანაკის ფასი არის {price} ლარი.\n\n"
+        "ამ თანხაში შედის ტრანსპორტირება, განთავსება, კვება და სრული პროგრამა.\n\n"
+        f"გადახდის გადანაწილება შესაძლებელია {months} თვემდე {banks_phrase} საშუალებით.\n\n"
+        "10%-იანი ფასდაკლება მოქმედებს დედმამიშვილებისთვის და წინა ბანაკის "
+        "მონაწილეებისთვის.\n\n"
+        "თუ გსურთ, კონსულტაციაზე ჩაგწერთ, სადაც დეტალებს მენეჯერი გაგაცნობთ."
     )
 
 
+# Exact-amount / bank-schedule questions never get an invented number — we give
+# the full price block, then defer the exact monthly amount / bank schedule /
+# commission / exact reservation fee to a manager.
+_CAMP_PRICE_EXACT_AMOUNT_MARKERS: tuple[str, ...] = (
+    "თვეში რამდენ", "ყოველთვიურ", "თვიური გადასახად", "თვეში ცალკე",
+    "ბანკის გრაფიკ", "გადახდის გრაფიკ", "განვადების გრაფიკ",
+    "კომისი",
+    "ჯავშნის ზუსტ", "ზუსტი თანხ", "ზუსტ თანხ", "ზუსტი ოდენ",
+    "ჯავშნის საფასურ", "ხელშეკრულებ", "წინასწარ",
+)
+
+
+def _is_camp_price_exact_amount_question(message: str) -> bool:
+    """True when the user asks for the EXACT monthly payment / bank schedule /
+    commission / exact reservation amount — deferred to a manager (never
+    invented)."""
+    low = (message or "").lower()
+    return any(m in low for m in _CAMP_PRICE_EXACT_AMOUNT_MARKERS)
+
+
+def _camp_price_manager_deferral_line() -> str:
+    """The exact-amount deferral line. Uses `get_manager_phone()` and the
+    existing project „…მენეჯერი გაგაცნობთ : {phone}" convention (unchanged
+    punctuation / colon spacing)."""
+    from app.services import admin_config_service
+    phone = (admin_config_service.get_manager_phone() or "").strip()
+    base = ("ჯავშნის ზუსტ თანხას, ბანკის გრაფიკსა და ყოველთვიურ გადასახადს "
+            "მენეჯერი გაგაცნობთ")
+    return f"{base} : {phone}" if phone else f"{base}."
+
+
+def _camp_price_full_block_with_manager_deferral() -> str:
+    return f"{_camp_price_full_block()}\n\n{_camp_price_manager_deferral_line()}"
+
+def _camp_price_answer(message: str) -> str:
+    """The full price block, plus the manager deferral line appended when the
+    user asked for an exact monthly amount / bank schedule / commission / exact
+    reservation fee."""
+    block = _camp_price_full_block()
+    if _is_camp_price_exact_amount_question(message):
+        return _camp_price_full_block_with_manager_deferral()
+    return block
+
+
+def _camp_price_direct_answer() -> str:
+    """Direct camp-price answer → the approved full price block."""
+    return _camp_price_full_block()
+
+
 def _assistant_gave_camp_price(conversation: Conversation) -> bool:
-    """True when an EARLIER assistant turn actually stated the camp price — the
-    price value together with a price context word — so a „როგორც ზემოთ მოგწერეთ"
-    repeat is truthful. Guards the live bug (2026-07-07) where the price was asked
-    twice but the assistant only ever showed the generic menu / an age question and
-    the repeat handler still falsely claimed „as above"."""
+    """True when an EARLIER assistant turn actually stated the camp price (the
+    price value together with a price context word). Retained as a history helper
+    (the repeat handler no longer emits a „as above" back-reference — 2026-07-08 —
+    but this detector is still unit-tested and available to callers)."""
     price = _camp_price_value()
     for turn in (getattr(conversation, "history", []) or []):
         if not isinstance(turn, dict) or turn.get("role") != "assistant":
@@ -3553,37 +3716,32 @@ def _camp_price_question_count(conversation: Conversation) -> int:
 def _maybe_handle_repeat_camp_price(
     conversation: Conversation, message: str,
 ) -> str | None:
-    """First camp_price question → None (the engine sends the full answer); a
-    SUBSEQUENT same-intent camp_price question → a short repeat instead of the
-    full duplicate block. Counts camp_price USER turns: a single occurrence (the
-    first ask, or a one-shot handle() call where the message is not yet in
-    history) is never suppressed. Returns None for any non-camp-price message
-    (new questions / payment-method / dates / SS + adult price)."""
-    if not _is_camp_price_intent(message):
-        return None
-    # A payment/purchase question phrased with a price marker („გადასახადი როგორ
-    # ხდება?") must get the payment wording from the engine, not the price repeat.
-    if _is_payment_question(message):
-        return None
-    if _camp_price_question_count(conversation) < 2:
-        return None
-    # Only claim „როგორც ზემოთ მოგწერეთ" when the assistant ACTUALLY gave the price
-    # earlier. Live bug (2026-07-07): the price was asked twice but only the menu /
-    # an age question was ever shown, so the „as above" back-reference was false —
-    # answer directly instead (price + inclusions, no false claim).
-    if not _assistant_gave_camp_price(conversation):
+    """Deterministic camp price/payment split.
+
+    The helper name is retained for compatibility, but behavior is no longer
+    broad full-block handling: explicit price amount returns the full block;
+    pure payment-process returns the approved payment wording without 2150;
+    reservation exact amount returns the manager deferral only.
+    """
+    if _is_reservation_fee_amount_question(message):
         logger.info(
-            "[parent_flow] repeat camp_price w/o prior price answer → direct "
-            "answer, no false back-reference (sender=%s)",
+            "[parent_flow] reservation-fee amount unknown → manager defer "
+            "(sender=%s)", conversation.sender_id,
+        )
+        return _RESERVATION_FEE_DEFER
+    if _is_camp_price_full_block_question(message):
+        logger.info(
+            "[parent_flow] deterministic camp-price full block (exact=%s sender=%s)",
+            _is_camp_price_exact_amount_question(message), conversation.sender_id,
+        )
+        return _camp_price_answer(message)
+    if _is_camp_payment_process_question(message):
+        logger.info(
+            "[parent_flow] deterministic camp payment-process answer (sender=%s)",
             conversation.sender_id,
         )
-        return _camp_price_direct_answer()
-    logger.info(
-        "[parent_flow] repeat camp_price → short answer (sender=%s)",
-        conversation.sender_id,
-    )
-    return _camp_price_short_answer()
-
+        return _camp_payment_process_answer()
+    return None
 
 # ── Structured camp TOPIC facts (live bug 2026-06-28) ────────────────────────
 #
@@ -3614,13 +3772,9 @@ _CONSULT_CTA_MARKERS: tuple[str, ...] = (
 
 
 def _camp_price_block() -> str:
-    """The approved simple-price block (price + inclusions), for multi-question
-    answers. No payment terms, no CTA (the multi-question renderer keeps it
-    concise)."""
-    return (
-        f"ბანაკის ღირებულებაა {_camp_price_value()} ლარი. "
-        "ღირებულებაში შედის ტრანსპორტი, განთავსება, კვება და სრული პროგრამა."
-    )
+    """The approved full price block (price + inclusions + installments + banks +
+    10% discount + consultation offer), for multi-question answers."""
+    return _camp_price_full_block()
 
 
 def _split_question_clauses(message: str) -> list[str]:
@@ -5550,7 +5704,7 @@ def _maybe_handle_camp_stream_query(
     except Exception:  # pragma: no cover — defensive
         pass
     want_age = any(m in low for m in _CAMP_STREAM_AGE_MARKERS)
-    want_price = _is_camp_price_intent(text) and not _is_payment_question(text)
+    want_price = _is_camp_price_full_block_question(text)
     if not (want_age or want_price):
         return None
 
@@ -5561,7 +5715,6 @@ def _maybe_handle_camp_stream_query(
         facts = {}
     age_min = str(facts.get("age_min") or "9").strip()
     age_max = str(facts.get("age_max") or "17").strip()
-    price = _camp_price_value()
 
     stream_no = _extract_camp_stream_number(low)
     sentences: list[str] = []
@@ -5572,26 +5725,18 @@ def _maybe_handle_camp_stream_query(
                 f"ბანაკის მე-{stream_no} ნაკადი ტარდება "
                 f"{_format_stream_dates_dative(dates)}."
             )
-    if want_age and want_price:
-        sentences.append(
-            f"ბანაკი განკუთვნილია {age_min}–{age_max} წლის ბავშვებისთვის, "
-            f"ხოლო ღირებულება არის {price} ლარი."
-        )
-    elif want_age:
+    if want_age:
         sentences.append(
             f"ბანაკი განკუთვნილია {age_min}–{age_max} წლის ბავშვებისთვის."
         )
-    elif want_price:
-        sentences.append(f"ბანაკის ღირებულება არის {price} ლარი.")
 
-    if not sentences:
+    if not sentences and not want_price:
         return None
-    paras = [" ".join(sentences)]
+    paras = [" ".join(sentences)] if sentences else []
     if want_price:
-        paras.append(
-            "ამ თანხაში შედის ტრანსპორტირება, განთავსება, კვება და სრული პროგრამა."
-        )
-    paras.append("თუ გსურთ, კონსულტაციაზე ჩაგწერთ.")
+        paras.append(_camp_price_answer(text))
+    else:
+        paras.append("თუ გსურთ, კონსულტაციაზე ჩაგწერთ.")
     _ensure_lead(conversation)
     logger.info(
         "[parent_flow] camp stream query → direct answer "
@@ -5599,7 +5744,6 @@ def _maybe_handle_camp_stream_query(
         stream_no, want_age, want_price, conversation.sender_id,
     )
     return "\n\n".join(paras)
-
 
 def _has_explicit_georgian_camp_intent(message: str) -> bool:
     """True when the FIRST message clearly states camp interest — a camp
@@ -5629,7 +5773,7 @@ def _has_explicit_georgian_camp_intent(message: str) -> bool:
     # camp-vs-adult menu. A BARE camp keyword („ბანაკი") with no question still
     # shows the branded menu (no marker, no specific-question detector matches).
     try:
-        if _is_camp_price_intent(message):
+        if _is_camp_price_full_block_question(message):
             return True
         from app.reasoning import camp_topic_facts as _ctf
         if (

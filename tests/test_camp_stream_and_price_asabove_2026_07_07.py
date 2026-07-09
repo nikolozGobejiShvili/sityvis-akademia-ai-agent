@@ -4,9 +4,9 @@ BUG 1 — a first message that names a camp STREAM/cohort („3 ნაკად�
         ნაკადი") together with an age-limit and/or price ask — even WITHOUT the
         word „ბანაკი" and with the typo „ასოკობრივი" — must be answered directly
         (stream date + age band + price), never the generic camp-vs-adult menu.
-BUG 2 — „როგორც ზემოთ მოგწერეთ" must appear ONLY when the assistant actually gave
-        the price earlier; a price follow-up with no prior price answer gets a
-        direct price answer with no false back-reference.
+BUG 2 — deprecated „როგორც ზემოთ მოგწერეთ" wording must not appear in camp
+        price behavior; price follow-ups get a direct/full price block with no
+        false back-reference.
 
 Legacy/giant-prompt path: engine ON, planner + slim OFF. The camp facts + status
 are mocked so the assertions are deterministic (independent of the operator's
@@ -228,14 +228,15 @@ def test_case7_price_followup_variant_no_false_ref(engine):
     assert "ზემოთ მოგწერეთ" not in out
 
 
-def test_repeat_price_short_when_price_actually_given(engine):
-    # Regression: a TRUE repeat (assistant DID give the price) keeps the short
-    # „as above" wording — that behaviour must be preserved.
+def test_repeat_price_full_block_when_price_actually_given(engine):
+    # Regression: a TRUE repeat (assistant DID give the price) now repeats the
+    # full approved block, never a deprecated „as above" shortcut.
     conv = _conv("f_short", state="ASK_CHALLENGE", child_age="10", history=[
         {"role": "user", "content": "რა ღირს?"},
         {"role": "assistant", "content": "ბანაკის ღირებულებაა 2150 ლარი. ღირებულებაში შედის ტრანსპორტი."},
     ])
-    out = _turn(conv, "ფასი კიდევ მითხარით")
-    assert "როგორც ზემოთ" in out
-    assert "2150" in out
-    assert "ტრანსპორტი" not in out       # short, not the full duplicate block
+    out = _turn(conv, "ფასი კიდევ ერთხელ მითხარით")
+    for expected in ("2150", "ტრანსპორტ", "გადანაწილება", "TBC", "საქართველოს ბანკ", "10%"):
+        assert expected in out, expected
+    for bad in ("როგორც ზემოთ", "როგორც უკვე გითხარით", "ზემოთ მოგწერეთ"):
+        assert bad not in out
