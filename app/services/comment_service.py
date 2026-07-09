@@ -44,19 +44,13 @@ post_content_cache: dict[str, tuple[str, datetime]] = {}
 # variant is constructed at send time from camp facts so the DM stays
 # in sync with the canonical knowledge base.
 #
-# `ADULT_NO_EVENTS_DM` is also the fallback used by
-# `_build_adult_rich_dm()` when there are no populated event blocks in
-# the events config OR when parsing fails.
+# `ADULT_NO_EVENTS_DM` is the shared admin-config no-active-events copy
+# used by ADULT comment runtime paths when there are no active admin events.
 PARENT_FIRST_CONTACT_DM = (
     "გამარჯობა. მოხარულები ვართ, რომ დაინტერესდით ბანაკით.\n"
     "დეტალებისთვის მომწერეთ."
 )
-ADULT_NO_EVENTS_DM = (
-    "გამარჯობა. მოხარულები ვართ, რომ დაინტერესდით ჩვენი "
-    "ღონისძიებებით.\n\n"
-    "ახლო მომავალში ღონისძიებების განრიგს გამოვაქვეყნებთ. "
-    "თუ გსურთ პირველმა გაიგოთ — მომწერეთ."
-)
+ADULT_NO_EVENTS_DM = admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
 
 
 def _normalize_hashtag(tag: str) -> str:
@@ -323,63 +317,19 @@ def _build_camp_comment_dm(comment_text: str) -> str:
 
 
 def _build_adult_rich_dm() -> str:
-    """PATCH 3 — ADULT first-contact rich DM.
-
-    When at least one event has a populated name, builds a list with
-    date / location / price markers (uses 📅 📍 💰 for visual scan).
-    Otherwise returns `ADULT_NO_EVENTS_DM`. Any unexpected exception
-    also falls through to the safe fallback.
-    """
-    logger.info("[COMMENT] Building rich DM segment=ADULT")
+    """Build an ADULT first-contact DM from admin-config active events only."""
+    logger.info("[COMMENT] Building rich DM segment=ADULT source=admin_config")
     try:
-        events = _parse_events_blocks()
-        logger.info("[COMMENT] Events loaded count=%d", len(events))
-        if not events:
-            return ADULT_NO_EVENTS_DM
-
-        lines: list[str] = [
-            "გამარჯობა. მოხარულები ვართ, რომ დაინტერესდით ჩვენი "
-            "ღონისძიებებით.",
-            "",
-        ]
-        # Cap at the first three events — the comment-origin DM is the
-        # FIRST contact, not the full catalogue. The user can ask for
-        # the rest in the next message.
-        for event in events[:3]:
-            lines.append(f"{event['name']}:")
-            date_time = event.get("date", "").strip()
-            time_text = event.get("time", "").strip()
-            if date_time and time_text:
-                lines.append(f"📅 {date_time} {time_text}")
-            elif date_time:
-                lines.append(f"📅 {date_time}")
-            location = event.get("location", "").strip()
-            if location:
-                lines.append(f"📍 {location}")
-            price = event.get("price", "").strip()
-            if price:
-                # If the price already looks like text (e.g. "ფასი 120"),
-                # keep it; otherwise append "ლარი".
-                if "ლარი" in price:
-                    lines.append(f"💰 {price}")
-                else:
-                    lines.append(f"💰 {price} ლარი")
-            lines.append("")
-        lines.append("დამატებითი კითხვებისთვის — მომწერეთ.")
-
-        message = "\n".join(lines).rstrip()
-        logger.info(
-            "[COMMENT] Rich DM built segment=ADULT len=%d events_listed=%d",
-            len(message), len(events[:3]),
-        )
-        return message
+        list_dm = _build_active_adult_events_list_dm()
+        if list_dm:
+            return list_dm
+        return ADULT_NO_EVENTS_DM
     except Exception as exc:
         logger.warning(
-            "[COMMENT] Using fallback DM reason=adult_yaml_load_failed: %s",
+            "[COMMENT] Using fallback DM reason=adult_admin_events_failed: %s",
             exc, exc_info=True,
         )
         return ADULT_NO_EVENTS_DM
-
 
 # Comment → Specific Event Mapping Patch (2026-06-08).
 #
@@ -1487,16 +1437,10 @@ async def send_dm_from_comment(
             message = _build_camp_comment_dm(comment_text)
         elif section_type == "adult_events" and segment == "ADULT":
             # Generic Adult Event Comment Patch (2026-06-09).
-            # Prefer the operator-driven active-events list (sourced
-            # from `admin_config_service.get_active_adult_events()`)
-            # over the legacy `_build_adult_rich_dm()` which reads
-            # `data/events.txt` and emits the misleading „ახლო
-            # მომავალში…" copy when that file is empty. Falls through
-            # to `_build_adult_rich_dm()` only when the active-events
-            # list is genuinely empty (in which case the legacy path's
-            # `ADULT_NO_EVENTS_DM` fallback is the correct response).
+            # Adult-event runtime uses admin_config_service active events only.
+            # If no active admin events exist, return the shared no-active copy.
             list_dm = _build_active_adult_events_list_dm()
-            message = list_dm or _build_adult_rich_dm()
+            message = list_dm or ADULT_NO_EVENTS_DM
         else:
             # New / unknown section type → render the section's own
             # template directly. This is the operator-extension path.
@@ -1509,12 +1453,9 @@ async def send_dm_from_comment(
                 )
 
     if not message:
-        # COMMENT FLOW PATCH 3 — legacy fallback: rich first-contact DM
-        # from canonical knowledge / events. The PARENT builder pulls
-        # facts from camp_2026.yaml; the ADULT builder reads
-        # `settings.EVENTS`. Both have safe fallbacks
-        # (`PARENT_FIRST_CONTACT_DM` / `ADULT_NO_EVENTS_DM`) inside the
-        # builder itself, so the caller never needs a try/except. The
+        # COMMENT FLOW PATCH 3 fallback: PARENT uses canonical camp knowledge;
+        # ADULT uses admin_config_service active events only. Both have safe
+        # fallbacks (`PARENT_FIRST_CONTACT_DM` / `ADULT_NO_EVENTS_DM`). The
         # UNCLEAR path keeps the existing two-segment routing menu.
         if segment == "PARENT":
             # Comment-aware Camp DM for a PARENT comment resolved via the legacy
@@ -1528,7 +1469,7 @@ async def send_dm_from_comment(
             # section resolved) still surfaces the active-events list
             # when one exists.
             list_dm = _build_active_adult_events_list_dm()
-            message = list_dm or _build_adult_rich_dm()
+            message = list_dm or ADULT_NO_EVENTS_DM
         else:
             message = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
 

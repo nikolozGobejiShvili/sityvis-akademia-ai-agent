@@ -36,7 +36,7 @@ from app.agent.tools.adult_tools import (
 from app.config import settings
 from app.models.conversation import Conversation
 from app.models.lead import Lead
-from app.services import openai_service
+from app.services import admin_config_service, openai_service
 
 logger = logging.getLogger(__name__)
 
@@ -1902,12 +1902,11 @@ def _render_active_events_list() -> str:
     „none active" line. Appended after a PAST / NOT-FOUND named-event answer
     so the user always gets the live options (BUG B, 2026-06-15)."""
     try:
-        from app.services import admin_config_service
         active = admin_config_service.get_active_adult_events()
     except Exception:  # pragma: no cover — defensive
         active = []
     if not active:
-        return "ამ ეტაპზე აქტიური ღონისძიება არ გვაქვს."
+        return admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
     lines = ["ამ ეტაპზე აქტიური ღონისძიებები:"]
     for ev in active:
         title = str(ev.get("title") or "").strip()

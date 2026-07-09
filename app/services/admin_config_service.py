@@ -69,6 +69,7 @@ VALID_STATUSES = ("active", "hidden", "full", "coming_soon", "ended")
 # lets the operator turn the camp off after the last stream without a code change.
 CAMP_STATUSES = ("active", "hidden", "full", "coming_soon", "ended")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_]*$")
+ADULT_NO_ACTIVE_EVENTS_REPLY = "ამ ეტაპზე აქტიური ღონისძიება სიაში არ მაქვს. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
 
 
 def parse_price_gel(price_text: str | None) -> int | None:

@@ -14,9 +14,14 @@ saved into `events[]` still surface normally.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import dataclasses
 
 import pytest
 
+import app.config as config_module
+from app.agent.llm import adult_llm_engine
+from app.flows import adult_flow
+from app.models.conversation import Conversation
 from app.services import admin_config_service as acs
 
 _TZ = timezone(timedelta(hours=4))
@@ -44,6 +49,17 @@ def _fromula(status="active", date_text="28 აგვისტო 2030"):
             "date_text": date_text, "location": "monaco", "price_text": "5000",
             "price_gel": 4999, "min_age": 13}
 
+
+def _adult_conv(sender="adult-events"):
+    return Conversation(sender_id=sender, platform="instagram", segment="ADULT")
+
+
+def _adult_flow_settings(monkeypatch, **overrides):
+    values = {"USE_ADULT_LLM_ENGINE": False, "EVENTS": ""}
+    values.update(overrides)
+    swapped = dataclasses.replace(config_module.settings, **values)
+    monkeypatch.setattr(adult_flow, "settings", swapped)
+    return swapped
 
 # ── events: [] → NO fallback, NO adult_events_default ─────────────────────────
 def test_events_empty_returns_empty_no_fallback(monkeypatch):
@@ -127,3 +143,64 @@ def test_delete_adult_event_removes_from_list(monkeypatch):
     monkeypatch.setattr(acs, "_save_adult_events_list", lambda evs: store.update(events=evs) or [])
     assert acs.delete_adult_event("fromula_1") is True
     assert not any(e.get("id") == "fromula_1" for e in store["events"])
+
+def test_adult_flow_events_empty_returns_shared_no_active(monkeypatch):
+    _use_section(monkeypatch, {**_SECTION_BASE, "events": []})
+    _adult_flow_settings(monkeypatch)
+    adult_flow.selected_events.clear()
+
+    out = adult_flow.handle(_adult_conv("af-empty"), "ღონისძიებები მაინტერესებს")
+
+    assert out == acs.ADULT_NO_ACTIVE_EVENTS_REPLY
+    assert "maroon" not in out.lower()
+    assert "fromula" not in out.lower()
+
+
+def test_adult_flow_ignores_legacy_settings_events_when_admin_empty(monkeypatch):
+    _use_section(monkeypatch, {**_SECTION_BASE, "events": []})
+    _adult_flow_settings(
+        monkeypatch,
+        EVENTS="=== EVENT 1 ===\nსახელი: legacy event\nთარიღი: 30 დეკემბერი 2030\n",
+    )
+    adult_flow.selected_events.clear()
+
+    out = adult_flow.handle(_adult_conv("af-legacy"), "ღონისძიებები მაინტერესებს")
+
+    assert out == acs.ADULT_NO_ACTIVE_EVENTS_REPLY
+    assert "legacy event" not in out
+
+
+def test_adult_flow_active_admin_event_surfaces(monkeypatch):
+    ev = {
+        "id": "new_ev", "title": "ახალი საღამო", "status": "active",
+        "date_text": "1 ივნისი 2031", "min_age": 13, "guest": "სტუმარი",
+    }
+    _use_section(monkeypatch, {**_SECTION_BASE, "events": [ev]})
+    _adult_flow_settings(monkeypatch)
+    adult_flow.selected_events.clear()
+
+    out = adult_flow.handle(_adult_conv("af-active"), "ღონისძიებები მაინტერესებს")
+
+    assert "ახალი საღამო" in out
+    assert acs.ADULT_NO_ACTIVE_EVENTS_REPLY not in out
+
+
+def test_adult_flow_stale_selected_event_does_not_survive_events_empty(monkeypatch):
+    _use_section(monkeypatch, {**_SECTION_BASE, "events": []})
+    _adult_flow_settings(monkeypatch)
+    adult_flow.selected_events["af-stale"] = {
+        "id": "fromula_1", "name": "fromula 1", "theme": "",
+    }
+    conversation = _adult_conv("af-stale")
+    conversation.state = "ANSWER_QUESTIONS"
+
+    out = adult_flow.handle(conversation, "ფასი?")
+
+    assert out == acs.ADULT_NO_ACTIVE_EVENTS_REPLY
+    assert "af-stale" not in adult_flow.selected_events
+
+
+def test_adult_llm_active_list_empty_uses_shared_no_active(monkeypatch):
+    monkeypatch.setattr(acs, "get_active_adult_events", lambda: [])
+
+    assert adult_llm_engine._render_active_events_list() == acs.ADULT_NO_ACTIVE_EVENTS_REPLY

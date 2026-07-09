@@ -162,6 +162,22 @@ def test_active_events_list_dm_returns_empty_when_no_active_events(
     assert comment_service._build_active_adult_events_list_dm() == ""
 
 
+def test_adult_rich_dm_uses_admin_no_active_not_legacy_settings(
+    sections_path, monkeypatch,
+):
+    _seed_section(sections_path, [])
+    _swap_settings(
+        monkeypatch,
+        EVENTS="=== EVENT 1 ===\nსახელი: legacy event\nთარიღი: 30 დეკემბერი 2030\n",
+    )
+    monkeypatch.setattr(
+        comment_service,
+        "_parse_events_blocks",
+        lambda: pytest.fail("legacy settings.EVENTS parser must not run"),
+    )
+
+    assert comment_service._build_adult_rich_dm() == admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
+
 def test_active_events_list_dm_skips_missing_fields(sections_path):
     _seed_section(sections_path, [
         {
@@ -414,15 +430,18 @@ def test_generic_event_comment_with_active_events_sends_list(
 def test_generic_event_comment_with_no_active_events_sends_fallback(
     sections_path, monkeypatch,
 ):
-    """Operator deactivated everything → fallback/no-schedule copy is
-    the correct response. This protects against accidentally promising
-    events that no longer exist."""
+    """Inactive admin events produce the shared no-active answer only."""
     _seed_section(sections_path, [
         {
             "id": "old", "title": "archived",
             "status": "inactive", "min_age": 13,
         },
     ], section_status="active")
+    monkeypatch.setattr(
+        comment_service,
+        "_parse_events_blocks",
+        lambda: pytest.fail("legacy settings.EVENTS parser must not run"),
+    )
     sent, _send = _capture_private_reply()
     monkeypatch.setattr(
         comment_service.messenger_service,
@@ -444,25 +463,23 @@ def test_generic_event_comment_with_no_active_events_sends_fallback(
         sender_id="user_y", platform="facebook",
         post_id="post_p", segment="ADULT",
         comment_id="cm_2",
-        comment_text="მაინტერესებს",
+        comment_text="info",
     ))
     assert ok
     body = sent[0][1]
-    # No fabricated event title from an inactive event.
+    assert body == admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
     assert "archived" not in body
-    # The fallback copy is permitted in this branch.
-    assert (
-        "ახლო მომავალში" in body
-        or "ღონისძიებებით" in body
-    )
-
 
 def test_generic_event_comment_does_not_invent_schedule(
     sections_path, monkeypatch,
 ):
-    """The DM body must NOT promise upcoming events when no active
-    events exist in admin config."""
+    """The DM body must not promise upcoming events when admin has none."""
     _seed_section(sections_path, [])
+    monkeypatch.setattr(
+        comment_service,
+        "_parse_events_blocks",
+        lambda: pytest.fail("legacy settings.EVENTS parser must not run"),
+    )
     sent, _send = _capture_private_reply()
     monkeypatch.setattr(
         comment_service.messenger_service,
@@ -484,13 +501,12 @@ def test_generic_event_comment_does_not_invent_schedule(
         sender_id="user_z", platform="facebook",
         post_id="post_p", segment="ADULT",
         comment_id="cm_3",
-        comment_text="ფასი?",
+        comment_text="info",
     ))
     assert ok
     body = sent[0][1]
-    # No specific event titles fabricated.
+    assert body == admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
     assert "summer fest" not in body
-
 
 # ---------------------------------------------------------------------------
 # PART 4 — Specific event tag still wins over generic list

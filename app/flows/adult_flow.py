@@ -4,7 +4,7 @@ import re
 from app.config import settings
 from app.models.conversation import Conversation
 from app.models.lead import Lead
-from app.services import notification_service, openai_service, sheets_service
+from app.services import admin_config_service, notification_service, openai_service, sheets_service
 from data.prompts import (
     ADULT_BOOKING_FORWARDED,
     ADULT_CLARIFY_EVENT,
@@ -20,7 +20,6 @@ from data.prompts import (
     ADULT_EVENT_LIST_ITEM,
     ADULT_EVENT_NAME_PLACEHOLDER,
     ADULT_EVENT_PLACEHOLDER,
-    ADULT_NO_EVENTS,
     ADULT_SEND_BOOKING,
     ADULT_SUMMARY_FALLBACK,
     ADULT_WELCOME,
@@ -30,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 selected_events = {}
 
+
+def _no_active_events_reply() -> str:
+    return admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
+
+
+def _visible_events(events: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [event for event in events if event.get("name") or event.get("theme")]
 
 # P3-C PATCH 7 — global intent guard for the deterministic adult state
 # machine. Live QA showed the SHOW_EVENTS / ANSWER_QUESTIONS states
@@ -228,6 +234,8 @@ def handle(conversation: Conversation, message: str) -> str:
     if conversation.state == "START":
         events = _load_events()
         conversation.state = "SHOW_EVENTS"
+        if not _visible_events(events):
+            return _no_active_events_reply()
         return (
             ADULT_WELCOME.format(
                 company_name=settings.COMPANY_NAME,
@@ -237,10 +245,13 @@ def handle(conversation: Conversation, message: str) -> str:
         )
 
     if conversation.state == "SHOW_EVENTS":
-        event = _detect_event(message)
+        events = _load_events()
+        if not _visible_events(events):
+            return _no_active_events_reply()
+        event = _detect_event(message, events)
         if not event:
             return ADULT_CLARIFY_EVENT.format(
-                events_list=_format_event_list(_load_events()),
+                events_list=_format_event_list(events),
             ).strip()
 
         selected_events[conversation.sender_id] = event
@@ -251,6 +262,9 @@ def handle(conversation: Conversation, message: str) -> str:
 
     if conversation.state == "ANSWER_QUESTIONS":
         event = _current_event(conversation)
+        if event is None:
+            conversation.state = "SHOW_EVENTS"
+            return _no_active_events_reply()
         if _wants_booking(message):
             conversation.state = "SEND_BOOKING"
             _finalize_booking(conversation)
@@ -260,10 +274,15 @@ def handle(conversation: Conversation, message: str) -> str:
         return _end_with_booking_question(response)
 
     if conversation.state == "SEND_BOOKING":
+        if _current_event(conversation) is None:
+            conversation.state = "SHOW_EVENTS"
+            return _no_active_events_reply()
         _finalize_booking(conversation)
         return ADULT_BOOKING_FORWARDED.strip()
 
     event = _current_event(conversation)
+    if event is None:
+        return _no_active_events_reply()
     return _generate_done_response(conversation, message, event)
 
 
@@ -320,29 +339,35 @@ def _ensure_lead(conversation: Conversation) -> Lead:
 
 
 def _load_events() -> list[dict[str, str]]:
-    events = []
-    current_event = None
+    try:
+        events = admin_config_service.get_active_adult_events()
+    except Exception as exc:
+        logger.warning("[adult_flow] admin adult events load failed: %s", exc)
+        return []
+    return [_admin_event_to_flow_event(event) for event in events]
 
-    for line in settings.EVENTS.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("=== EVENT") and stripped.endswith("==="):
-            if current_event:
-                events.append(current_event)
-            current_event = _empty_event(stripped.strip("= ").lower().replace(" ", "_"))
-            continue
 
-        if not current_event or ":" not in line:
-            continue
-
-        key, value = line.split(":", 1)
-        field = _event_field(key.strip())
-        if field:
-            current_event[field] = value.strip()
-
-    if current_event:
-        events.append(current_event)
-
-    return events
+def _admin_event_to_flow_event(event: dict) -> dict[str, str]:
+    price = str(event.get("price_text") or "").strip()
+    if not price and event.get("price_gel") is not None:
+        price = str(event.get("price_gel") or "").strip()
+    description = str(event.get("description") or "").strip()
+    theme = str(event.get("theme") or event.get("format") or description or "").strip()
+    return {
+        "id": str(event.get("id") or "").strip(),
+        "name": str(event.get("title") or "").strip(),
+        "date": str(event.get("date_text") or "").strip(),
+        "time": "",
+        "theme": theme,
+        "guest": str(event.get("guest") or "").strip(),
+        "location": str(event.get("location") or "").strip(),
+        "price": price,
+        "booking_link": str(
+            event.get("reservation_url") or event.get("payment_terms") or "",
+        ).strip(),
+        "description": description,
+        "atmosphere": ADULT_DEFAULT_ATMOSPHERE,
+    }
 
 
 def _empty_event(event_id: str) -> dict[str, str]:
@@ -377,9 +402,9 @@ def _event_field(label: str) -> str | None:
 
 
 def _format_event_list(events: list[dict[str, str]]) -> str:
-    visible_events = [event for event in events if event["name"] or event["theme"]]
+    visible_events = _visible_events(events)
     if not visible_events:
-        return ADULT_NO_EVENTS
+        return _no_active_events_reply()
 
     lines = []
     for index, event in enumerate(visible_events, start=1):
@@ -395,11 +420,12 @@ def _format_event_list(events: list[dict[str, str]]) -> str:
     return "\n\n".join(lines)
 
 
-def _detect_event(message: str) -> dict[str, str] | None:
-    events = _load_events()
+def _detect_event(message: str, events: list[dict[str, str]] | None = None) -> dict[str, str] | None:
+    if events is None:
+        events = _load_events()
     normalized = message.strip().lower()
 
-    visible_events = [event for event in events if event["name"] or event["theme"]]
+    visible_events = _visible_events(events)
     for index, event in enumerate(visible_events, start=1):
         if normalized == str(index) or str(index) in normalized:
             return event
@@ -419,28 +445,24 @@ def _detect_event(message: str) -> dict[str, str] | None:
     return None
 
 
-def _current_event(conversation: Conversation) -> dict[str, str]:
-    event = selected_events.get(conversation.sender_id)
-    if event:
-        return event
-
+def _current_event(conversation: Conversation) -> dict[str, str] | None:
     events = _load_events()
-    visible_events = [event for event in events if event["name"] or event["theme"]]
+    visible_events = _visible_events(events)
+    selected = selected_events.get(conversation.sender_id)
+    selected_id = str((selected or {}).get("id") or "").strip()
+    if selected_id:
+        for event in visible_events:
+            if event.get("id") == selected_id:
+                selected_events[conversation.sender_id] = event
+                return event
+        selected_events.pop(conversation.sender_id, None)
+
     if visible_events:
         selected_events[conversation.sender_id] = visible_events[0]
         return visible_events[0]
 
-    return {
-        "id": "unknown",
-        "name": ADULT_DEFAULT_EVENT_NAME,
-        "date": ADULT_EVENT_PLACEHOLDER,
-        "time": ADULT_EVENT_PLACEHOLDER,
-        "theme": ADULT_DEFAULT_EVENT_THEME,
-        "guest": ADULT_DEFAULT_EVENT_GUEST,
-        "location": ADULT_DEFAULT_EVENT_LOCATION,
-        "atmosphere": ADULT_DEFAULT_EVENT_ATMOSPHERE_TBD,
-        "booking_link": "",
-    }
+    selected_events.pop(conversation.sender_id, None)
+    return None
 
 
 def _generate_event_response(conversation: Conversation, message: str, event: dict[str, str]) -> str:
@@ -459,7 +481,7 @@ def _generate_event_response(conversation: Conversation, message: str, event: di
 def _generate_done_response(conversation: Conversation, message: str, event: dict[str, str]) -> str:
     context = "{}\n\n{}\n\n{}".format(
         settings.KNOWLEDGE_BASE,
-        settings.EVENTS,
+        _format_event_list(_load_events()),
         ADULT_DONE_CONTEXT.format(event_name=event["name"]).strip(),
     )
     try:
