@@ -6,7 +6,7 @@ import pytest
 import app.config as config_module
 from app.agent.llm import adult_llm_engine, parent_llm_engine
 from app.agent.tools import adult_tool_executor, parent_tool_executor
-from app.flows import adult_flow, parent_flow
+from app.flows import adult_flow, parent_flow, parent_turn_router
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.reasoning import conversation_trace
@@ -176,12 +176,52 @@ MSG_REGISTRATION_LINK = "\u10d1\u10d0\u10dc\u10d0\u10d9\u10d8\u10e1 \u10e0\u10d4
 MSG_TRANSPORT = "\u10e2\u10e0\u10d0\u10dc\u10e1\u10de\u10dd\u10e0\u10e2\u10d8 \u10e0\u10dd\u10d2\u10dd\u10e0 \u10ee\u10d3\u10d4\u10d1\u10d0?"
 MSG_ADULT_EVENTS = "adult events"
 MSG_ADULT_IDENTITY = "\u10d5\u10d8\u10dc \u10ee\u10d0\u10e0?"
+MSG_ADULT_GREETING = "hello"
+MSG_ADULT_MANAGER = "\u10db\u10d4\u10dc\u10d4\u10ef\u10d4\u10e0\u10d8"
+
+
+def _assert_single_route_decision(block: dict) -> None:
+    decision_keys = [key for key in block if "route_decision" in key]
+    assert decision_keys == ["route_decision"]
+    assert "route_owner" not in block
+    assert "answer_source" not in block
+    decision = block.get("route_decision")
+    assert isinstance(decision, dict)
+    assert "route_decision" not in decision
+
+
+def _assert_decision_private(
+    decision: dict, forbidden_fragments: list[str | None],
+) -> None:
+    serialized = json.dumps(decision, ensure_ascii=False)
+    for fragment in forbidden_fragments:
+        if fragment:
+            assert fragment not in serialized
+
+
+def _assert_no_fallback_reason(decision: dict) -> None:
+    assert "fallback_reason" not in decision
+
+
+def _assert_deterministic_no_llm_tool(
+    decision: dict, *, handoff_requested: bool = False,
+) -> None:
+    assert decision["used_llm"] is False
+    assert decision["used_tool"] is False
+    assert decision.get("handoff_requested", False) is handoff_requested
+    _assert_no_fallback_reason(decision)
+
+
+def _assert_llm_no_tool(decision: dict) -> None:
+    assert decision["used_llm"] is True
+    assert decision["used_tool"] is False
 
 
 def _last_decision() -> tuple[dict, dict]:
     blocks = conversation_trace.history()
     assert len(blocks) == 1
     block = blocks[-1]
+    _assert_single_route_decision(block)
     decision = block.get("route_decision")
     assert isinstance(decision, dict)
     return block, decision
@@ -785,3 +825,293 @@ def test_route_decision_adult_llm_tool_loop_preserves_tool_marker(monkeypatch):
     assert decision["answer_source"] == "llm_tool_loop"
     assert decision["used_llm"] is True
     assert decision["used_tool"] is True
+
+
+@pytest.mark.parametrize(
+    (
+        "message",
+        "expected_intent",
+        "expected_sub_intent",
+        "expected_source",
+        "contains_price",
+        "handoff_requested",
+    ),
+    [
+        (
+            MSG_PRICE_AMOUNT,
+            "camp_price",
+            "price_amount",
+            "deterministic_handler",
+            True,
+            False,
+        ),
+        (
+            MSG_PAYMENT_PROCESS,
+            "camp_price",
+            "payment_process",
+            "approved_copy",
+            False,
+            False,
+        ),
+        (
+            MSG_RESERVATION_EXACT,
+            "camp_price",
+            "reservation_exact_amount",
+            "approved_copy",
+            False,
+            True,
+        ),
+        (
+            MSG_REGISTRATION_LINK,
+            "camp_registration",
+            "registration_link",
+            "admin_config",
+            False,
+            False,
+        ),
+        (
+            MSG_TRANSPORT,
+            "camp_logistics",
+            "transport",
+            "deterministic_handler",
+            False,
+            False,
+        ),
+    ],
+)
+def test_route_decision_parent_deterministic_invariants(
+    monkeypatch,
+    message,
+    expected_intent,
+    expected_sub_intent,
+    expected_source,
+    contains_price,
+    handoff_requested,
+):
+    response, decision = _process_parent_turn(
+        monkeypatch,
+        f"TRACE-PARENT-C-{expected_sub_intent}",
+        message,
+        engine=True,
+    )
+
+    assert ("2150" in response) is contains_price
+    assert decision["route_owner"] == "parent_flow"
+    assert decision["domain"] == "camp"
+    assert decision["intent"] == expected_intent
+    assert decision["sub_intent"] == expected_sub_intent
+    assert decision["answer_source"] == expected_source
+    _assert_deterministic_no_llm_tool(
+        decision, handoff_requested=handoff_requested,
+    )
+
+
+def test_route_decision_adult_deterministic_invariants(monkeypatch):
+    response, decision, _block = _process_adult_turn(
+        monkeypatch,
+        "ADULT-C-NO-ACTIVE",
+        MSG_ADULT_EVENTS,
+        events=[],
+    )
+    assert response == adult_flow.admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
+    assert decision["route_owner"] == "adult_flow"
+    assert decision["domain"] == "adult_events"
+    assert decision["sub_intent"] == "no_active_events"
+    assert decision["answer_source"] == "admin_config"
+    _assert_deterministic_no_llm_tool(decision)
+
+    response, decision, _block = _process_adult_turn(
+        monkeypatch,
+        "ADULT-C-ACTIVE",
+        MSG_ADULT_EVENTS,
+        events=[ADULT_TRACE_EVENT],
+    )
+    assert "Trace Adult Event" in response
+    assert decision["route_owner"] == "adult_flow"
+    assert decision["domain"] == "adult_events"
+    assert decision["sub_intent"] == "active_events_list"
+    assert decision["answer_source"] == "admin_config"
+    _assert_deterministic_no_llm_tool(decision)
+
+    response, decision, _block = _process_adult_turn(
+        monkeypatch,
+        "ADULT-C-IDENTITY",
+        MSG_ADULT_IDENTITY,
+        events=[ADULT_TRACE_EVENT],
+        state="SHOW_EVENTS",
+    )
+    assert response
+    assert decision["route_owner"] == "adult_flow"
+    assert decision["intent"] == "adult_global"
+    assert decision["sub_intent"] == "identity"
+    assert decision["answer_source"] == "deterministic_handler"
+    _assert_deterministic_no_llm_tool(decision)
+
+    response, decision, _block = _process_adult_turn(
+        monkeypatch,
+        "ADULT-C-GREETING",
+        MSG_ADULT_GREETING,
+        events=[ADULT_TRACE_EVENT],
+        state="SHOW_EVENTS",
+    )
+    assert response
+    assert decision["route_owner"] == "adult_flow"
+    assert decision["intent"] == "adult_global"
+    assert decision["sub_intent"] == "greeting"
+    assert decision["answer_source"] == "deterministic_handler"
+    _assert_deterministic_no_llm_tool(decision)
+
+    response, decision, _block = _process_adult_turn(
+        monkeypatch,
+        "ADULT-C-MANAGER",
+        MSG_ADULT_MANAGER,
+        events=[ADULT_TRACE_EVENT],
+        state="SHOW_EVENTS",
+    )
+    assert response
+    assert decision["route_owner"] == "adult_flow"
+    assert decision["intent"] == "adult_global"
+    assert decision["sub_intent"] == "manager_request"
+    assert decision["answer_source"] == "deterministic_handler"
+    _assert_deterministic_no_llm_tool(decision, handoff_requested=True)
+
+
+@pytest.mark.parametrize(
+    (
+        "message",
+        "expected_sub_intent",
+        "expected_copy_id",
+        "contains_price",
+        "handoff_requested",
+    ),
+    [
+        (
+            MSG_PRICE_AMOUNT,
+            "price_amount",
+            "camp_price_full_block",
+            True,
+            False,
+        ),
+        (
+            MSG_PAYMENT_PROCESS,
+            "payment_process",
+            "camp_payment_process",
+            False,
+            False,
+        ),
+        (
+            MSG_RESERVATION_EXACT,
+            "reservation_exact_amount",
+            "reservation_exact_amount_manager_deferral",
+            False,
+            True,
+        ),
+    ],
+)
+def test_route_decision_router_delegate_split_directly(
+    monkeypatch,
+    message,
+    expected_sub_intent,
+    expected_copy_id,
+    contains_price,
+    handoff_requested,
+):
+    _enable_trace(monkeypatch)
+    sender = f"ROUTER-C-{expected_sub_intent}"
+    session_key = _seed_parent_conversation(sender=sender)
+    conversation = conversation_service.conversations[session_key]
+
+    _begin_trace_for_conversation(conversation, message)
+    response = parent_turn_router._build_premium_price_answer(conversation, message)
+    conversation_trace.emit()
+
+    assert response
+    assert ("2150" in response) is contains_price
+    _block, decision = _last_decision()
+    assert decision["route_owner"] == "parent_turn_router"
+    assert decision["domain"] == "camp"
+    assert decision["intent"] == "camp_price"
+    assert decision["sub_intent"] == expected_sub_intent
+    assert decision["answer_source"] == "router_delegate"
+    assert decision["approved_copy_id"] == expected_copy_id
+    _assert_deterministic_no_llm_tool(
+        decision, handoff_requested=handoff_requested,
+    )
+
+
+def test_route_decision_merge_safety_preserves_fields_and_privacy(monkeypatch):
+    _enable_trace(monkeypatch)
+    sender = "RAW-SENDER-C-123456"
+    page_id = "PAGE-SECRET-C"
+    session_key = canonical_session_key("messenger", page_id, sender)
+
+    conversation_trace.begin(
+        sender,
+        "OPENAI_API_KEY=sk-test-route-secret PASSWORD=route-secret",
+        "messenger",
+        page_id=page_id,
+        session_key=session_key,
+    )
+    conversation_trace.set_route_decision(
+        route_owner="parent_tool_executor",
+        domain="camp",
+        sub_intent="request_manager_callback",
+        answer_source="tool_result",
+        used_tool=True,
+        handoff_requested=True,
+    )
+    conversation_trace.set_route_decision(
+        answer_source="llm_tool_loop",
+        used_llm=True,
+    )
+    conversation_trace.set_route_decision(
+        fallback_reason="llm_empty_final",
+    )
+    conversation_trace.set_route_decision(
+        unknown_payload={
+            "name": "Trace Secret Name",
+            "phone": "599123456",
+            "token": "sk-test-route-secret",
+        },
+        route_owner=None,
+        used_tool=None,
+    )
+    conversation_trace.emit()
+
+    _block, decision = _last_decision()
+    assert decision["route_owner"] == "parent_tool_executor"
+    assert decision["answer_source"] == "llm_tool_loop"
+    assert decision["used_tool"] is True
+    assert decision["used_llm"] is True
+    assert decision["handoff_requested"] is True
+    assert decision["fallback_reason"] == "llm_empty_final"
+    _assert_decision_private(
+        decision,
+        [
+            sender,
+            page_id,
+            session_key,
+            "Trace Secret Name",
+            "599123456",
+            "sk-test-route-secret",
+            "OPENAI_API_KEY",
+            "PASSWORD=route-secret",
+        ],
+    )
+
+
+def test_route_decision_non_fallback_paths_do_not_record_fallback_reason(monkeypatch):
+    response, decision = _process_parent_turn(
+        monkeypatch, "TRACE-C-NON-FALLBACK-PARENT", MSG_PRICE_AMOUNT, engine=True,
+    )
+    assert "2150" in response
+    _assert_no_fallback_reason(decision)
+
+    response, decision, _block = _process_adult_turn(
+        monkeypatch,
+        "TRACE-C-NON-FALLBACK-ADULT",
+        MSG_ADULT_EVENTS,
+        events=[ADULT_TRACE_EVENT],
+    )
+    assert "Trace Adult Event" in response
+    _assert_no_fallback_reason(decision)
