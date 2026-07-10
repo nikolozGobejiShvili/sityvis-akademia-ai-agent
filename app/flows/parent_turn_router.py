@@ -75,6 +75,16 @@ from app.services.session_key_service import conversation_cache_key
 logger = logging.getLogger(__name__)
 
 
+def _trace_router_decision(**fields) -> None:
+    try:
+        from app.reasoning import conversation_trace as _trace
+        _trace.set_route_decision(
+            route_owner="parent_turn_router", domain="camp", **fields
+        )
+    except Exception:  # pragma: no cover - trace must never affect replies
+        pass
+
+
 # Per-conversation flag for the soft-vs-explicit manager escalation path
 # (retained from earlier Phase 3.9 work but only consulted when the LLM
 # analyzer is on — the deterministic detector treats all manager intents
@@ -259,8 +269,40 @@ def _build_premium_price_answer(
         conversation, message,
     )
     if canonical is not None:
+        if canonical_parent_flow._is_reservation_fee_amount_question(message):
+            _trace_router_decision(
+                intent="camp_price",
+                sub_intent="reservation_exact_amount",
+                answer_source="router_delegate",
+                approved_copy_id="reservation_exact_amount_manager_deferral",
+                handoff_requested=True,
+                deterministic_reason="router_canonical_price_delegate",
+            )
+        elif canonical_parent_flow._is_camp_price_full_block_question(message):
+            _trace_router_decision(
+                intent="camp_price",
+                sub_intent="price_amount",
+                answer_source="router_delegate",
+                approved_copy_id="camp_price_full_block",
+                deterministic_reason="router_canonical_price_delegate",
+            )
+        elif canonical_parent_flow._is_camp_payment_process_question(message):
+            _trace_router_decision(
+                intent="camp_price",
+                sub_intent="payment_process",
+                answer_source="router_delegate",
+                approved_copy_id="camp_payment_process",
+                deterministic_reason="router_canonical_price_delegate",
+            )
         return canonical
     if canonical_parent_flow._is_camp_price_amount_question(message):
+        _trace_router_decision(
+            intent="camp_price",
+            sub_intent="price_amount",
+            answer_source="router_delegate",
+            approved_copy_id="camp_price_full_block",
+            deterministic_reason="router_canonical_price_direct_fallback",
+        )
         return canonical_parent_flow._camp_price_direct_answer()
     return None
 

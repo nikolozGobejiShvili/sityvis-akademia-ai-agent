@@ -69,6 +69,14 @@ from data.prompts import (
 
 logger = logging.getLogger(__name__)
 
+def _trace_parent_decision(**fields) -> None:
+    try:
+        from app.reasoning import conversation_trace as _trace
+        _trace.set_route_decision(route_owner="parent_flow", domain="camp", **fields)
+    except Exception:  # pragma: no cover - trace must never affect replies
+        pass
+
+
 available_slots = {}
 ask_name_retries: dict[str, bool] = {}
 invalid_phone_retries: dict[str, bool] = {}
@@ -3729,17 +3737,39 @@ def _maybe_handle_repeat_camp_price(
             "[parent_flow] reservation-fee amount unknown → manager defer "
             "(sender=%s)", conversation.sender_id,
         )
+        _trace_parent_decision(
+            intent="camp_price",
+            sub_intent="reservation_exact_amount",
+            answer_source="approved_copy",
+            approved_copy_id="reservation_exact_amount_manager_deferral",
+            handoff_requested=True,
+            deterministic_reason="reservation_fee_amount_question",
+        )
         return _RESERVATION_FEE_DEFER
     if _is_camp_price_full_block_question(message):
         logger.info(
             "[parent_flow] deterministic camp-price full block (exact=%s sender=%s)",
             _is_camp_price_exact_amount_question(message), conversation.sender_id,
         )
+        _trace_parent_decision(
+            intent="camp_price",
+            sub_intent="price_amount",
+            answer_source="deterministic_handler",
+            approved_copy_id="camp_price_full_block",
+            deterministic_reason="camp_price_full_block_question",
+        )
         return _camp_price_answer(message)
     if _is_camp_payment_process_question(message):
         logger.info(
             "[parent_flow] deterministic camp payment-process answer (sender=%s)",
             conversation.sender_id,
+        )
+        _trace_parent_decision(
+            intent="camp_price",
+            sub_intent="payment_process",
+            answer_source="approved_copy",
+            approved_copy_id="camp_payment_process",
+            deterministic_reason="camp_payment_process_question",
         )
         return _camp_payment_process_answer()
     return None
@@ -4346,6 +4376,14 @@ def _maybe_handle_reservation_fee_question(
             "[parent_flow] reservation-fee amount unknown → manager defer "
             "(sender=%s)", conversation.sender_id,
         )
+        _trace_parent_decision(
+            intent="camp_price",
+            sub_intent="reservation_exact_amount",
+            answer_source="approved_copy",
+            approved_copy_id="reservation_exact_amount_manager_deferral",
+            handoff_requested=True,
+            deterministic_reason="reservation_fee_amount_question",
+        )
         return _RESERVATION_FEE_DEFER
     # Repeat-clarification / frustration: after the generic payment-METHOD
     # answer, a follow-up ADVANCE-PAYMENT amount question („რამდენს ვიხდი?") must
@@ -4359,6 +4397,14 @@ def _maybe_handle_reservation_fee_question(
         logger.info(
             "[parent_flow] repeat advance-payment amount question after generic "
             "answer → manager defer (sender=%s)", conversation.sender_id,
+        )
+        _trace_parent_decision(
+            intent="camp_price",
+            sub_intent="reservation_exact_amount",
+            answer_source="approved_copy",
+            approved_copy_id="reservation_exact_amount_manager_deferral",
+            handoff_requested=True,
+            deterministic_reason="reservation_fee_amount_question",
         )
         return _RESERVATION_FEE_DEFER
     return None
@@ -4497,6 +4543,12 @@ def _maybe_handle_transport_logistics(
             "[parent_flow] sports-challenge after transport question → transport "
             "correction (sender=%s)", conversation.sender_id,
         )
+        _trace_parent_decision(
+            intent="camp_logistics",
+            sub_intent="transport",
+            answer_source="deterministic_handler",
+            deterministic_reason="transport_sports_challenge",
+        )
         return (
             "მართალი ხართ, ტრანსპორტირებაზე მეკითხებოდით. "
             + _transport_answer(city, pickup=False)
@@ -4508,6 +4560,12 @@ def _maybe_handle_transport_logistics(
         logger.info(
             "[parent_flow] transport/logistics question → transport answer "
             "(city=%s pickup=%s sender=%s)", city, pickup, conversation.sender_id,
+        )
+        _trace_parent_decision(
+            intent="camp_logistics",
+            sub_intent="transport",
+            answer_source="deterministic_handler",
+            deterministic_reason="transport_logistics_question",
         )
         return _transport_answer(city, pickup=pickup)
     return None
@@ -5333,6 +5391,12 @@ def _maybe_handle_camp_registration_link(
     logger.info(
         "[parent_flow] camp registration-link intent → deterministic link answer "
         "(sender=%s)", conversation.sender_id,
+    )
+    _trace_parent_decision(
+        intent="camp_registration",
+        sub_intent="registration_link",
+        answer_source="admin_config",
+        deterministic_reason="camp_registration_link_request",
     )
     return _render_camp_registration_answer()
 
