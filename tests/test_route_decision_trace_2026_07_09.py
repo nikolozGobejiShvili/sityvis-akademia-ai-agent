@@ -4,7 +4,7 @@ import json
 import pytest
 
 import app.config as config_module
-from app.flows import parent_flow
+from app.flows import adult_flow, parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.reasoning import conversation_trace
@@ -66,6 +66,16 @@ def _configure_parent_engine(monkeypatch, *, enabled: bool) -> None:
     monkeypatch.setattr(conversation_service, "settings", patched)
 
 
+def _configure_adult_engine(monkeypatch, *, enabled: bool) -> None:
+    patched = dataclasses.replace(
+        config_module.settings,
+        USE_ADULT_LLM_ENGINE=enabled,
+        USE_CONVERSATION_PLANNER=False,
+        CONVERSATION_PLANNER_AUTHORITATIVE=False,
+    )
+    monkeypatch.setattr(adult_flow, "settings", patched)
+    monkeypatch.setattr(conversation_service, "settings", patched)
+
 def _process_parent_turn(monkeypatch, sender: str, message: str, *, engine: bool):
     _enable_trace(monkeypatch)
     _configure_parent_engine(monkeypatch, enabled=engine)
@@ -83,11 +93,50 @@ def _process_parent_turn(monkeypatch, sender: str, message: str, *, engine: bool
     return response, decision
 
 
+ADULT_TRACE_EVENT = {
+    "id": "adult_trace_event",
+    "title": "Trace Adult Event",
+    "status": "active",
+    "date_text": "1 January 2031",
+    "theme": "Trace theme",
+    "guest": "Trace guest",
+    "location": "Trace hall",
+    "description": "Trace description",
+    "reservation_url": "https://example.com/reserve",
+    "min_age": 13,
+}
+
+
+def _process_adult_turn(
+    monkeypatch,
+    sender: str,
+    message: str,
+    *,
+    events: list[dict],
+    state: str = "START",
+):
+    _enable_trace(monkeypatch)
+    _configure_adult_engine(monkeypatch, enabled=False)
+    adult_flow.selected_events.clear()
+    monkeypatch.setattr(
+        adult_flow.admin_config_service,
+        "get_active_adult_events",
+        lambda: list(events),
+    )
+    _seed_conversation(sender=sender, segment="ADULT", state=state)
+    response = conversation_service.process_message(
+        sender, message, "messenger", page_id="PAGE-SECRET-A",
+    )
+    block, decision = _last_decision()
+    return response, decision, block
+
 MSG_PRICE_AMOUNT = "\u10d1\u10d0\u10dc\u10d0\u10d9\u10d8 \u10e0\u10d0 \u10e6\u10d8\u10e0\u10e1?"
 MSG_PAYMENT_PROCESS = "\u10d2\u10d0\u10d3\u10d0\u10ee\u10d3\u10d0 \u10e0\u10dd\u10d2\u10dd\u10e0 \u10ee\u10d3\u10d4\u10d1\u10d0?"
 MSG_RESERVATION_EXACT = "\u10ef\u10d0\u10d5\u10e8\u10dc\u10d8\u10e1 \u10e6\u10d8\u10e0\u10d4\u10d1\u10e3\u10da\u10d4\u10d1\u10d0 \u10e0\u10d0\u10db\u10d3\u10d4\u10dc\u10d8\u10d0?"
 MSG_REGISTRATION_LINK = "\u10d1\u10d0\u10dc\u10d0\u10d9\u10d8\u10e1 \u10e0\u10d4\u10d2\u10d8\u10e1\u10e2\u10e0\u10d0\u10ea\u10d8\u10d8\u10e1 \u10da\u10d8\u10dc\u10d9\u10d8 \u10db\u10dd\u10db\u10ec\u10d4\u10e0\u10d4"
 MSG_TRANSPORT = "\u10e2\u10e0\u10d0\u10dc\u10e1\u10de\u10dd\u10e0\u10e2\u10d8 \u10e0\u10dd\u10d2\u10dd\u10e0 \u10ee\u10d3\u10d4\u10d1\u10d0?"
+MSG_ADULT_EVENTS = "adult events"
+MSG_ADULT_IDENTITY = "\u10d5\u10d8\u10dc \u10ee\u10d0\u10e0?"
 
 
 def _last_decision() -> tuple[dict, dict]:
@@ -159,6 +208,70 @@ def test_route_decision_records_adult_top_level_route(monkeypatch):
     assert decision["segment_before"] == "ADULT"
     assert decision["segment_after"] == "ADULT"
 
+
+def test_route_decision_records_adult_no_active_admin_config(monkeypatch):
+    sender = "ADULT-NO-ACTIVE-TRACE"
+    response, decision, block = _process_adult_turn(
+        monkeypatch, sender, MSG_ADULT_EVENTS, events=[],
+    )
+
+    assert response == adult_flow.admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
+    assert decision["route_owner"] == "adult_flow"
+    assert decision["domain"] == "adult_events"
+    assert decision["intent"] == "adult_events"
+    assert decision["sub_intent"] == "no_active_events"
+    assert decision["answer_source"] == "admin_config"
+    assert decision["approved_copy_id"] == "adult_no_active_events"
+    assert decision["used_llm"] is False
+    assert decision["used_tool"] is False
+    assert decision["deterministic_reason"] == "admin_config_no_active_events"
+
+    serialized = json.dumps(block, ensure_ascii=False)
+    raw_key = canonical_session_key("messenger", "PAGE-SECRET-A", sender)
+    assert raw_key not in serialized
+    assert "PAGE-SECRET-A" not in serialized
+    assert sender not in serialized
+
+
+def test_route_decision_records_adult_active_events_admin_config(monkeypatch):
+    response, decision, _block = _process_adult_turn(
+        monkeypatch,
+        "ADULT-ACTIVE-LIST-TRACE",
+        MSG_ADULT_EVENTS,
+        events=[ADULT_TRACE_EVENT],
+    )
+
+    assert "Trace Adult Event" in response
+    assert adult_flow.admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY not in response
+    assert decision["route_owner"] == "adult_flow"
+    assert decision["domain"] == "adult_events"
+    assert decision["intent"] == "adult_events"
+    assert decision["sub_intent"] == "active_events_list"
+    assert decision["answer_source"] == "admin_config"
+    assert decision["used_llm"] is False
+    assert decision["used_tool"] is False
+    assert decision["deterministic_reason"] == "admin_config_active_events"
+
+
+def test_route_decision_records_adult_identity_deterministic_owner(monkeypatch):
+    response, decision, _block = _process_adult_turn(
+        monkeypatch,
+        "ADULT-IDENTITY-TRACE",
+        MSG_ADULT_IDENTITY,
+        events=[ADULT_TRACE_EVENT],
+        state="SHOW_EVENTS",
+    )
+
+    assert response
+    assert "Trace Adult Event" not in response
+    assert decision["route_owner"] == "adult_flow"
+    assert decision["domain"] == "adult_events"
+    assert decision["intent"] == "adult_global"
+    assert decision["sub_intent"] == "identity"
+    assert decision["answer_source"] == "deterministic_handler"
+    assert decision["used_llm"] is False
+    assert decision["used_tool"] is False
+    assert decision["deterministic_reason"] == "adult_global_identity"
 
 def test_route_decision_records_parent_price_amount_owner(monkeypatch):
     response, decision = _process_parent_turn(

@@ -28,6 +28,20 @@ from data.prompts import (
 
 logger = logging.getLogger(__name__)
 
+
+def _trace_adult_decision(**fields) -> None:
+    try:
+        from app.reasoning import conversation_trace as _trace
+        _trace.set_route_decision(
+            route_owner="adult_flow",
+            domain="adult_events",
+            used_llm=False,
+            used_tool=False,
+            **fields,
+        )
+    except Exception:  # pragma: no cover - trace must never affect replies
+        pass
+
 selected_events = {}
 
 
@@ -150,6 +164,12 @@ def _maybe_handle_adult_global_intent(
             "[adult_flow] global intent: human-vs-robot (sender=%s)",
             conversation.sender_id,
         )
+        _trace_adult_decision(
+            intent="adult_global",
+            sub_intent="identity",
+            answer_source="deterministic_handler",
+            deterministic_reason="adult_global_human_vs_robot",
+        )
         return (
             "მე ონლაინ ასისტენტი ვარ, მაგრამ დაგეხმარებით ზუსტად იმ "
             "ინფორმაციაში, რაც სიტყვის აკადემიის ღონისძიებებს ეხება."
@@ -159,6 +179,12 @@ def _maybe_handle_adult_global_intent(
         logger.info(
             "[adult_flow] global intent: identity (sender=%s)",
             conversation.sender_id,
+        )
+        _trace_adult_decision(
+            intent="adult_global",
+            sub_intent="identity",
+            answer_source="deterministic_handler",
+            deterministic_reason="adult_global_identity",
         )
         return (
             "მე სიტყვის აკადემიის ონლაინ ასისტენტი ვარ. შემიძლია "
@@ -174,6 +200,12 @@ def _maybe_handle_adult_global_intent(
             "[adult_flow] global intent: decline (sender=%s)",
             conversation.sender_id,
         )
+        _trace_adult_decision(
+            intent="adult_global",
+            sub_intent="decline",
+            answer_source="deterministic_handler",
+            deterministic_reason="adult_global_decline",
+        )
         return (
             "გასაგებია. თუ მომავალში დაგჭირდებათ ინფორმაცია, "
             "სიამოვნებით დაგეხმარებით."
@@ -184,6 +216,12 @@ def _maybe_handle_adult_global_intent(
             "[adult_flow] global intent: thanks (sender=%s)",
             conversation.sender_id,
         )
+        _trace_adult_decision(
+            intent="adult_global",
+            sub_intent="thanks",
+            answer_source="deterministic_handler",
+            deterministic_reason="adult_global_thanks",
+        )
         return (
             "სიამოვნებით. თუ კიდევ რაიმე კითხვა გაგიჩნდებათ, მომწერეთ."
         )
@@ -192,6 +230,13 @@ def _maybe_handle_adult_global_intent(
         logger.info(
             "[adult_flow] global intent: manager request (sender=%s)",
             conversation.sender_id,
+        )
+        _trace_adult_decision(
+            intent="adult_global",
+            sub_intent="manager_request",
+            answer_source="deterministic_handler",
+            handoff_requested=True,
+            deterministic_reason="adult_global_manager_request",
         )
         if (lead.phone or "").strip():
             return (
@@ -208,6 +253,12 @@ def _maybe_handle_adult_global_intent(
         logger.info(
             "[adult_flow] global intent: greeting (state=%s sender=%s)",
             conversation.state, conversation.sender_id,
+        )
+        _trace_adult_decision(
+            intent="adult_global",
+            sub_intent="greeting",
+            answer_source="deterministic_handler",
+            deterministic_reason="adult_global_greeting",
         )
         return (
             "გამარჯობა. ზრდასრულთა კულტურული საღამოების შესახებ "
@@ -249,7 +300,20 @@ def handle(conversation: Conversation, message: str) -> str:
         events = _load_events()
         conversation.state = "SHOW_EVENTS"
         if not _visible_events(events):
+            _trace_adult_decision(
+                intent="adult_events",
+                sub_intent="no_active_events",
+                answer_source="admin_config",
+                approved_copy_id="adult_no_active_events",
+                deterministic_reason="admin_config_no_active_events",
+            )
             return _no_active_events_reply()
+        _trace_adult_decision(
+            intent="adult_events",
+            sub_intent="active_events_list",
+            answer_source="admin_config",
+            deterministic_reason="admin_config_active_events",
+        )
         return (
             ADULT_WELCOME.format(
                 company_name=settings.COMPANY_NAME,
@@ -261,9 +325,22 @@ def handle(conversation: Conversation, message: str) -> str:
     if conversation.state == "SHOW_EVENTS":
         events = _load_events()
         if not _visible_events(events):
+            _trace_adult_decision(
+                intent="adult_events",
+                sub_intent="no_active_events",
+                answer_source="admin_config",
+                approved_copy_id="adult_no_active_events",
+                deterministic_reason="admin_config_no_active_events",
+            )
             return _no_active_events_reply()
         event = _detect_event(message, events)
         if not event:
+            _trace_adult_decision(
+                intent="adult_events",
+                sub_intent="active_events_list",
+                answer_source="admin_config",
+                deterministic_reason="admin_config_active_events_clarify",
+            )
             return ADULT_CLARIFY_EVENT.format(
                 events_list=_format_event_list(events),
             ).strip()
@@ -278,6 +355,13 @@ def handle(conversation: Conversation, message: str) -> str:
         event = _current_event(conversation)
         if event is None:
             conversation.state = "SHOW_EVENTS"
+            _trace_adult_decision(
+                intent="adult_events",
+                sub_intent="no_active_events",
+                answer_source="admin_config",
+                approved_copy_id="adult_no_active_events",
+                deterministic_reason="admin_config_no_active_events",
+            )
             return _no_active_events_reply()
         if _wants_booking(message):
             conversation.state = "SEND_BOOKING"
@@ -290,12 +374,26 @@ def handle(conversation: Conversation, message: str) -> str:
     if conversation.state == "SEND_BOOKING":
         if _current_event(conversation) is None:
             conversation.state = "SHOW_EVENTS"
+            _trace_adult_decision(
+                intent="adult_events",
+                sub_intent="no_active_events",
+                answer_source="admin_config",
+                approved_copy_id="adult_no_active_events",
+                deterministic_reason="admin_config_no_active_events",
+            )
             return _no_active_events_reply()
         _finalize_booking(conversation)
         return ADULT_BOOKING_FORWARDED.strip()
 
     event = _current_event(conversation)
     if event is None:
+        _trace_adult_decision(
+            intent="adult_events",
+            sub_intent="no_active_events",
+            answer_source="admin_config",
+            approved_copy_id="adult_no_active_events",
+            deterministic_reason="admin_config_no_active_events",
+        )
         return _no_active_events_reply()
     return _generate_done_response(conversation, message, event)
 
