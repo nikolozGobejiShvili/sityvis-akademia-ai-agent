@@ -178,6 +178,32 @@ def _mask_phone(phone: str | None) -> str:
     return f"{digits[:3]}***{digits[-3:]}"
 
 
+def _trace_adult_tool_result(
+    tool_name: str, result: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        from app.reasoning import conversation_trace as _trace
+
+        safe_tool_name = (
+            tool_name if tool_name in ALLOWED_ADULT_TOOL_NAMES else "unknown_tool"
+        )
+        fields: dict[str, Any] = {
+            "route_owner": "adult_tool_executor",
+            "domain": "adult_events",
+            "sub_intent": safe_tool_name,
+            "answer_source": "tool_result",
+            "used_tool": True,
+        }
+        if bool(
+            result.get("manager_notified")
+            or result.get("manager_handoff_required")
+        ):
+            fields["handoff_requested"] = True
+        _trace.set_route_decision(**fields)
+    except Exception:  # pragma: no cover - trace must never affect tools
+        pass
+    return result
+
 @dataclass
 class AdultToolExecutor:
     """Executes the closed-set of tools the ADULT LLM is allowed to call.
@@ -197,25 +223,35 @@ class AdultToolExecutor:
                 "[adult_executor] Unknown tool requested: %r (args=%r)",
                 tool_name, tool_args,
             )
-            return {"success": False, "reason": "unknown_tool", "tool": tool_name}
+            return _trace_adult_tool_result(
+                tool_name,
+                {"success": False, "reason": "unknown_tool", "tool": tool_name},
+            )
 
         args = tool_args or {}
         try:
             if tool_name == TOOL_GET_ADULT_EVENTS:
-                return self._get_adult_events(args)
-            if tool_name == TOOL_GET_ADULT_EVENT_DETAILS:
-                return self._get_adult_event_details(args)
-            if tool_name == TOOL_SAVE_ADULT_LEAD_INFO:
-                return self._save_adult_lead_info(args)
-            if tool_name == TOOL_REQUEST_ADULT_MANAGER_CALLBACK:
-                return self._request_adult_manager_callback(args)
-            if tool_name == TOOL_PROVIDE_ADULT_RESERVATION_LINK:
-                return self._provide_adult_reservation_link(args)
-            if tool_name == TOOL_SWITCH_TO_PARENT_FLOW:
-                return self._switch_to_parent_flow(args)
-            if tool_name == TOOL_SUBSCRIBE_TO_ADULT_EVENT_UPDATES:
-                return self._subscribe_to_adult_event_updates(args)
-        except Exception as exc:  # pragma: no cover — defensive
+                result = self._get_adult_events(args)
+            elif tool_name == TOOL_GET_ADULT_EVENT_DETAILS:
+                result = self._get_adult_event_details(args)
+            elif tool_name == TOOL_SAVE_ADULT_LEAD_INFO:
+                result = self._save_adult_lead_info(args)
+            elif tool_name == TOOL_REQUEST_ADULT_MANAGER_CALLBACK:
+                result = self._request_adult_manager_callback(args)
+            elif tool_name == TOOL_PROVIDE_ADULT_RESERVATION_LINK:
+                result = self._provide_adult_reservation_link(args)
+            elif tool_name == TOOL_SWITCH_TO_PARENT_FLOW:
+                result = self._switch_to_parent_flow(args)
+            elif tool_name == TOOL_SUBSCRIBE_TO_ADULT_EVENT_UPDATES:
+                result = self._subscribe_to_adult_event_updates(args)
+            else:
+                result = {
+                    "success": False,
+                    "reason": "unknown_tool",
+                    "tool": tool_name,
+                }
+            return _trace_adult_tool_result(tool_name, result)
+        except Exception as exc:  # pragma: no cover - defensive
             logger.exception(
                 "[adult_executor] Tool %s raised: %s (args=%r)",
                 tool_name, exc, args,
@@ -227,10 +263,15 @@ class AdultToolExecutor:
                     "tool": tool_name,
                 },
             )
-            return {"success": False, "reason": "tool_error", "tool": tool_name}
+            return _trace_adult_tool_result(
+                tool_name,
+                {"success": False, "reason": "tool_error", "tool": tool_name},
+            )
 
-        return {"success": False, "reason": "unknown_tool", "tool": tool_name}
-
+        return _trace_adult_tool_result(
+            tool_name,
+            {"success": False, "reason": "unknown_tool", "tool": tool_name},
+        )
     # -- get_adult_events -------------------------------------------------
 
     def _get_adult_events(self, args: dict[str, Any]) -> dict[str, Any]:

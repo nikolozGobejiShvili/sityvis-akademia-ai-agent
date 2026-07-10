@@ -48,7 +48,6 @@ def _trace_adult_llm_decision(**fields) -> None:
         payload = {
             "domain": "adult_events",
             "used_llm": True,
-            "used_tool": False,
         }
         payload.update(fields)
         _trace.set_route_decision(**payload)
@@ -2279,6 +2278,7 @@ def run_adult_llm_turn(
             _trace_adult_llm_decision(
                 answer_source="fallback",
                 fallback_reason="llm_chat_error",
+                used_tool=saw_tool_call,
             )
             return ""
 
@@ -2291,6 +2291,7 @@ def run_adult_llm_turn(
             _trace_adult_llm_decision(
                 answer_source="fallback",
                 fallback_reason="llm_no_choices",
+                used_tool=saw_tool_call,
             )
             return ""
 
@@ -2306,6 +2307,7 @@ def run_adult_llm_turn(
                 _trace_adult_llm_decision(
                     answer_source="fallback",
                     fallback_reason="llm_empty_final",
+                    used_tool=saw_tool_call,
                 )
                 return ""
             sanitised = sanitise_adult_response(
@@ -2324,6 +2326,7 @@ def run_adult_llm_turn(
                 route_owner="adult_llm_engine",
                 intent="adult_llm_response",
                 answer_source="llm_tool_loop" if saw_tool_call else "llm_direct",
+                used_tool=saw_tool_call,
             )
             return sanitised
 
@@ -2362,6 +2365,7 @@ def run_adult_llm_turn(
     _trace_adult_llm_decision(
         answer_source="fallback",
         fallback_reason="tool_loop_limit",
+        used_tool=saw_tool_call,
     )
     return ""
 

@@ -157,6 +157,32 @@ def _mask_phone(phone: str | None) -> str:
 # -- public API ------------------------------------------------------------
 
 
+def _trace_parent_tool_result(
+    tool_name: str, result: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        from app.reasoning import conversation_trace as _trace
+
+        safe_tool_name = (
+            tool_name if tool_name in ALLOWED_TOOL_NAMES else "unknown_tool"
+        )
+        fields: dict[str, Any] = {
+            "route_owner": "parent_tool_executor",
+            "domain": "camp",
+            "sub_intent": safe_tool_name,
+            "answer_source": "tool_result",
+            "used_tool": True,
+        }
+        if bool(
+            result.get("manager_notified")
+            or result.get("manager_handoff_required")
+        ):
+            fields["handoff_requested"] = True
+        _trace.set_route_decision(**fields)
+    except Exception:  # pragma: no cover - trace must never affect tools
+        pass
+    return result
+
 @dataclass
 class ParentToolExecutor:
     """Executes the closed-set of tools the PARENT LLM is allowed to call.
@@ -274,32 +300,42 @@ class ParentToolExecutor:
                 "[parent_executor] Unknown tool requested: %r (args=%r)",
                 tool_name, tool_args,
             )
-            return {"success": False, "reason": "unknown_tool", "tool": tool_name}
+            return _trace_parent_tool_result(
+                tool_name,
+                {"success": False, "reason": "unknown_tool", "tool": tool_name},
+            )
 
         args = tool_args or {}
         try:
             if tool_name == TOOL_GET_CAMP_INFO:
-                return self._get_camp_info(args)
-            if tool_name == TOOL_GET_AVAILABLE_SLOTS:
-                return self._get_available_slots(args)
-            if tool_name == TOOL_BOOK_CONSULTATION:
-                return self._book_consultation(args)
-            if tool_name == TOOL_REQUEST_MANAGER_CALLBACK:
-                return self._request_manager_callback(args)
-            if tool_name == TOOL_SAVE_LEAD_INFO:
-                return self._save_lead_info(args)
-            if tool_name == TOOL_MANAGE_CONSULTATION_BOOKING:
-                return self._manage_consultation_booking(args)
-            if tool_name == TOOL_SWITCH_TO_ADULT_FLOW:
-                return self._switch_to_adult_flow(args)
-            if tool_name == TOOL_CHECK_CONSULTATION_SLOT:
-                return self._check_consultation_slot(args)
-        except Exception as exc:  # pragma: no cover — defensive
+                result = self._get_camp_info(args)
+            elif tool_name == TOOL_GET_AVAILABLE_SLOTS:
+                result = self._get_available_slots(args)
+            elif tool_name == TOOL_BOOK_CONSULTATION:
+                result = self._book_consultation(args)
+            elif tool_name == TOOL_REQUEST_MANAGER_CALLBACK:
+                result = self._request_manager_callback(args)
+            elif tool_name == TOOL_SAVE_LEAD_INFO:
+                result = self._save_lead_info(args)
+            elif tool_name == TOOL_MANAGE_CONSULTATION_BOOKING:
+                result = self._manage_consultation_booking(args)
+            elif tool_name == TOOL_SWITCH_TO_ADULT_FLOW:
+                result = self._switch_to_adult_flow(args)
+            elif tool_name == TOOL_CHECK_CONSULTATION_SLOT:
+                result = self._check_consultation_slot(args)
+            else:
+                result = {
+                    "success": False,
+                    "reason": "unknown_tool",
+                    "tool": tool_name,
+                }
+            return _trace_parent_tool_result(tool_name, result)
+        except Exception as exc:  # pragma: no cover - defensive
             logger.exception(
                 "[parent_executor] Tool %s raised: %s (args=%r)",
                 tool_name, exc, args,
             )
-            # Sentry capture — TOOL name + safe area label only. The
+            # Sentry capture: TOOL name + safe area label only. The
             # tool args may contain phone / name / datetime, all of
             # which are intentionally NOT forwarded to Sentry.
             sentry_service.capture_exception(
@@ -309,10 +345,15 @@ class ParentToolExecutor:
                     "tool": tool_name,
                 },
             )
-            return {"success": False, "reason": "tool_error", "tool": tool_name}
+            return _trace_parent_tool_result(
+                tool_name,
+                {"success": False, "reason": "tool_error", "tool": tool_name},
+            )
 
-        return {"success": False, "reason": "unknown_tool", "tool": tool_name}
-
+        return _trace_parent_tool_result(
+            tool_name,
+            {"success": False, "reason": "unknown_tool", "tool": tool_name},
+        )
     # -- get_camp_info -----------------------------------------------------
 
     def _get_camp_info(self, args: dict[str, Any]) -> dict[str, Any]:

@@ -5,11 +5,17 @@ import pytest
 
 import app.config as config_module
 from app.agent.llm import adult_llm_engine, parent_llm_engine
+from app.agent.tools import adult_tool_executor, parent_tool_executor
 from app.flows import adult_flow, parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.reasoning import conversation_trace
-from app.services import conversation_service
+from app.services import (
+    admin_config_service,
+    conversation_service,
+    notification_service,
+    sheets_service,
+)
 from app.services.session_key_service import canonical_session_key
 
 
@@ -141,6 +147,16 @@ def _mk_llm_response(content: str = "", tool_calls: list[dict] | None = None):
                 },
             },
         ],
+    }
+
+
+def _tool_call(call_id: str, name: str, args: dict) -> dict:
+    return {
+        "id": call_id,
+        "function": {
+            "name": name,
+            "arguments": json.dumps(args, ensure_ascii=False),
+        },
     }
 
 
@@ -528,3 +544,244 @@ def test_route_decision_records_router_price_delegate(monkeypatch):
     assert decision["answer_source"] == "router_delegate"
     assert decision["approved_copy_id"] == "camp_payment_process"
     assert decision["deterministic_reason"] == "router_canonical_price_delegate"
+
+
+def test_route_decision_records_parent_tool_executor_result(monkeypatch):
+    _enable_trace(monkeypatch)
+    parent_tool_executor.reset_state()
+    sender = "PARENT-TOOL-TRACE"
+    session_key = _seed_parent_conversation(sender=sender)
+    conversation = conversation_service.conversations[session_key]
+    lead = conversation.lead
+    executor = parent_tool_executor.ParentToolExecutor(
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+
+    _begin_trace_for_conversation(conversation, "parent harmless tool trace")
+    result = executor.execute(
+        parent_tool_executor.TOOL_GET_CAMP_INFO,
+        {"topic": "dates"},
+    )
+    conversation_trace.emit()
+
+    block, decision = _last_decision()
+    assert result["success"] is True
+    assert decision["route_owner"] == "parent_tool_executor"
+    assert decision["domain"] == "camp"
+    assert decision["sub_intent"] == parent_tool_executor.TOOL_GET_CAMP_INFO
+    assert decision["answer_source"] == "tool_result"
+    assert decision["used_tool"] is True
+    assert decision["handoff_requested"] is False
+    serialized = json.dumps(block, ensure_ascii=False)
+    assert "dates" not in serialized
+
+
+def test_route_decision_records_parent_tool_handoff(monkeypatch):
+    _enable_trace(monkeypatch)
+    parent_tool_executor.reset_state()
+    sender = "PARENT-TOOL-HANDOFF-TRACE"
+    session_key = _seed_parent_conversation(sender=sender)
+    conversation = conversation_service.conversations[session_key]
+    lead = conversation.lead
+    executor = parent_tool_executor.ParentToolExecutor(
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+
+    _begin_trace_for_conversation(conversation, "parent handoff tool trace")
+    result = executor.execute(
+        parent_tool_executor.TOOL_MANAGE_CONSULTATION_BOOKING,
+        {"action": "cancel"},
+    )
+    conversation_trace.emit()
+
+    _block, decision = _last_decision()
+    assert result["manager_handoff_required"] is True
+    assert decision["route_owner"] == "parent_tool_executor"
+    assert decision["sub_intent"] == parent_tool_executor.TOOL_MANAGE_CONSULTATION_BOOKING
+    assert decision["answer_source"] == "tool_result"
+    assert decision["used_tool"] is True
+    assert decision["handoff_requested"] is True
+
+
+def test_route_decision_records_adult_tool_executor_result(monkeypatch):
+    _enable_trace(monkeypatch)
+    adult_tool_executor.reset_state()
+    monkeypatch.setattr(
+        admin_config_service,
+        "get_active_adult_events",
+        lambda user_age=None: [],
+    )
+    sender = "ADULT-TOOL-TRACE"
+    session_key = _seed_conversation(sender=sender, segment="ADULT")
+    conversation = conversation_service.conversations[session_key]
+    lead = Lead(sender_id=sender, platform="messenger", segment="ADULT")
+    conversation.lead = lead
+    executor = adult_tool_executor.AdultToolExecutor(
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+
+    _begin_trace_for_conversation(conversation, "adult harmless tool trace")
+    result = executor.execute(adult_tool_executor.TOOL_GET_ADULT_EVENTS, {})
+    conversation_trace.emit()
+
+    _block, decision = _last_decision()
+    assert result["success"] is True
+    assert decision["route_owner"] == "adult_tool_executor"
+    assert decision["domain"] == "adult_events"
+    assert decision["sub_intent"] == adult_tool_executor.TOOL_GET_ADULT_EVENTS
+    assert decision["answer_source"] == "tool_result"
+    assert decision["used_tool"] is True
+    assert decision["handoff_requested"] is False
+
+
+def test_route_decision_records_adult_tool_handoff_without_payload_leak(monkeypatch):
+    _enable_trace(monkeypatch)
+    adult_tool_executor.reset_state()
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "558 67 47 33")
+    monkeypatch.setattr(sheets_service, "create_lead", lambda lead: None)
+    monkeypatch.setattr(
+        notification_service,
+        "send_manager_notification",
+        lambda lead, summary: None,
+    )
+    sender = "ADULT-TOOL-HANDOFF-TRACE"
+    session_key = _seed_conversation(sender=sender, segment="ADULT")
+    conversation = conversation_service.conversations[session_key]
+    lead = Lead(sender_id=sender, platform="messenger", segment="ADULT")
+    conversation.lead = lead
+    executor = adult_tool_executor.AdultToolExecutor(
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+
+    _begin_trace_for_conversation(conversation, "adult handoff tool trace")
+    result = executor.execute(
+        adult_tool_executor.TOOL_REQUEST_ADULT_MANAGER_CALLBACK,
+        {
+            "name": "Trace Adult Tool",
+            "phone": "599123456",
+            "event_interest": "Trace Event Payload",
+        },
+    )
+    conversation_trace.emit()
+
+    block, decision = _last_decision()
+    assert result["success"] is True
+    assert result["manager_notified"] is True
+    assert decision["route_owner"] == "adult_tool_executor"
+    assert decision["sub_intent"] == adult_tool_executor.TOOL_REQUEST_ADULT_MANAGER_CALLBACK
+    assert decision["answer_source"] == "tool_result"
+    assert decision["used_tool"] is True
+    assert decision["handoff_requested"] is True
+    serialized = json.dumps(block, ensure_ascii=False)
+    assert "599123456" not in serialized
+    assert "Trace Adult Tool" not in serialized
+    assert "Trace Event Payload" not in serialized
+    assert "558 67 47 33" not in serialized
+
+
+def test_route_decision_parent_llm_tool_loop_preserves_tool_marker(monkeypatch):
+    _enable_trace(monkeypatch)
+    parent_tool_executor.reset_state()
+    sender = "PARENT-LLM-TOOL-TRACE"
+    session_key = _seed_parent_conversation(sender=sender)
+    conversation = conversation_service.conversations[session_key]
+    lead = conversation.lead
+    responses = iter([
+        _mk_llm_response(
+            tool_calls=[
+                _tool_call(
+                    "call_parent_info",
+                    parent_tool_executor.TOOL_GET_CAMP_INFO,
+                    {"topic": "dates"},
+                ),
+            ],
+        ),
+        _mk_llm_response(content="PARENT_TOOL_LOOP_FINAL"),
+    ])
+    monkeypatch.setattr(
+        parent_llm_engine.openai_service,
+        "chat_with_tools",
+        lambda **kwargs: next(responses),
+    )
+
+    _begin_trace_for_conversation(conversation, "parent llm tool loop")
+    response = parent_llm_engine.run_parent_llm_turn(
+        user_message="parent llm tool loop",
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+    conversation_trace.emit()
+
+    block, decision = _last_decision()
+    assert response == "PARENT_TOOL_LOOP_FINAL"
+    assert decision["route_owner"] == "parent_llm_engine"
+    assert decision["domain"] == "camp"
+    assert decision["answer_source"] == "llm_tool_loop"
+    assert decision["used_llm"] is True
+    assert decision["used_tool"] is True
+    serialized = json.dumps(block, ensure_ascii=False)
+    assert "dates" not in serialized
+
+
+def test_route_decision_adult_llm_tool_loop_preserves_tool_marker(monkeypatch):
+    _enable_trace(monkeypatch)
+    adult_tool_executor.reset_state()
+    monkeypatch.setattr(
+        admin_config_service,
+        "get_active_adult_events",
+        lambda user_age=None: [],
+    )
+    sender = "ADULT-LLM-TOOL-TRACE"
+    session_key = _seed_conversation(sender=sender, segment="ADULT")
+    conversation = conversation_service.conversations[session_key]
+    lead = Lead(sender_id=sender, platform="messenger", segment="ADULT")
+    conversation.lead = lead
+    responses = iter([
+        _mk_llm_response(
+            tool_calls=[
+                _tool_call(
+                    "call_adult_events",
+                    adult_tool_executor.TOOL_GET_ADULT_EVENTS,
+                    {},
+                ),
+            ],
+        ),
+        _mk_llm_response(content="ADULT_TOOL_LOOP_FINAL"),
+    ])
+    monkeypatch.setattr(
+        adult_llm_engine.openai_service,
+        "chat_with_tools",
+        lambda **kwargs: next(responses),
+    )
+
+    _begin_trace_for_conversation(conversation, "adult llm tool loop")
+    response = adult_llm_engine.run_adult_llm_turn(
+        user_message="adult llm tool loop",
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+    conversation_trace.emit()
+
+    _block, decision = _last_decision()
+    assert response == "ADULT_TOOL_LOOP_FINAL"
+    assert decision["route_owner"] == "adult_llm_engine"
+    assert decision["domain"] == "adult_events"
+    assert decision["answer_source"] == "llm_tool_loop"
+    assert decision["used_llm"] is True
+    assert decision["used_tool"] is True
