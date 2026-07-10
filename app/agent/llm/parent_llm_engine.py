@@ -42,6 +42,21 @@ from app.services import openai_service
 
 logger = logging.getLogger(__name__)
 
+
+def _trace_parent_llm_decision(**fields) -> None:
+    try:
+        from app.reasoning import conversation_trace as _trace
+
+        payload = {
+            "domain": "camp",
+            "used_llm": True,
+            "used_tool": False,
+        }
+        payload.update(fields)
+        _trace.set_route_decision(**payload)
+    except Exception:  # pragma: no cover - trace must never affect replies
+        pass
+
 # Generous cap on the tool-call → tool-result → next-call loop. Five
 # iterations comfortably cover the realistic case (camp_info + slots +
 # book + final answer = 4 LLM turns) while still bounding worst-case
@@ -1979,6 +1994,10 @@ def run_parent_llm_turn(
         logger.exception(
             "[parent_llm_engine] system prompt assembly failed: %s", exc,
         )
+        _trace_parent_llm_decision(
+            answer_source="fallback",
+            fallback_reason="prompt_unavailable",
+        )
         return ""
 
     # Pre-turn structured capture (live bug „14 წლის არის 595999733"): land
@@ -2017,6 +2036,7 @@ def run_parent_llm_turn(
     )
 
     iterations = 0
+    saw_tool_call = False
     while iterations < MAX_TOOL_ITERATIONS:
         iterations += 1
         try:
@@ -2032,6 +2052,10 @@ def run_parent_llm_turn(
                 "[parent_llm_engine] chat_with_tools failed (iter=%d): %s",
                 iterations, exc,
             )
+            _trace_parent_llm_decision(
+                answer_source="fallback",
+                fallback_reason="llm_chat_error",
+            )
             return ""
 
         choice = _first_choice(response)
@@ -2039,6 +2063,10 @@ def run_parent_llm_turn(
             logger.warning(
                 "[parent_llm_engine] response had no choices (iter=%d)",
                 iterations,
+            )
+            _trace_parent_llm_decision(
+                answer_source="fallback",
+                fallback_reason="llm_no_choices",
             )
             return ""
 
@@ -2052,6 +2080,10 @@ def run_parent_llm_turn(
             if not final_content:
                 logger.warning(
                     "[parent_llm_engine] empty final content with no tool calls",
+                )
+                _trace_parent_llm_decision(
+                    answer_source="fallback",
+                    fallback_reason="llm_empty_final",
                 )
                 return ""
             # Post-turn structured-state fallback: if the LLM
@@ -2080,7 +2112,15 @@ def run_parent_llm_turn(
             # Anti-repeat safety net: never re-ask the child's age once known.
             cleaned = _suppress_redundant_age_question(cleaned, lead, conversation)
             # Never greet again mid-conversation (scripted-reset guard).
-            return _strip_mid_conversation_greeting(cleaned, conversation)
+            final_answer = _strip_mid_conversation_greeting(cleaned, conversation)
+            _trace_parent_llm_decision(
+                route_owner="parent_llm_engine",
+                intent="parent_llm_response",
+                answer_source="llm_tool_loop" if saw_tool_call else "llm_direct",
+            )
+            return final_answer
+
+        saw_tool_call = True
 
         # Append the assistant message that issued tool_calls so the
         # next round of messages references it correctly.
@@ -2114,6 +2154,10 @@ def run_parent_llm_turn(
     logger.warning(
         "[parent_llm_engine] tool iteration cap (%d) reached — falling back",
         MAX_TOOL_ITERATIONS,
+    )
+    _trace_parent_llm_decision(
+        answer_source="fallback",
+        fallback_reason="tool_loop_limit",
     )
     return ""
 

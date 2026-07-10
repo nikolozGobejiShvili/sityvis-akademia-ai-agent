@@ -41,6 +41,21 @@ from app.services import admin_config_service, openai_service
 logger = logging.getLogger(__name__)
 
 
+def _trace_adult_llm_decision(**fields) -> None:
+    try:
+        from app.reasoning import conversation_trace as _trace
+
+        payload = {
+            "domain": "adult_events",
+            "used_llm": True,
+            "used_tool": False,
+        }
+        payload.update(fields)
+        _trace.set_route_decision(**payload)
+    except Exception:  # pragma: no cover - trace must never affect replies
+        pass
+
+
 MAX_TOOL_ITERATIONS = 5
 HISTORY_WINDOW = 10
 DEFAULT_MAX_TOKENS = 500
@@ -2213,6 +2228,10 @@ def run_adult_llm_turn(
         logger.exception(
             "[adult_llm_engine] system prompt assembly failed: %s", exc,
         )
+        _trace_adult_llm_decision(
+            answer_source="fallback",
+            fallback_reason="prompt_unavailable",
+        )
         return ""
 
     if _use_slim_prompts():
@@ -2241,6 +2260,7 @@ def run_adult_llm_turn(
     )
 
     iterations = 0
+    saw_tool_call = False
     while iterations < MAX_TOOL_ITERATIONS:
         iterations += 1
         try:
@@ -2256,6 +2276,10 @@ def run_adult_llm_turn(
                 "[adult_llm_engine] chat_with_tools failed (iter=%d): %s",
                 iterations, exc,
             )
+            _trace_adult_llm_decision(
+                answer_source="fallback",
+                fallback_reason="llm_chat_error",
+            )
             return ""
 
         choice = _first_choice(response)
@@ -2263,6 +2287,10 @@ def run_adult_llm_turn(
             logger.warning(
                 "[adult_llm_engine] response had no choices (iter=%d)",
                 iterations,
+            )
+            _trace_adult_llm_decision(
+                answer_source="fallback",
+                fallback_reason="llm_no_choices",
             )
             return ""
 
@@ -2274,6 +2302,10 @@ def run_adult_llm_turn(
             if not final_content:
                 logger.warning(
                     "[adult_llm_engine] empty final content with no tool calls",
+                )
+                _trace_adult_llm_decision(
+                    answer_source="fallback",
+                    fallback_reason="llm_empty_final",
                 )
                 return ""
             sanitised = sanitise_adult_response(
@@ -2288,7 +2320,14 @@ def run_adult_llm_turn(
             # record the pending-offer marker so the NEXT user turn's
             # „კი" is recognised deterministically.
             _mark_subscription_offer_if_present(conversation, sanitised)
+            _trace_adult_llm_decision(
+                route_owner="adult_llm_engine",
+                intent="adult_llm_response",
+                answer_source="llm_tool_loop" if saw_tool_call else "llm_direct",
+            )
             return sanitised
+
+        saw_tool_call = True
 
         messages.append(_assistant_message_for_tool_calls(msg))
 
@@ -2319,6 +2358,10 @@ def run_adult_llm_turn(
     logger.warning(
         "[adult_llm_engine] tool iteration cap (%d) reached — falling back",
         MAX_TOOL_ITERATIONS,
+    )
+    _trace_adult_llm_decision(
+        answer_source="fallback",
+        fallback_reason="tool_loop_limit",
     )
     return ""
 

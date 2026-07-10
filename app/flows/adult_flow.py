@@ -32,13 +32,15 @@ logger = logging.getLogger(__name__)
 def _trace_adult_decision(**fields) -> None:
     try:
         from app.reasoning import conversation_trace as _trace
-        _trace.set_route_decision(
-            route_owner="adult_flow",
-            domain="adult_events",
-            used_llm=False,
-            used_tool=False,
-            **fields,
-        )
+
+        payload = {
+            "route_owner": "adult_flow",
+            "domain": "adult_events",
+            "used_llm": False,
+            "used_tool": False,
+        }
+        payload.update(fields)
+        _trace.set_route_decision(**payload)
     except Exception:  # pragma: no cover - trace must never affect replies
         pass
 
@@ -590,13 +592,27 @@ def _current_event(conversation: Conversation) -> dict[str, str] | None:
 def _generate_event_response(conversation: Conversation, message: str, event: dict[str, str]) -> str:
     context = _event_context(event)
     try:
-        return openai_service.generate_response(
+        response = openai_service.generate_response(
             history=conversation.history,
             user_message=message,
             segment="ADULT",
             context=context,
         )
+        _trace_adult_decision(
+            intent="adult_events",
+            sub_intent="selected_event_detail",
+            answer_source="llm_direct",
+            used_llm=True,
+        )
+        return response
     except Exception:
+        _trace_adult_decision(
+            intent="adult_events",
+            sub_intent="selected_event_detail",
+            answer_source="fallback",
+            used_llm=True,
+            fallback_reason="adult_event_detail_generate_response_error",
+        )
         return _premium_event_response(event)
 
 

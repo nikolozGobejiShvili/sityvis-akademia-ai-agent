@@ -4,6 +4,7 @@ import json
 import pytest
 
 import app.config as config_module
+from app.agent.llm import adult_llm_engine, parent_llm_engine
 from app.flows import adult_flow, parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
@@ -129,6 +130,28 @@ def _process_adult_turn(
     )
     block, decision = _last_decision()
     return response, decision, block
+
+def _mk_llm_response(content: str = "", tool_calls: list[dict] | None = None):
+    return {
+        "choices": [
+            {
+                "message": {
+                    "content": content or None,
+                    "tool_calls": tool_calls,
+                },
+            },
+        ],
+    }
+
+
+def _begin_trace_for_conversation(conversation: Conversation, message: str) -> None:
+    conversation_trace.begin(
+        conversation.sender_id,
+        message,
+        conversation.platform,
+        page_id=conversation.page_id or "",
+        session_key=conversation.session_key or "",
+    )
 
 MSG_PRICE_AMOUNT = "\u10d1\u10d0\u10dc\u10d0\u10d9\u10d8 \u10e0\u10d0 \u10e6\u10d8\u10e0\u10e1?"
 MSG_PAYMENT_PROCESS = "\u10d2\u10d0\u10d3\u10d0\u10ee\u10d3\u10d0 \u10e0\u10dd\u10d2\u10dd\u10e0 \u10ee\u10d3\u10d4\u10d1\u10d0?"
@@ -272,6 +295,162 @@ def test_route_decision_records_adult_identity_deterministic_owner(monkeypatch):
     assert decision["used_llm"] is False
     assert decision["used_tool"] is False
     assert decision["deterministic_reason"] == "adult_global_identity"
+
+def test_route_decision_records_parent_llm_direct_answer(monkeypatch):
+    _enable_trace(monkeypatch)
+    sender = "PARENT-LLM-DIRECT-TRACE"
+    session_key = _seed_parent_conversation(sender=sender)
+    conversation = conversation_service.conversations[session_key]
+    lead = conversation.lead
+    monkeypatch.setattr(
+        parent_llm_engine.openai_service,
+        "chat_with_tools",
+        lambda **kwargs: _mk_llm_response(content="PARENT_LLM_DIRECT"),
+    )
+
+    _begin_trace_for_conversation(conversation, "parent llm direct")
+    response = parent_llm_engine.run_parent_llm_turn(
+        user_message="parent llm direct",
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+    conversation_trace.emit()
+
+    block, decision = _last_decision()
+    assert response == "PARENT_LLM_DIRECT"
+    assert decision["route_owner"] == "parent_llm_engine"
+    assert decision["domain"] == "camp"
+    assert decision["intent"] == "parent_llm_response"
+    assert decision["answer_source"] == "llm_direct"
+    assert decision["used_llm"] is True
+    assert decision["used_tool"] is False
+    serialized = json.dumps(block, ensure_ascii=False)
+    assert session_key not in serialized
+    assert "PAGE-SECRET-A" not in serialized
+    assert sender not in serialized
+
+
+def test_route_decision_records_parent_llm_empty_fallback(monkeypatch):
+    _enable_trace(monkeypatch)
+    sender = "PARENT-LLM-EMPTY-TRACE"
+    session_key = _seed_parent_conversation(sender=sender)
+    conversation = conversation_service.conversations[session_key]
+    lead = conversation.lead
+    monkeypatch.setattr(
+        parent_llm_engine.openai_service,
+        "chat_with_tools",
+        lambda **kwargs: _mk_llm_response(content=""),
+    )
+
+    _begin_trace_for_conversation(conversation, "parent llm empty")
+    response = parent_llm_engine.run_parent_llm_turn(
+        user_message="parent llm empty",
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+    conversation_trace.emit()
+
+    _block, decision = _last_decision()
+    assert response == ""
+    assert decision["domain"] == "camp"
+    assert decision["answer_source"] == "fallback"
+    assert decision["used_llm"] is True
+    assert decision["used_tool"] is False
+    assert decision["fallback_reason"] == "llm_empty_final"
+
+
+def test_route_decision_records_adult_llm_direct_answer(monkeypatch):
+    _enable_trace(monkeypatch)
+    sender = "ADULT-LLM-DIRECT-TRACE"
+    session_key = _seed_conversation(sender=sender, segment="ADULT")
+    conversation = conversation_service.conversations[session_key]
+    lead = Lead(sender_id=sender, platform="messenger", segment="ADULT")
+    conversation.lead = lead
+    monkeypatch.setattr(
+        adult_llm_engine.openai_service,
+        "chat_with_tools",
+        lambda **kwargs: _mk_llm_response(content="ADULT_LLM_DIRECT"),
+    )
+
+    _begin_trace_for_conversation(conversation, "hello")
+    response = adult_llm_engine.run_adult_llm_turn(
+        user_message="hello",
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+    conversation_trace.emit()
+
+    _block, decision = _last_decision()
+    assert response == "ADULT_LLM_DIRECT"
+    assert decision["route_owner"] == "adult_llm_engine"
+    assert decision["domain"] == "adult_events"
+    assert decision["intent"] == "adult_llm_response"
+    assert decision["answer_source"] == "llm_direct"
+    assert decision["used_llm"] is True
+    assert decision["used_tool"] is False
+
+
+def test_route_decision_records_adult_llm_empty_fallback(monkeypatch):
+    _enable_trace(monkeypatch)
+    sender = "ADULT-LLM-EMPTY-TRACE"
+    session_key = _seed_conversation(sender=sender, segment="ADULT")
+    conversation = conversation_service.conversations[session_key]
+    lead = Lead(sender_id=sender, platform="messenger", segment="ADULT")
+    conversation.lead = lead
+    monkeypatch.setattr(
+        adult_llm_engine.openai_service,
+        "chat_with_tools",
+        lambda **kwargs: _mk_llm_response(content=""),
+    )
+
+    _begin_trace_for_conversation(conversation, "hello")
+    response = adult_llm_engine.run_adult_llm_turn(
+        user_message="hello",
+        conversation=conversation,
+        lead=lead,
+        sender_id=sender,
+        platform="messenger",
+    )
+    conversation_trace.emit()
+
+    _block, decision = _last_decision()
+    assert response == ""
+    assert decision["domain"] == "adult_events"
+    assert decision["answer_source"] == "fallback"
+    assert decision["used_llm"] is True
+    assert decision["used_tool"] is False
+    assert decision["fallback_reason"] == "llm_empty_final"
+
+
+def test_route_decision_records_adult_selected_event_detail_llm(monkeypatch):
+    monkeypatch.setattr(
+        adult_flow.openai_service,
+        "generate_response",
+        lambda **kwargs: "ADULT_EVENT_DETAIL_LLM",
+    )
+
+    response, decision, _block = _process_adult_turn(
+        monkeypatch,
+        "ADULT-SELECTED-DETAIL-TRACE",
+        "1",
+        events=[ADULT_TRACE_EVENT],
+        state="SHOW_EVENTS",
+    )
+
+    assert "ADULT_EVENT_DETAIL_LLM" in response
+    assert decision["route_owner"] == "adult_flow"
+    assert decision["domain"] == "adult_events"
+    assert decision["intent"] == "adult_events"
+    assert decision["sub_intent"] == "selected_event_detail"
+    assert decision["answer_source"] == "llm_direct"
+    assert decision["used_llm"] is True
+    assert decision["used_tool"] is False
 
 def test_route_decision_records_parent_price_amount_owner(monkeypatch):
     response, decision = _process_parent_turn(
