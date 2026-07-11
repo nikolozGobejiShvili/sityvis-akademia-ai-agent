@@ -10,6 +10,7 @@ import dataclasses
 from pathlib import Path
 
 import pytest
+import yaml
 
 import app.config as config_module
 from app.agent.llm import adult_llm_engine
@@ -340,6 +341,27 @@ def test_adult_no_active_prompt_and_template_copy_is_canonical():
         for stale_copy in STALE_ADULT_NO_ACTIVE_VARIANTS:
             assert stale_copy not in text
 
+
+def test_approved_copy_yaml_is_program_scoped_for_camp():
+    path = REPO_ROOT / "app/agent/templates/approved_copy/programs.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    assert set(data) == {"programs"}
+    assert set(data["programs"]) == {"camp"}
+    assert "price" in data["programs"]["camp"]
+    assert "registration" in data["programs"]["camp"]
+
+    forbidden_flat_keys = {"camp_price_block", "CAMP_PRICE_BLOCK", "PRICE_BLOCK"}
+    stack = [data]
+    seen_keys = set()
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        seen_keys.update(str(key) for key in node)
+        stack.extend(node.values())
+
+    assert not (forbidden_flat_keys & seen_keys)
 
 def test_approved_copy_behavior_is_currently_frozen():
     assert parent_flow._camp_price_direct_answer() == EXPECTED_CAMP_PRICE_BLOCK
