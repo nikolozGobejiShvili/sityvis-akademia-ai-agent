@@ -47,6 +47,11 @@ EXPECTED_ADULT_NO_ACTIVE = (
     "მენეჯერთან დაგაკავშირებთ."
 )
 
+STALE_ADULT_NO_ACTIVE_VARIANTS = (
+    "ამ ეტაპზე ღონისძიებების განრიგი ზუსტდება",
+    "როგორც კი დადასტურდება, სიამოვნებით გაგიზიარებთ თარიღებსა და თემებს",
+)
+
 AUDIT_SCAN_FILES = (
     "app/flows/parent_flow.py",
     "app/agent/templates/parent/price.yaml",
@@ -95,11 +100,10 @@ KNOWN_DEBT_ALLOWLIST = {
     "ამ ეტაპზე აქტიური ღონისძიება": {
         "app/services/admin_config_service.py",
         "app/flows/parent_flow.py",
-    },
-    "ამ ეტაპზე ღონისძიებების განრიგი ზუსტდება": {
         "app/agent/templates/adult/welcome.yaml",
         "app/agent/prompts/system_adult.md",
     },
+    "ამ ეტაპზე ღონისძიებების განრიგი ზუსტდება": set(),
     "პოლიტიკურ თემებზე": {
         "app/agent/prompts/system_parent_v2.md",
     },
@@ -125,10 +129,10 @@ PROMPT_VOLATILE_FACT_ALLOWLIST = {
     "tinyurl": {
         "app/agent/prompts/system_parent.md",
     },
-    EXPECTED_ADULT_NO_ACTIVE: set(),
-    "ამ ეტაპზე ღონისძიებების განრიგი ზუსტდება": {
+    EXPECTED_ADULT_NO_ACTIVE: {
         "app/agent/prompts/system_adult.md",
     },
+    "ამ ეტაპზე ღონისძიებების განრიგი ზუსტდება": set(),
 }
 
 
@@ -323,6 +327,18 @@ def test_prompt_volatile_fact_debt_is_allowlisted():
             f"New prompt volatile-fact debt for {fragment!r}: "
             f"{sorted(unexpected)}"
         )
+
+def test_adult_no_active_prompt_and_template_copy_is_canonical():
+    aligned_paths = (
+        "app/agent/templates/adult/welcome.yaml",
+        "app/agent/prompts/system_adult.md",
+    )
+
+    for path in aligned_paths:
+        text = _read_repo_text(path)
+        assert EXPECTED_ADULT_NO_ACTIVE in text
+        for stale_copy in STALE_ADULT_NO_ACTIVE_VARIANTS:
+            assert stale_copy not in text
 
 
 def test_approved_copy_behavior_is_currently_frozen():
