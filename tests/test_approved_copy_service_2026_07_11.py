@@ -165,6 +165,50 @@ def test_camp_transport_copy_matches_current_runtime_functions():
     )
 
 
+def test_parent_flow_transport_paths_route_through_approved_copy_service(monkeypatch):
+    original = parent_flow._approved_camp_copy
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def spy(key_path: str, **context: Any) -> str | None:
+        calls.append((key_path, dict(context)))
+        return original(key_path, **context)
+
+    monkeypatch.setattr(parent_flow, "_approved_camp_copy", spy)
+    city_ablative = "\u10d7\u10d4\u10da\u10d0\u10d5\u10d8\u10d3\u10d0\u10dc"
+
+    assert parent_flow._transport_answer("", pickup=False)
+    assert parent_flow._transport_answer("", pickup=True)
+    assert parent_flow._transport_answer(city_ablative, pickup=False)
+
+    key_paths = [key_path for key_path, _ in calls]
+    contexts = {key_path: context for key_path, context in calls}
+
+    assert key_paths.count("logistics.transport.included") == 3
+    assert "logistics.transport.details_defer" in key_paths
+    assert "logistics.transport.pickup_defer" in key_paths
+    assert "logistics.transport.city_details_defer" in key_paths
+    assert contexts["logistics.transport.details_defer"]["manager_phone"] == _manager_phone()
+    assert contexts["logistics.transport.pickup_defer"]["manager_phone"] == _manager_phone()
+    assert contexts["logistics.transport.city_details_defer"]["manager_phone"] == _manager_phone()
+    assert contexts["logistics.transport.city_details_defer"]["city_ablative"] == city_ablative
+
+
+def test_parent_flow_transport_approved_copy_failure_keeps_runtime_output(monkeypatch):
+    city_ablative = "\u10d7\u10d4\u10da\u10d0\u10d5\u10d8\u10d3\u10d0\u10dc"
+    expected_generic = parent_flow._transport_answer("", pickup=False)
+    expected_pickup = parent_flow._transport_answer("", pickup=True)
+    expected_city = parent_flow._transport_answer(city_ablative, pickup=False)
+
+    def missing_copy(key_path: str, **context: Any) -> None:
+        return None
+
+    monkeypatch.setattr(parent_flow, "_approved_camp_copy", missing_copy)
+
+    assert parent_flow._transport_answer("", pickup=False) == expected_generic
+    assert parent_flow._transport_answer("", pickup=True) == expected_pickup
+    assert parent_flow._transport_answer(city_ablative, pickup=False) == expected_city
+
+
 def test_camp_registration_copy_preserves_both_active_variants():
     assert _render(
         "registration.url_first",

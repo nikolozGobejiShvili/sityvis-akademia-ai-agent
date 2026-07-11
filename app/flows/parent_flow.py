@@ -4517,6 +4517,35 @@ def _transport_answer(city_ablative: str, *, pickup: bool) -> str:
     """Compose the transport answer: the known included-in-price fact + a manager
     defer for the unknown exact detail (city-specific > pickup-location >
     generic). Never invents a pickup location / time / route."""
+    try:
+        from app.services import admin_config_service
+        phone = (admin_config_service.get_manager_phone() or "").strip()
+    except Exception:  # pragma: no cover - defensive fallback to frozen copy
+        phone = ""
+    included = _approved_camp_copy("logistics.transport.included")
+    if phone and included:
+        if city_ablative:
+            city_defer = _approved_camp_copy(
+                "logistics.transport.city_details_defer",
+                manager_phone=phone,
+                city_ablative=city_ablative,
+            )
+            if city_defer:
+                return f"{included} {city_defer}"
+        elif pickup:
+            pickup_defer = _approved_camp_copy(
+                "logistics.transport.pickup_defer",
+                manager_phone=phone,
+            )
+            if pickup_defer:
+                return f"{included} {pickup_defer}"
+        else:
+            details_defer = _approved_camp_copy(
+                "logistics.transport.details_defer",
+                manager_phone=phone,
+            )
+            if details_defer:
+                return f"{included} {details_defer}"
     if city_ablative:
         return (
             _TRANSPORT_INCLUDED_PREFIX
