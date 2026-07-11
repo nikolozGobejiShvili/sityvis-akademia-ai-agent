@@ -31,6 +31,7 @@ from app.reasoning.age_question import (
     strip_child_age_questions,
 )
 from app.services import (
+    approved_copy_service,
     calendar_service,
     messenger_service,
     notification_service,
@@ -76,6 +77,20 @@ def _trace_parent_decision(**fields) -> None:
     except Exception:  # pragma: no cover - trace must never affect replies
         pass
 
+
+def _approved_camp_copy(key_path: str, **context) -> str | None:
+    try:
+        return approved_copy_service.get_approved_copy(
+            "camp",
+            key_path,
+            context=context,
+        )
+    except approved_copy_service.ApprovedCopyError:
+        logger.exception(
+            "[parent_flow] approved copy lookup failed for camp.%s",
+            key_path,
+        )
+        return None
 
 available_slots = {}
 ask_name_retries: dict[str, bool] = {}
@@ -3427,7 +3442,8 @@ _CAMP_PAYMENT_PROCESS_ANSWER: str = (
 
 
 def _camp_payment_process_answer() -> str:
-    return _CAMP_PAYMENT_PROCESS_ANSWER
+    return (_approved_camp_copy("price.payment_process")
+            or _CAMP_PAYMENT_PROCESS_ANSWER)
 
 def _has_camp_price_installment_question(message: str) -> bool:
     low = (message or "").lower()
@@ -3632,6 +3648,14 @@ def _camp_price_full_block() -> str:
     price = _camp_price_value()
     months = _camp_installments_months()
     banks_phrase = " და ".join(_bank_genitive(b) for b in _camp_price_banks()) or "ბანკის"
+    rendered = _approved_camp_copy(
+        "price.full_block",
+        price=price,
+        installments_months=months,
+        banks_phrase=banks_phrase,
+    )
+    if rendered:
+        return rendered
     return (
         f"ბანაკის ფასი არის {price} ლარი.\n\n"
         "ამ თანხაში შედის ტრანსპორტირება, განთავსება, კვება და სრული პროგრამა.\n\n"
@@ -3668,6 +3692,13 @@ def _camp_price_manager_deferral_line() -> str:
     punctuation / colon spacing)."""
     from app.services import admin_config_service
     phone = (admin_config_service.get_manager_phone() or "").strip()
+    if phone:
+        rendered = _approved_camp_copy(
+            "price.exact_amount_manager_deferral_line",
+            manager_phone=phone,
+        )
+        if rendered:
+            return rendered
     base = ("ჯავშნის ზუსტ თანხას, ბანკის გრაფიკსა და ყოველთვიურ გადასახადს "
             "მენეჯერი გაგაცნობთ")
     return f"{base} : {phone}" if phone else f"{base}."
@@ -3745,7 +3776,7 @@ def _maybe_handle_repeat_camp_price(
             handoff_requested=True,
             deterministic_reason="reservation_fee_amount_question",
         )
-        return _RESERVATION_FEE_DEFER
+        return _reservation_fee_defer()
     if _is_camp_price_full_block_question(message):
         logger.info(
             "[parent_flow] deterministic camp-price full block (exact=%s sender=%s)",
@@ -4351,6 +4382,21 @@ def _is_reservation_fee_amount_question(message: str) -> bool:
     return False
 
 
+def _reservation_fee_defer() -> str:
+    try:
+        from app.services import admin_config_service
+        phone = (admin_config_service.get_manager_phone() or "").strip()
+    except Exception:  # pragma: no cover - defensive fallback to frozen copy
+        phone = ""
+    if phone:
+        rendered = _approved_camp_copy(
+            "price.reservation_exact_amount_deferral",
+            manager_phone=phone,
+        )
+        if rendered:
+            return rendered
+    return _RESERVATION_FEE_DEFER
+
 def _bot_last_gave_payment_method_answer(conversation: Conversation) -> bool:
     """True when the bot's MOST RECENT reply was the generic payment-METHOD
     answer („…საფასურის გადახდა ხდება წინასწარ…") — the signal that a follow-up
@@ -4384,7 +4430,7 @@ def _maybe_handle_reservation_fee_question(
             handoff_requested=True,
             deterministic_reason="reservation_fee_amount_question",
         )
-        return _RESERVATION_FEE_DEFER
+        return _reservation_fee_defer()
     # Repeat-clarification / frustration: after the generic payment-METHOD
     # answer, a follow-up ADVANCE-PAYMENT amount question („რამდენს ვიხდი?") must
     # NOT get the same answer again → the manager fee defer.
@@ -4406,7 +4452,7 @@ def _maybe_handle_reservation_fee_question(
             handoff_requested=True,
             deterministic_reason="reservation_fee_amount_question",
         )
-        return _RESERVATION_FEE_DEFER
+        return _reservation_fee_defer()
     return None
 
 

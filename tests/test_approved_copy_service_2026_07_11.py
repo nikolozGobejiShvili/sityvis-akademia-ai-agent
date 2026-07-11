@@ -176,7 +176,38 @@ def test_camp_registration_copy_preserves_both_active_variants():
     ) == parent_turn_router._build_premium_registration_answer()
 
 
-def test_runtime_parent_paths_do_not_use_approved_copy_service_yet():
+def test_parent_flow_price_paths_route_through_approved_copy_service(monkeypatch):
+    original = approved_copy_service.get_approved_copy
+    calls: list[tuple[str, str | None]] = []
+
+    def spy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        calls.append((program, key_path))
+        return original(program, key_path, **kwargs)
+
+    monkeypatch.setattr(parent_flow.approved_copy_service, "get_approved_copy", spy)
+    reservation_question = (
+        "\u10ef\u10d0\u10d5\u10e8\u10dc\u10d8\u10e1 "
+        "\u10e1\u10d0\u10e4\u10d0\u10e1\u10e3\u10e0\u10d8 "
+        "\u10e0\u10d0\u10db\u10d3\u10d4\u10dc\u10d8\u10d0?"
+    )
+
+    assert parent_flow._camp_price_full_block()
+    assert parent_flow._camp_payment_process_answer()
+    assert parent_flow._camp_price_manager_deferral_line()
+    assert parent_flow._maybe_handle_reservation_fee_question(
+        _reservation_conversation(),
+        reservation_question,
+    )
+
+    assert {
+        ("camp", "price.full_block"),
+        ("camp", "price.payment_process"),
+        ("camp", "price.exact_amount_manager_deferral_line"),
+        ("camp", "price.reservation_exact_amount_deferral"),
+    } <= set(calls)
+
+
+def test_st3c_parent_router_still_does_not_use_approved_copy_service():
     parent_flow_source = (REPO_ROOT / "app/flows/parent_flow.py").read_text(
         encoding="utf-8",
     )
@@ -184,7 +215,10 @@ def test_runtime_parent_paths_do_not_use_approved_copy_service_yet():
         encoding="utf-8",
     )
 
-    assert "approved_copy_service" not in parent_flow_source
+    assert "approved_copy_service" in parent_flow_source
+    assert "price.full_block" in parent_flow_source
+    assert "price.payment_process" in parent_flow_source
+    assert "price.reservation_exact_amount_deferral" in parent_flow_source
+    assert "price.exact_amount_manager_deferral_line" in parent_flow_source
     assert "approved_copy_service" not in router_source
-    assert "get_approved_copy" not in parent_flow_source
     assert "get_approved_copy" not in router_source
