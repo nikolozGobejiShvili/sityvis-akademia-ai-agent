@@ -5411,6 +5411,12 @@ def _render_camp_registration_answer() -> str:
         camp = {}
     url = (camp.get("registration_url") or "").strip()
     if url:
+        rendered = _approved_camp_copy(
+            "registration.url_first",
+            registration_url=url,
+        )
+        if rendered:
+            return rendered
         return (
             "ბანაკზე რეგისტრაცია ხდება ამ ბმულზე:\n"
             f"{url}\n\n"

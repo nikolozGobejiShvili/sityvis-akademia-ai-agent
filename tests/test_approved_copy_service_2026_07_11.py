@@ -209,6 +209,36 @@ def test_parent_flow_transport_approved_copy_failure_keeps_runtime_output(monkey
     assert parent_flow._transport_answer(city_ablative, pickup=False) == expected_city
 
 
+def test_parent_flow_registration_url_first_routes_through_approved_copy_service(monkeypatch):
+    expected_url = _registration_url()
+    approved_response = "approved registration url-first response"
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def spy(key_path: str, **context: Any) -> str:
+        calls.append((key_path, dict(context)))
+        return approved_response
+
+    monkeypatch.setattr(parent_flow, "_approved_camp_copy", spy)
+
+    assert parent_flow._render_camp_registration_answer() == approved_response
+    assert calls == [("registration.url_first", {"registration_url": expected_url})]
+
+
+def test_parent_flow_registration_url_first_approved_copy_failure_keeps_runtime_output(monkeypatch):
+    expected_response = parent_flow._render_camp_registration_answer()
+    expected_url = _registration_url()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def missing_copy(key_path: str, **context: Any) -> None:
+        calls.append((key_path, dict(context)))
+        return None
+
+    monkeypatch.setattr(parent_flow, "_approved_camp_copy", missing_copy)
+
+    assert parent_flow._render_camp_registration_answer() == expected_response
+    assert calls == [("registration.url_first", {"registration_url": expected_url})]
+
+
 def test_camp_registration_copy_preserves_both_active_variants():
     assert _render(
         "registration.url_first",
