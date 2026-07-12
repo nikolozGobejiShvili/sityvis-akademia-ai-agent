@@ -57,6 +57,10 @@ def _registration_url() -> str:
     return parent_flow._camp_registration_url()
 
 
+def _router_registration_url() -> str:
+    return parent_turn_router._camp().get("registration_url", "")
+
+
 def _reservation_conversation() -> Conversation:
     return Conversation(
         sender_id="approved-copy-reservation",
@@ -246,8 +250,58 @@ def test_camp_registration_copy_preserves_both_active_variants():
     ) == parent_flow._render_camp_registration_answer()
     assert _render(
         "registration.consultation_first",
-        registration_url=_registration_url(),
+        registration_url=_router_registration_url(),
     ) == parent_turn_router._build_premium_registration_answer()
+
+
+def test_parent_router_registration_consultation_first_routes_through_approved_copy_service(monkeypatch):
+    expected_url = _router_registration_url()
+    approved_response = "approved router registration consultation-first response"
+    calls: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    def spy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        calls.append((program, key_path, dict(kwargs)))
+        return approved_response
+
+    monkeypatch.setattr(
+        parent_turn_router.approved_copy_service,
+        "get_approved_copy",
+        spy,
+    )
+
+    assert parent_turn_router._build_premium_registration_answer() == approved_response
+    assert calls == [
+        (
+            "camp",
+            "registration.consultation_first",
+            {"context": {"registration_url": expected_url}},
+        )
+    ]
+
+
+def test_parent_router_registration_consultation_first_approved_copy_failure_keeps_runtime_output(monkeypatch):
+    expected_response = parent_turn_router._build_premium_registration_answer()
+    expected_url = _router_registration_url()
+    calls: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    def missing_copy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        calls.append((program, key_path, dict(kwargs)))
+        raise approved_copy_service.ApprovedCopyNotFound("missing approved copy")
+
+    monkeypatch.setattr(
+        parent_turn_router.approved_copy_service,
+        "get_approved_copy",
+        missing_copy,
+    )
+
+    assert parent_turn_router._build_premium_registration_answer() == expected_response
+    assert calls == [
+        (
+            "camp",
+            "registration.consultation_first",
+            {"context": {"registration_url": expected_url}},
+        )
+    ]
 
 
 def test_parent_flow_price_paths_route_through_approved_copy_service(monkeypatch):
@@ -281,7 +335,7 @@ def test_parent_flow_price_paths_route_through_approved_copy_service(monkeypatch
     } <= set(calls)
 
 
-def test_st3c_parent_router_still_does_not_use_approved_copy_service():
+def test_st3d_router_approved_copy_scope_stays_registration_only():
     parent_flow_source = (REPO_ROOT / "app/flows/parent_flow.py").read_text(
         encoding="utf-8",
     )
@@ -290,9 +344,15 @@ def test_st3c_parent_router_still_does_not_use_approved_copy_service():
     )
 
     assert "approved_copy_service" in parent_flow_source
+    assert "registration.url_first" in parent_flow_source
     assert "price.full_block" in parent_flow_source
     assert "price.payment_process" in parent_flow_source
     assert "price.reservation_exact_amount_deferral" in parent_flow_source
     assert "price.exact_amount_manager_deferral_line" in parent_flow_source
-    assert "approved_copy_service" not in router_source
-    assert "get_approved_copy" not in router_source
+
+    assert "registration.consultation_first" in router_source
+    assert "registration.url_first" not in router_source
+    assert "price.full_block" not in router_source
+    assert "price.payment_process" not in router_source
+    assert "price.reservation_exact_amount_deferral" not in router_source
+    assert "price.exact_amount_manager_deferral_line" not in router_source

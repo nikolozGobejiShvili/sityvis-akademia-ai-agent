@@ -70,6 +70,7 @@ from app.agent.services.timestamps import extract_colloquial_hour
 from app.config import settings
 from app.models.conversation import Conversation
 from app.models.lead import Lead
+from app.services import approved_copy_service
 from app.services.session_key_service import conversation_cache_key
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,13 @@ def _trace_router_decision(**fields) -> None:
         )
     except Exception:  # pragma: no cover - trace must never affect replies
         pass
+
+def _approved_camp_copy(key_path: str, **context: Any) -> str | None:
+    try:
+        return approved_copy_service.get_approved_copy("camp", key_path, context=context)
+    except approved_copy_service.ApprovedCopyError:
+        logger.exception("[turn_router] approved copy lookup failed for camp.%s", key_path)
+        return None
 
 
 # Per-conversation flag for the soft-vs-explicit manager escalation path
@@ -383,6 +391,13 @@ def _build_premium_registration_answer() -> str:
     """
     camp = _camp()
     url = camp.get("registration_url", "")
+    approved = _approved_camp_copy(
+        "registration.consultation_first",
+        registration_url=url,
+    )
+    if approved:
+        return approved
+
     return (
         "რეგისტრაციამდე მოკლე კონსულტაცია სჯობს, რომ ბავშვის ასაკი და "
         "საჭიროება სწორად გადავამოწმოთ. მითხარით სასურველი დღე და საათი, "
