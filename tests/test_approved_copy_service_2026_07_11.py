@@ -74,6 +74,24 @@ def _reservation_conversation() -> Conversation:
     )
 
 
+def _parent_contact_visit_conversation(
+    sender_id: str = "approved-copy-contact-visit",
+) -> Conversation:
+    conversation = Conversation(
+        sender_id=sender_id,
+        platform="instagram",
+        segment="PARENT",
+    )
+    conversation.state = "ASK_CHALLENGE"
+    conversation.lead = Lead(
+        sender_id=sender_id,
+        platform="instagram",
+        segment="PARENT",
+        child_age="12",
+    )
+    return conversation
+
+
 def _render(key_path: str, **context: Any) -> str:
     return approved_copy_service.get_approved_copy("camp", key_path, **context)
 
@@ -231,6 +249,125 @@ def test_camp_unknown_detail_runtime_fallback_shapes_stay_topic_prefixed():
     direct_call = camp_topic_facts.direct_call_fallback()
     assert direct_call.startswith("რაც შეეხება ბავშვთან პირდაპირი კონტაქტის წესებს, ")
     assert direct_call.endswith(ending)
+
+
+def test_parent_contact_visit_defer_copy_matches_current_local_literal(monkeypatch):
+    manager_phone = "MANAGER_PHONE_TEST"
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: manager_phone)
+
+    expected = (
+        "რაც შეეხება ბავშვთან პირდაპირი დარეკვის ან ჩამოსვლის წესებს, "
+        f"ამ დეტალებს მენეჯერი გაგაცნობთ: {manager_phone}"
+    )
+
+    assert _render(
+        "manager.parent_contact_visit_defer",
+        manager_phone=manager_phone,
+    ) == expected
+    assert parent_flow._render_parent_contact_visit_defer() == expected
+
+
+def test_parent_contact_visit_defer_routes_through_approved_copy_service(monkeypatch):
+    manager_phone = "MANAGER_PHONE_TEST"
+    approved_defer = "approved parent contact visit defer"
+    calls: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    def spy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        calls.append((program, key_path, dict(kwargs)))
+        return approved_defer
+
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: manager_phone)
+    monkeypatch.setattr(parent_flow.approved_copy_service, "get_approved_copy", spy)
+
+    response = parent_flow._maybe_handle_parent_contact_visit(
+        _parent_contact_visit_conversation(),
+        "შემიძლია ბავშვს ჩამოვიდე და ვნახო?",
+    )
+
+    assert response is not None
+    daily, defer = response.split("\n\n", 1)
+    assert "ყოველდღიურად" in daily
+    assert defer == approved_defer
+    assert calls == [
+        (
+            "camp",
+            "manager.parent_contact_visit_defer",
+            {"manager_phone": manager_phone},
+        ),
+    ]
+
+
+def test_parent_contact_visit_defer_approved_copy_failure_keeps_local_fallback(monkeypatch):
+    manager_phone = "MANAGER_PHONE_TEST"
+    expected = (
+        "რაც შეეხება ბავშვთან პირდაპირი დარეკვის ან ჩამოსვლის წესებს, "
+        f"ამ დეტალებს მენეჯერი გაგაცნობთ: {manager_phone}"
+    )
+
+    def missing_copy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        raise approved_copy_service.ApprovedCopyNotFound("missing approved copy")
+
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: manager_phone)
+    monkeypatch.setattr(parent_flow.approved_copy_service, "get_approved_copy", missing_copy)
+
+    assert parent_flow._render_parent_contact_visit_defer() == expected
+
+
+def test_parent_contact_visit_defer_empty_contact_keeps_current_no_phone_behavior(monkeypatch):
+    calls: list[tuple[str, str | None]] = []
+
+    def spy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        calls.append((program, key_path))
+        return "should not be used"
+
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "")
+    monkeypatch.setattr(parent_flow.approved_copy_service, "get_approved_copy", spy)
+
+    assert parent_flow._render_parent_contact_visit_defer() == (
+        "რაც შეეხება ბავშვთან პირდაპირი დარეკვის ან ჩამოსვლის წესებს, "
+        "ამ დეტალებს მენეჯერი გაგაცნობთ"
+    )
+    assert calls == []
+
+
+def test_parent_contact_visit_answer_preserves_order_and_workflow(monkeypatch):
+    manager_phone = "MANAGER_PHONE_TEST"
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: manager_phone)
+    monkeypatch.setattr(
+        parent_flow.notification_service,
+        "send_manager_notification",
+        lambda *_args, **_kwargs: pytest.fail("manager notification must not run"),
+    )
+    monkeypatch.setattr(
+        parent_flow,
+        "_run_llm_engine_safely",
+        lambda *_args, **_kwargs: pytest.fail("LLM must not run"),
+    )
+    conversation = Conversation(
+        sender_id="approved-copy-contact-visit-no-lead",
+        platform="instagram",
+        segment="PARENT",
+    )
+    conversation.state = "ASK_CHALLENGE"
+    conversation.pending_booking = {"slot": "pending"}
+
+    response = parent_flow._maybe_handle_parent_contact_visit(
+        conversation,
+        "შემიძლია ბავშვს ჩამოვიდე და ვნახო?",
+    )
+
+    assert response is not None
+    daily, defer = response.split("\n\n", 1)
+    assert "ყოველდღიურად" in daily
+    assert "ზრდასრულთა ღონისძიებ" not in response
+    assert "აირჩიეთ" not in response
+    assert defer == (
+        "რაც შეეხება ბავშვთან პირდაპირი დარეკვის ან ჩამოსვლის წესებს, "
+        f"ამ დეტალებს მენეჯერი გაგაცნობთ: {manager_phone}"
+    )
+    assert conversation.lead is not None
+    assert conversation.state == "ASK_CHALLENGE"
+    assert not getattr(conversation, "handoff_requested", False)
 
 
 def test_camp_transport_copy_matches_current_runtime_functions():

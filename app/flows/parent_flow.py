@@ -4096,6 +4096,34 @@ _PARENT_CONTACT_VISIT_TRIGGERS: tuple[str, ...] = (
 _PARENT_VISIT_SEE_RE = re.compile(r"ვნახო(?!თ)")
 
 
+def _render_parent_contact_visit_defer() -> str:
+    fallback = (
+        "რაც შეეხება ბავშვთან პირდაპირი დარეკვის ან ჩამოსვლის წესებს, "
+        "ამ დეტალებს მენეჯერი გაგაცნობთ"
+    )
+    try:
+        from app.services import admin_config_service
+        phone = (admin_config_service.get_manager_phone() or "").strip()
+    except Exception:  # pragma: no cover — defensive
+        phone = ""
+    if not phone:
+        return fallback
+    fallback_with_phone = f"{fallback}: {phone}"
+    try:
+        rendered = approved_copy_service.get_approved_copy(
+            "camp",
+            "manager.parent_contact_visit_defer",
+            manager_phone=phone,
+        )
+        return rendered if rendered and rendered.strip() else fallback_with_phone
+    except Exception:  # pragma: no cover — defensive fallback keeps current copy
+        logger.exception(
+            "[parent_flow] approved copy lookup failed for camp.%s",
+            "manager.parent_contact_visit_defer",
+        )
+        return fallback_with_phone
+
+
 def _in_camp_context(conversation: Conversation) -> bool:
     """True when the conversation is clearly in CAMP context — a saved in-band
     child age (9–17), the bot recently asked the child age, or a camp booking is
@@ -4152,17 +4180,7 @@ def _maybe_handle_parent_contact_visit(
             "მშობლებს ბანაკის განმავლობაში ყოველდღიურად ეგზავნებათ დღის პროგრამა "
             "და ფოტო-ვიდეო მასალა."
         )
-    try:
-        from app.services import admin_config_service
-        phone = (admin_config_service.get_manager_phone() or "").strip()
-    except Exception:  # pragma: no cover — defensive
-        phone = ""
-    defer = (
-        "რაც შეეხება ბავშვთან პირდაპირი დარეკვის ან ჩამოსვლის წესებს, "
-        "ამ დეტალებს მენეჯერი გაგაცნობთ"
-    )
-    if phone:
-        defer += f": {phone}"
+    defer = _render_parent_contact_visit_defer()
     _ensure_lead(conversation)
     logger.info(
         "[parent_flow] parent contact/visit question → camp answer (sender=%s)",

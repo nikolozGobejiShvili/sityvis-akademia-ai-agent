@@ -20,6 +20,8 @@ programs:
     manager:
       unknown_detail_ending: |-
         ამ დეტალებს მენეჯერი გაგაცნობთ : {manager_phone}
+      parent_contact_visit_defer: |-
+        რაც შეეხება ბავშვთან პირდაპირი დარეკვის ან ჩამოსვლის წესებს, ამ დეტალებს მენეჯერი გაგაცნობთ: {manager_phone}
     logistics:
       transport:
         included: |-
