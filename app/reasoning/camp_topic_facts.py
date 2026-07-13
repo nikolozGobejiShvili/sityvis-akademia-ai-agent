@@ -191,13 +191,29 @@ def _is_medical(low: str) -> bool:
     return _count(low, cfg.get("triggers")) > 0
 
 
-def medical_answer() -> str | None:
+def _medical_answer_fallback() -> str | None:
     cfg = _load_data().get("camp_medical")
     if isinstance(cfg, Mapping):
         ans = str(cfg.get("answer") or "").strip()
         if ans:
             return ans
     return None
+
+
+def medical_answer() -> str | None:
+    fallback = _medical_answer_fallback()
+    if not fallback:
+        return None
+    try:
+        from app.services import approved_copy_service
+
+        rendered = approved_copy_service.get_approved_copy(
+            "camp",
+            "medical.medication_clarification",
+        )
+        return rendered or fallback
+    except Exception:  # pragma: no cover - defensive fallback keeps current copy
+        return fallback
 
 
 # ── Parent → child CONTACT during camp (vs the child's own social skills) ─────

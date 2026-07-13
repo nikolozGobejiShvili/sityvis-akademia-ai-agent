@@ -96,6 +96,14 @@ def _render(key_path: str, **context: Any) -> str:
     return approved_copy_service.get_approved_copy("camp", key_path, **context)
 
 
+def _medical_yaml_answer() -> str:
+    cfg = camp_topic_facts._load_data().get("camp_medical")
+    assert isinstance(cfg, dict)
+    answer = str(cfg.get("answer") or "").strip()
+    assert answer
+    return answer
+
+
 def test_programs_yaml_is_program_scoped():
     data = _read_yaml()
 
@@ -172,6 +180,54 @@ def test_camp_manager_unknown_detail_copy_matches_current_runtime_functions():
 
     assert rendered == parent_flow._UNKNOWN_DETAIL_ENDING
     assert rendered == camp_topic_facts._unknown_ending()
+
+
+def test_camp_medical_copy_matches_current_runtime_function():
+    expected = _medical_yaml_answer()
+
+    assert _render("medical.medication_clarification") == expected
+    assert camp_topic_facts.medical_answer() == expected
+    trigger = camp_topic_facts._load_data()["camp_medical"]["triggers"][0]
+    assert camp_topic_facts.resolve_camp_answer(str(trigger)) == expected
+
+
+def test_camp_medical_answer_routes_through_approved_copy_service(monkeypatch):
+    approved_answer = "approved medical answer"
+    calls: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    def spy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        calls.append((program, key_path, dict(kwargs)))
+        return approved_answer
+
+    monkeypatch.setattr(approved_copy_service, "get_approved_copy", spy)
+
+    assert camp_topic_facts.medical_answer() == approved_answer
+    assert calls == [("camp", "medical.medication_clarification", {})]
+
+
+def test_camp_medical_answer_approved_copy_failure_keeps_yaml_fallback(monkeypatch):
+    expected = _medical_yaml_answer()
+    calls: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    def missing_copy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        calls.append((program, key_path, dict(kwargs)))
+        raise approved_copy_service.ApprovedCopyNotFound("missing approved copy")
+
+    monkeypatch.setattr(approved_copy_service, "get_approved_copy", missing_copy)
+
+    assert camp_topic_facts.medical_answer() == expected
+    assert calls == [("camp", "medical.medication_clarification", {})]
+
+
+def test_camp_medical_answer_empty_approved_copy_keeps_yaml_fallback(monkeypatch):
+    expected = _medical_yaml_answer()
+
+    def empty_copy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        return ""
+
+    monkeypatch.setattr(approved_copy_service, "get_approved_copy", empty_copy)
+
+    assert camp_topic_facts.medical_answer() == expected
 
 
 def test_camp_unknown_detail_ending_routes_through_approved_copy_service(monkeypatch):
