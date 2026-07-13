@@ -68,6 +68,10 @@ VALID_STATUSES = ("active", "hidden", "full", "coming_soon", "ended")
 # Camp (summer_camp) status values the live agent understands. "ended" (2026-07-01)
 # lets the operator turn the camp off after the last stream without a code change.
 CAMP_STATUSES = ("active", "hidden", "full", "coming_soon", "ended")
+_CAMP_REGISTRATION_OPEN_VALUES = ("open", "active", "enabled", "on", "true", "1", "yes")
+_CAMP_REGISTRATION_CLOSED_VALUES = (
+    "closed", "inactive", "disabled", "off", "false", "0", "no",
+)
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_]*$")
 ADULT_NO_ACTIVE_EVENTS_REPLY = "ამ ეტაპზე აქტიური ღონისძიება სიაში არ მაქვს. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
 
@@ -210,15 +214,50 @@ def get_camp_status() -> str:
     try:
         section = get_section("summer_camp") or {}
         raw = (section.get("status") or "").strip().lower()
-    except Exception:  # pragma: no cover — defensive: never disable camp on error
+    except Exception:  # pragma: no cover - defensive: never disable camp on error
         return "active"
     return raw if raw in CAMP_STATUSES else "active"
 
 
 def is_camp_active() -> bool:
     """True when the camp is being sold (status ``active``); False for
-    ``hidden`` / ``full`` / ``coming_soon`` / ``ended``. Missing/invalid → True."""
+    ``hidden`` / ``full`` / ``coming_soon`` / ``ended``. Missing/invalid â†’ True."""
     return get_camp_status() == "active"
+
+
+def get_camp_registration_status() -> str:
+    """Return the independent camp registration gate.
+
+    Missing/empty ``registration_status`` defaults to ``open`` for backward
+    compatibility. An explicitly malformed value fails closed so a typo cannot
+    leak registration URLs or booking entry points during a closed-registration
+    operating period.
+    """
+    try:
+        section = get_section("summer_camp") or {}
+        raw = section.get("registration_status")
+    except Exception:  # pragma: no cover - registration actions fail closed
+        return "closed"
+    if raw is None:
+        return "open"
+    value = str(raw).strip().lower()
+    if not value:
+        return "open"
+    if value in _CAMP_REGISTRATION_OPEN_VALUES:
+        return "open"
+    if value in _CAMP_REGISTRATION_CLOSED_VALUES:
+        return "closed"
+    return "closed"
+
+
+def is_camp_registration_open() -> bool:
+    """True when camp registration/booking CTAs may be shown."""
+    return get_camp_registration_status() == "open"
+
+
+def is_camp_registration_closed() -> bool:
+    """True when camp registration/booking CTAs must be suppressed."""
+    return not is_camp_registration_open()
 
 
 def get_sunday_school_status() -> dict[str, Any]:
@@ -234,7 +273,7 @@ def get_sunday_school_status() -> dict[str, Any]:
     (default ``sunday_school``)."""
     try:
         section = get_section("sunday_school") or {}
-    except Exception:  # pragma: no cover — defensive
+    except Exception:  # pragma: no cover - defensive
         section = {}
 
     def _txt(key: str) -> str:
@@ -769,7 +808,7 @@ def get_camp_age_bounds() -> tuple[int, int]:
     default = (9, 17)
     try:
         camp = get_camp_facts() or {}
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
             "[admin_config] get_camp_age_bounds: get_camp_facts failed: %s", exc,
         )

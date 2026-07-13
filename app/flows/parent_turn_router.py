@@ -92,6 +92,19 @@ def _approved_camp_copy(key_path: str, **context: Any) -> str | None:
         logger.exception("[turn_router] approved copy lookup failed for camp.%s", key_path)
         return None
 
+def _is_camp_registration_open() -> bool:
+    try:
+        from app.flows import parent_flow as canonical_parent_flow
+        return canonical_parent_flow._is_camp_registration_open()
+    except Exception:  # pragma: no cover - registration actions fail closed
+        logger.exception("[turn_router] camp registration gate failed")
+        return False
+
+
+def _camp_registration_closed_answer() -> str:
+    from app.flows import parent_flow as canonical_parent_flow
+    return canonical_parent_flow._camp_registration_closed_answer()
+
 
 # Per-conversation flag for the soft-vs-explicit manager escalation path
 # (retained from earlier Phase 3.9 work but only consulted when the LLM
@@ -389,6 +402,8 @@ def _build_premium_registration_answer() -> str:
     The link from knowledge is provided as backup at the end so a
     determined user can still find it.
     """
+    if not _is_camp_registration_open():
+        return _camp_registration_closed_answer()
     camp = _camp()
     url = camp.get("registration_url", "")
     approved = _approved_camp_copy(
@@ -842,6 +857,9 @@ def _response_for_intent(
     "fall through to the state machine".
     """
     if intent == INTENT_BOOKING_REQUEST:
+        if not _is_camp_registration_open():
+            conversation.pending_booking = None
+            return _camp_registration_closed_answer()
         return _handle_booking_request(conversation, lead, message)
 
     if intent == INTENT_MANAGER_REQUEST:
@@ -1222,6 +1240,13 @@ def maybe_handle_pending_booking_continuation(
     pending = conversation.pending_booking
     if not pending:
         return None
+
+    if not _is_camp_registration_open():
+        logger.info(
+            "[turn_router] pending_booking: registration closed - dropping pending"
+        )
+        conversation.pending_booking = None
+        return _camp_registration_closed_answer()
 
     sender_id = conversation.sender_id
 

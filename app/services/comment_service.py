@@ -27,6 +27,27 @@ from data.prompts import (
 
 logger = logging.getLogger(__name__)
 
+
+def _is_camp_registration_open() -> bool:
+    try:
+        return admin_config_service.is_camp_registration_open()
+    except Exception:  # pragma: no cover - registration actions fail closed
+        logger.exception("[COMMENT] camp registration gate failed")
+        return False
+
+
+def _strip_camp_registration_cta(text: str) -> str:
+    lines: list[str] = []
+    for line in (text or "").splitlines():
+        clean = line.strip()
+        if "რეგისტრაციის ბმული" in clean:
+            continue
+        if clean.startswith("http://") or clean.startswith("https://"):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def _graph_base_url() -> str:
     base = getattr(settings, "META_GRAPH_API_BASE_URL", "https://graph.facebook.com")
     version = getattr(settings, "META_GRAPH_API_VERSION", "v19.0")
@@ -173,11 +194,14 @@ def _build_parent_rich_dm() -> str:
         if section and section.get("auto_dm_template_id"):
             admin_text = admin_config_service.build_section_dm(section)
             if admin_text:
+                if not _is_camp_registration_open():
+                    admin_text = _strip_camp_registration_cta(admin_text)
                 logger.info(
                     "[COMMENT] Rich DM rendered from admin_config "
                     "section=summer_camp len=%d", len(admin_text),
                 )
-                return admin_text
+                if admin_text:
+                    return admin_text
     except Exception as exc:
         logger.warning(
             "[COMMENT] admin_config render failed for summer_camp: %s",
@@ -190,7 +214,8 @@ def _build_parent_rich_dm() -> str:
         duration = camp.get("duration_days")
         price = camp.get("price_gel")
         streams = camp.get("streams") or []
-        url = (camp.get("registration_url") or "").strip()
+        registration_open = _is_camp_registration_open()
+        url = (camp.get("registration_url") or "").strip() if registration_open else ""
 
         if not (location and duration and price):
             raise ValueError(
@@ -242,7 +267,10 @@ def _build_parent_rich_dm() -> str:
             "[COMMENT] Using fallback DM reason=parent_yaml_load_failed: %s",
             exc, exc_info=True,
         )
-        return PARENT_FIRST_CONTACT_DM
+        fallback = PARENT_FIRST_CONTACT_DM
+        if not _is_camp_registration_open():
+            fallback = _strip_camp_registration_cta(fallback)
+        return fallback
 
 
 # ── Camp-post comment DM (2026-07-04) — comment-aware Summer-Camp reply ──────
@@ -285,7 +313,9 @@ def _build_camp_comment_dm(comment_text: str) -> str:
         bridge = _pf._CAMP_INTRO_TEXT.split("\n\n")[-1].strip()
     except Exception:  # pragma: no cover — defensive
         bridge = ""
-
+    registration_open = _is_camp_registration_open()
+    if not registration_open:
+        bridge = ""
     # 1) Price (not payment) → approved price block + bridge.
     try:
         if _pf._is_camp_price_intent(text) and not _pf._is_payment_question(text):
@@ -307,6 +337,8 @@ def _build_camp_comment_dm(comment_text: str) -> str:
 
     # 4) Explicit „ინფორმაცია / დეტალები" request → approved Camp intro.
     if any(m in low for m in _CAMP_COMMENT_INFO_MARKERS):
+        if not registration_open:
+            return _build_parent_rich_dm()
         try:
             return _pf._CAMP_INTRO_TEXT
         except Exception:  # pragma: no cover — defensive

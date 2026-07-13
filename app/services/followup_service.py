@@ -321,6 +321,17 @@ def _maybe_send_followup_for_conversation(
         )
         return "skipped"
 
+    try:
+        registration_open = admin_config_service.is_camp_registration_open()
+    except Exception:  # pragma: no cover - registration actions fail closed
+        logger.exception("[followup] camp registration gate failed")
+        registration_open = False
+    if not registration_open:
+        logger.info(
+            "[followup] skipped reason=camp_registration_closed platform=%s sender=%s",
+            platform_raw, masked,
+        )
+        return "skipped"
     if conversation.followup_blocked_reason in _BLOCKED_REASONS:
         logger.info(
             "[followup] skipped reason=%s platform=%s sender=%s",

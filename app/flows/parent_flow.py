@@ -92,6 +92,19 @@ def _approved_camp_copy(key_path: str, **context) -> str | None:
         )
         return None
 
+def _is_camp_registration_open() -> bool:
+    try:
+        from app.services import admin_config_service
+        return admin_config_service.is_camp_registration_open()
+    except Exception:  # pragma: no cover - registration actions fail closed
+        logger.exception("[parent_flow] camp registration gate failed")
+        return False
+
+
+def _camp_registration_closed_answer() -> str:
+    return _camp_status_message("full")
+
+
 available_slots = {}
 ask_name_retries: dict[str, bool] = {}
 invalid_phone_retries: dict[str, bool] = {}
@@ -5421,6 +5434,8 @@ def _render_camp_registration_answer() -> str:
     ``get_camp_info('registration')`` tool uses). The link is NEVER invented:
     on a missing URL we fall back to the manager contact / a request for the
     user's name + phone. No child-age question, no generic menu."""
+    if not _is_camp_registration_open():
+        return _camp_registration_closed_answer()
     try:
         from app.services import admin_config_service
         camp = admin_config_service.get_camp_facts() or {}
@@ -5461,6 +5476,8 @@ def _book_fast_track_registration_url() -> str:
 
 
 def _render_camp_fast_track_registration_answer() -> str:
+    if not _is_camp_registration_open():
+        return _camp_registration_closed_answer()
     url = _book_fast_track_registration_url()
     if url:
         rendered = _approved_camp_copy(
@@ -6614,6 +6631,8 @@ def planner_final_validate(conversation, plan, response: str) -> str:
 
 
 def _camp_registration_url() -> str:
+    if not _is_camp_registration_open():
+        return ""
     try:
         from app.services import admin_config_service
         camp = admin_config_service.get_camp_facts() or {}
@@ -9288,6 +9307,11 @@ def _handle_impl(conversation: Conversation, message: str) -> str:
             return PARENT_PRICE_FIRST_RESPONSE.strip()
 
         if intent == "BOOK":
+            if not _is_camp_registration_open():
+                logger.info(
+                    "[parent_flow] registration closed - blocking START BOOK intent"
+                )
+                return _camp_registration_closed_answer()
             conversation.state = "ASK_AGE"
             logger.info("[parent_flow] transition %s → ASK_AGE (BOOK intent, registration link sent)", prev_state)
             return _render_camp_fast_track_registration_answer()

@@ -183,6 +183,18 @@ def _trace_parent_tool_result(
         pass
     return result
 
+def _is_camp_registration_open() -> bool:
+    try:
+        from app.services import admin_config_service
+        return admin_config_service.is_camp_registration_open()
+    except Exception:  # pragma: no cover - registration actions fail closed
+        logger.exception("[parent_executor] camp registration gate failed")
+        return False
+
+
+def _registration_closed_tool_result(**extra: Any) -> dict[str, Any]:
+    return {"success": False, "reason": "camp_registration_closed", **extra}
+
 @dataclass
 class ParentToolExecutor:
     """Executes the closed-set of tools the PARENT LLM is allowed to call.
@@ -365,6 +377,9 @@ class ParentToolExecutor:
                 "allowed_topics": list(CAMP_INFO_TOPICS),
             }
 
+        registration_open = _is_camp_registration_open()
+        if topic == "registration" and not registration_open:
+            return _registration_closed_tool_result(topic="registration")
         # Config-unification patch: read camp facts from the admin-first
         # helper so an operator price/location/streams edit in the
         # Admin Panel takes effect immediately for the LLM's
@@ -496,7 +511,7 @@ class ParentToolExecutor:
                 {"name": s.get("name"), "dates_text": s.get("dates_text")}
                 for s in visible_streams
             ],
-            "registration_url": camp.get("registration_url"),
+            "registration_url": camp.get("registration_url") if registration_open else "",
             "phone": camp.get("phone"),
         }
 
@@ -527,6 +542,8 @@ class ParentToolExecutor:
             date_iso or "", days_raw, self.sender_id,
         )
 
+        if not _is_camp_registration_open():
+            return _registration_closed_tool_result(slots=[])
         if date_iso:
             from datetime import date as _date_cls
             try:
@@ -616,6 +633,14 @@ class ParentToolExecutor:
             datetime_iso, self.sender_id,
         )
 
+        if not _is_camp_registration_open():
+            return _registration_closed_tool_result(
+                datetime_iso=datetime_iso,
+                inside_business_hours=False,
+                calendar_available=False,
+                available=False,
+                alternative_slots=[],
+            )
         if not datetime_iso:
             logger.warning("[slot_check] reason=invalid_datetime (missing)")
             return {
@@ -875,6 +900,10 @@ class ParentToolExecutor:
         # Default the per-conversation success flag to False for this turn;
         # only set True at the very end on a confirmed Calendar+state write.
         book_consultation_success_for_conversation[self.cache_key] = False
+
+        if not _is_camp_registration_open():
+            logger.warning("[book_consultation] BLOCKED reason=camp_registration_closed")
+            return _registration_closed_tool_result()
 
         # 1. Required fields ------------------------------------------------
         if not name and not (self.lead.name or "").strip():
@@ -1717,6 +1746,8 @@ class ParentToolExecutor:
         if action not in {"cancel", "reschedule"}:
             return {"success": False, "reason": "invalid_action"}
 
+        if action == "reschedule" and not _is_camp_registration_open():
+            return _registration_closed_tool_result(action="reschedule")
         # Identify the active booking. We trust the in-memory Lead first
         # (the booking we just made this session) and fall back to the
         # values the LLM passed if those are absent.
