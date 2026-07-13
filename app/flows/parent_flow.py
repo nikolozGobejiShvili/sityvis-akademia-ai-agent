@@ -5437,6 +5437,23 @@ def _render_camp_registration_answer() -> str:
     )
 
 
+def _book_fast_track_registration_url() -> str:
+    match = re.search(r"https?://\S+", PARENT_BOOK_FAST_TRACK)
+    return match.group(0).strip() if match else ""
+
+
+def _render_camp_fast_track_registration_answer() -> str:
+    url = _book_fast_track_registration_url()
+    if url:
+        rendered = _approved_camp_copy(
+            "registration.fast_track",
+            registration_url=url,
+        )
+        if rendered:
+            return rendered
+    return PARENT_BOOK_FAST_TRACK.strip()
+
+
 def _maybe_handle_camp_registration_link(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -9255,7 +9272,7 @@ def _handle_impl(conversation: Conversation, message: str) -> str:
         if intent == "BOOK":
             conversation.state = "ASK_AGE"
             logger.info("[parent_flow] transition %s → ASK_AGE (BOOK intent, registration link sent)", prev_state)
-            return PARENT_BOOK_FAST_TRACK.strip()
+            return _render_camp_fast_track_registration_answer()
 
         if intent == "INFO":
             conversation.state = "ASK_AGE"

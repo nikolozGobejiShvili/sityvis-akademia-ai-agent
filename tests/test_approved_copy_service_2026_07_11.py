@@ -8,6 +8,7 @@ import yaml
 
 from app.flows import parent_flow, parent_turn_router
 from app.models.conversation import Conversation
+from app.models.lead import Lead
 from app.reasoning import camp_topic_facts
 from app.services import admin_config_service, approved_copy_service
 
@@ -59,6 +60,10 @@ def _registration_url() -> str:
 
 def _router_registration_url() -> str:
     return parent_turn_router._camp().get("registration_url", "")
+
+
+def _fast_track_registration_url() -> str:
+    return parent_flow._book_fast_track_registration_url()
 
 
 def _reservation_conversation() -> Conversation:
@@ -252,6 +257,68 @@ def test_camp_registration_copy_preserves_both_active_variants():
         "registration.consultation_first",
         registration_url=_router_registration_url(),
     ) == parent_turn_router._build_premium_registration_answer()
+    assert _render(
+        "registration.fast_track",
+        registration_url=_fast_track_registration_url(),
+    ) == parent_flow._render_camp_fast_track_registration_answer()
+
+
+def test_parent_flow_fast_track_registration_routes_through_approved_copy_service(monkeypatch):
+    expected_url = _fast_track_registration_url()
+    approved_response = "approved parent fast-track registration response"
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def spy(key_path: str, **context: Any) -> str:
+        calls.append((key_path, dict(context)))
+        return approved_response
+
+    monkeypatch.setattr(parent_flow, "_approved_camp_copy", spy)
+
+    assert parent_flow._render_camp_fast_track_registration_answer() == approved_response
+    assert calls == [("registration.fast_track", {"registration_url": expected_url})]
+
+
+def test_parent_flow_fast_track_registration_approved_copy_failure_keeps_runtime_output(monkeypatch):
+    expected_response = parent_flow.PARENT_BOOK_FAST_TRACK.strip()
+    expected_url = _fast_track_registration_url()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def missing_copy(key_path: str, **context: Any) -> None:
+        calls.append((key_path, dict(context)))
+        return None
+
+    monkeypatch.setattr(parent_flow, "_approved_camp_copy", missing_copy)
+
+    assert parent_flow._render_camp_fast_track_registration_answer() == expected_response
+    assert calls == [("registration.fast_track", {"registration_url": expected_url})]
+
+
+def test_parent_flow_start_book_intent_uses_fast_track_and_advances_state(monkeypatch):
+    conversation = Conversation(
+        sender_id="approved-copy-fast-track",
+        platform="instagram",
+        segment="PARENT",
+    )
+    conversation.lead = Lead(
+        sender_id=conversation.sender_id,
+        platform=conversation.platform,
+        segment="PARENT",
+        name="მარიამ",
+    )
+    conversation.history.append({"role": "assistant", "content": "welcome"})
+    monkeypatch.setattr(
+        parent_flow.openai_service,
+        "detect_start_intent",
+        lambda _message: "BOOK",
+    )
+
+    response = parent_flow._handle_impl(conversation, "ბანაკი")
+
+    assert response == parent_flow._render_camp_fast_track_registration_answer()
+    assert conversation.state == "ASK_AGE"
+    assert not getattr(conversation, "pending_booking", None)
+    assert conversation.lead is not None
+    assert conversation.lead.calendly_booked is False
 
 
 def test_parent_router_registration_consultation_first_routes_through_approved_copy_service(monkeypatch):
@@ -345,6 +412,7 @@ def test_st3d_router_approved_copy_scope_stays_registration_only():
 
     assert "approved_copy_service" in parent_flow_source
     assert "registration.url_first" in parent_flow_source
+    assert "registration.fast_track" in parent_flow_source
     assert "price.full_block" in parent_flow_source
     assert "price.payment_process" in parent_flow_source
     assert "price.reservation_exact_amount_deferral" in parent_flow_source
@@ -352,6 +420,7 @@ def test_st3d_router_approved_copy_scope_stays_registration_only():
 
     assert "registration.consultation_first" in router_source
     assert "registration.url_first" not in router_source
+    assert "registration.fast_track" not in router_source
     assert "price.full_block" not in router_source
     assert "price.payment_process" not in router_source
     assert "price.reservation_exact_amount_deferral" not in router_source
