@@ -94,6 +94,14 @@ def disable_engine(monkeypatch):
 
 
 @pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.admin_config_service.get_camp_registration_status",
+        lambda: "open",
+    )
+
+
+@pytest.fixture
 def fresh_conversation():
     conv = Conversation(sender_id="sender_p3c", platform="instagram")
     # Pre-seed an assistant turn so the parent-greeting static welcome
@@ -349,7 +357,7 @@ def test_age_out_of_range_blocks_booking(enable_engine, monkeypatch, fresh_conve
 # =========================================================================
 
 
-def test_book_without_child_age_returns_missing_child_age(fresh_conversation):
+def test_book_without_child_age_returns_missing_child_age(fresh_conversation, camp_registration_open):
     lead = Lead(sender_id="sender_p3c", platform="instagram", segment="PARENT")
     fresh_conversation.lead = lead
     executor = ParentToolExecutor(
@@ -375,7 +383,7 @@ def test_book_without_child_age_returns_missing_child_age(fresh_conversation):
 # =========================================================================
 
 
-def test_book_with_invalid_phone_returns_invalid_phone(fresh_conversation):
+def test_book_with_invalid_phone_returns_invalid_phone(fresh_conversation, camp_registration_open):
     lead = Lead(sender_id="sender_p3c", platform="instagram", segment="PARENT")
     fresh_conversation.lead = lead
     executor = ParentToolExecutor(
@@ -444,8 +452,7 @@ def test_calendar_failure_blocks_fake_confirmation(
 
 
 def test_booking_success_updates_lead_and_state(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     from app.services import (
         calendar_service,
         messenger_service,
@@ -821,7 +828,7 @@ def test_manager_notification_not_double_fired(monkeypatch, fresh_conversation):
 # =========================================================================
 
 
-def test_get_available_slots(monkeypatch, fresh_conversation):
+def test_get_available_slots(monkeypatch, fresh_conversation, camp_registration_open):
     from app.flows import parent_flow as pf
 
     monkeypatch.setattr(
@@ -875,8 +882,7 @@ def _make_executor(conv: Conversation, lead: Lead | None = None) -> ParentToolEx
 
 
 def test_book_without_user_confirmed_returns_datetime_not_confirmed(
-    monkeypatch, fresh_conversation,
-):
+    monkeypatch, fresh_conversation, camp_registration_open,):
     """All required fields present, but the LLM did not set
     user_confirmed_datetime — booking is refused."""
     from app.services import calendar_service
@@ -904,8 +910,7 @@ def test_book_without_user_confirmed_returns_datetime_not_confirmed(
 
 
 def test_book_with_user_confirmed_false_returns_datetime_not_confirmed(
-    monkeypatch, fresh_conversation,
-):
+    monkeypatch, fresh_conversation, camp_registration_open,):
     from app.services import calendar_service
 
     monkeypatch.setattr(
@@ -925,7 +930,7 @@ def test_book_with_user_confirmed_false_returns_datetime_not_confirmed(
     assert result["reason"] == "datetime_not_confirmed"
 
 
-def test_book_with_user_confirmed_true_can_succeed(monkeypatch, fresh_conversation):
+def test_book_with_user_confirmed_true_can_succeed(monkeypatch, fresh_conversation, camp_registration_open):
     from app.services import (
         calendar_service,
         notification_service,
@@ -1013,7 +1018,7 @@ def test_engine_does_not_auto_book_after_phone_only(
 # -- PATCH 1.B — registration vs consultation -----------------------------
 
 
-def test_get_camp_info_registration_when_url_present(fresh_conversation):
+def test_get_camp_info_registration_when_url_present(fresh_conversation, camp_registration_open):
     executor = _make_executor(fresh_conversation)
     result = executor.execute(TOOL_GET_CAMP_INFO, {"topic": "registration"})
     # Default YAML has a URL.
@@ -1023,8 +1028,7 @@ def test_get_camp_info_registration_when_url_present(fresh_conversation):
 
 
 def test_get_camp_info_registration_returns_missing_when_url_absent(
-    monkeypatch, fresh_conversation,
-):
+    monkeypatch, fresh_conversation, camp_registration_open,):
     """If knowledge YAML loses the registration_url, executor must NOT
     invent one — it returns registration_url_missing with phone.
 
@@ -1148,7 +1152,7 @@ def test_manage_cancel_success_with_event_id(monkeypatch, fresh_conversation):
     assert lead.status == "Cancelled"
 
 
-def test_manage_reschedule_without_event_id_handoff(monkeypatch, fresh_conversation):
+def test_manage_reschedule_without_event_id_handoff(monkeypatch, fresh_conversation, camp_registration_open):
     """Old event_id missing — reschedule must NOT silently double-book."""
     from app.services import calendar_service, notification_service, sheets_service
 
@@ -1179,7 +1183,7 @@ def test_manage_reschedule_without_event_id_handoff(monkeypatch, fresh_conversat
     assert result["manager_handoff_required"] is True
 
 
-def test_manage_reschedule_success(monkeypatch, fresh_conversation):
+def test_manage_reschedule_success(monkeypatch, fresh_conversation, camp_registration_open):
     from app.services import (
         calendar_service,
         notification_service,
@@ -2179,8 +2183,7 @@ def test_patch4_get_free_slots_default_uses_today(monkeypatch):
 
 
 def test_patch4_executor_get_available_slots_with_date_iso(
-    monkeypatch, fresh_conversation,
-):
+    monkeypatch, fresh_conversation, camp_registration_open,):
     """When the LLM passes `date_iso`, the executor must use the
     range form of `get_free_slots` for that specific date — NOT the
     legacy `parent_flow._load_available_slots` cache."""
@@ -2216,7 +2219,7 @@ def test_patch4_executor_get_available_slots_with_date_iso(
     assert result["slots"][0]["display"].startswith("26 მაისი") or "12:00" in result["slots"][0]["display"]
 
 
-def test_patch4_executor_get_available_slots_invalid_date_iso(fresh_conversation):
+def test_patch4_executor_get_available_slots_invalid_date_iso(fresh_conversation, camp_registration_open):
     executor = _make_executor(fresh_conversation)
     result = executor.execute(TOOL_GET_AVAILABLE_SLOTS, {"date_iso": "not-a-date"})
     assert result["success"] is False
@@ -2224,8 +2227,7 @@ def test_patch4_executor_get_available_slots_invalid_date_iso(fresh_conversation
 
 
 def test_patch4_executor_get_available_slots_no_args_uses_legacy_cache(
-    monkeypatch, fresh_conversation,
-):
+    monkeypatch, fresh_conversation, camp_registration_open,):
     """Without arguments the executor still routes through
     `parent_flow._load_available_slots` — the legacy behaviour the
     pre-PATCH-4 tests rely on."""
@@ -2298,7 +2300,7 @@ def test_patch4_save_lead_info_appends_unrelated_challenge():
     assert ";" in lead.challenge
 
 
-def test_patch4_known_lead_fields_reused_in_booking(monkeypatch, fresh_conversation):
+def test_patch4_known_lead_fields_reused_in_booking(monkeypatch, fresh_conversation, camp_registration_open):
     """When age + phone are already on the lead, book_consultation can
     succeed with only the missing pieces (name + datetime) given."""
     from app.services import (
@@ -2343,8 +2345,7 @@ def test_patch4_known_lead_fields_reused_in_booking(monkeypatch, fresh_conversat
 
 
 def test_patch4_booking_appends_notes_to_existing_challenge(
-    monkeypatch, fresh_conversation,
-):
+    monkeypatch, fresh_conversation, camp_registration_open,):
     from app.services import (
         calendar_service,
         notification_service,
@@ -2507,8 +2508,7 @@ def test_patch5_guard_blocks_fake_chaginishnet_without_tool_success(
 
 
 def test_patch5_guard_allows_chaginishnet_with_tool_success(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     from app.services import (
         calendar_service, messenger_service, notification_service,
         openai_service, sheets_service,
@@ -2735,8 +2735,7 @@ def test_patch5_modality_question_preserves_pending_booking(
 
 
 def test_patch5_name_phone_after_pending_commits_booking(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     """After pending_booking is set with user_confirmed=True and the
     user provides name+phone, backend commits the booking
     deterministically without relying on the LLM."""
@@ -2867,7 +2866,7 @@ def test_patch5_pending_commit_skips_when_only_phone_no_name(
     assert out
 
 
-def test_patch5_executor_honours_pending_user_confirmed(monkeypatch, fresh_conversation):
+def test_patch5_executor_honours_pending_user_confirmed(monkeypatch, fresh_conversation, camp_registration_open):
     """When pending_booking already has user_confirmed_datetime=True
     AND the LLM forgets to pass the flag, _book_consultation must
     still proceed (using the pending datetime)."""
@@ -2921,8 +2920,7 @@ def test_patch5_executor_phone_mask_helper():
 
 
 def test_patch5_executor_logs_do_not_leak_full_phone(
-    caplog, fresh_conversation, monkeypatch,
-):
+    caplog, fresh_conversation, monkeypatch, camp_registration_open,):
     """Run _book_consultation, scan caplog records, assert the full
     9-digit local phone never appears in any log message."""
     import logging
@@ -2967,8 +2965,7 @@ def test_patch5_executor_logs_do_not_leak_full_phone(
 
 
 def test_patch5_known_age_and_challenge_reused_in_commit(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     """The deterministic commit reuses lead.child_age + lead.challenge
     without re-asking them."""
     from app.services import (
@@ -3014,8 +3011,7 @@ def test_patch5_known_age_and_challenge_reused_in_commit(
 
 
 def test_patch5_profile_failure_does_not_block_booking(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     """Even when the Meta profile fetch raises (live v19 400 case),
     a deterministic commit must still succeed."""
     from app.services import (
@@ -3089,7 +3085,7 @@ def test_patch5_engine_context_exposes_pending_booking(
     assert "2030-05-27T13:00:00+04:00" in joined
 
 
-def test_patch5_get_slots_logs_call(monkeypatch, fresh_conversation, caplog):
+def test_patch5_get_slots_logs_call(monkeypatch, fresh_conversation, caplog, camp_registration_open):
     import logging
     from app.flows import parent_flow as pf
     monkeypatch.setattr(
@@ -3250,7 +3246,7 @@ def test_patch6_buffer_still_excludes_today_near_slots(monkeypatch):
 # -- PATCH 6.C — check_consultation_slot executor -------------------------
 
 
-def test_patch6_check_consultation_slot_available(monkeypatch, fresh_conversation):
+def test_patch6_check_consultation_slot_available(monkeypatch, fresh_conversation, camp_registration_open):
     """Inside business hours + Calendar free → available=True and a
     confirmed pending_booking is recorded."""
     from app.services import calendar_service
@@ -3289,8 +3285,7 @@ def test_patch6_check_consultation_slot_available(monkeypatch, fresh_conversatio
 
 
 def test_patch6_check_consultation_slot_outside_business_hours(
-    monkeypatch, fresh_conversation,
-):
+    monkeypatch, fresh_conversation, camp_registration_open,):
     from app.services import calendar_service
 
     monkeypatch.setattr(
@@ -3332,8 +3327,7 @@ def test_patch6_check_consultation_slot_outside_business_hours(
 
 
 def test_patch6_check_consultation_slot_calendar_busy(
-    monkeypatch, fresh_conversation,
-):
+    monkeypatch, fresh_conversation, camp_registration_open,):
     from app.services import calendar_service
 
     monkeypatch.setattr(
@@ -3374,7 +3368,7 @@ def test_patch6_check_consultation_slot_calendar_busy(
         assert pending.get("user_confirmed_datetime") is not True
 
 
-def test_patch6_check_consultation_slot_invalid_datetime(fresh_conversation):
+def test_patch6_check_consultation_slot_invalid_datetime(fresh_conversation, camp_registration_open):
     lead = Lead(sender_id="x", platform="instagram", segment="PARENT")
     fresh_conversation.lead = lead
     executor = ParentToolExecutor(
@@ -3388,7 +3382,7 @@ def test_patch6_check_consultation_slot_invalid_datetime(fresh_conversation):
     assert result["reason"] == "invalid_datetime"
 
 
-def test_patch6_check_consultation_slot_missing_datetime(fresh_conversation):
+def test_patch6_check_consultation_slot_missing_datetime(fresh_conversation, camp_registration_open):
     lead = Lead(sender_id="x", platform="instagram", segment="PARENT")
     fresh_conversation.lead = lead
     executor = ParentToolExecutor(
@@ -3401,8 +3395,7 @@ def test_patch6_check_consultation_slot_missing_datetime(fresh_conversation):
 
 
 def test_patch6_check_consultation_slot_logs_have_buffer_and_inside_hours(
-    monkeypatch, fresh_conversation, caplog,
-):
+    monkeypatch, fresh_conversation, caplog, camp_registration_open,):
     import logging
     from app.services import calendar_service
 
@@ -3438,8 +3431,7 @@ def test_patch6_check_consultation_slot_logs_have_buffer_and_inside_hours(
 
 
 def test_patch6_exact_available_then_name_phone_commits_booking(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     """Live-bug regression: user asks 27 May 15:00, then sends
     name+phone — the deterministic PATCH 5 commit must fire on the
     pending_booking that check_consultation_slot recorded."""
@@ -3528,8 +3520,7 @@ def test_patch6_exact_available_then_name_phone_commits_booking(
 
 
 def test_patch6_truncated_slot_list_does_not_imply_unavailable(
-    monkeypatch, fresh_conversation,
-):
+    monkeypatch, fresh_conversation, camp_registration_open,):
     """Even if get_available_slots returns only 6 morning slots,
     check_consultation_slot for an afternoon slot must still succeed
     when Calendar+business-hours say it's free."""
@@ -3637,8 +3628,7 @@ def _next_year_iso(month: int, day: int, hh: int, mm: int = 0) -> str:
 
 
 def test_patch7_time_change_updates_pending_iso(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     from app.services import calendar_service, messenger_service, openai_service
 
     monkeypatch.setattr(messenger_service, "get_user_profile", lambda sid, plat: {})
@@ -3690,8 +3680,7 @@ def test_patch7_time_change_updates_pending_iso(
 
 
 def test_patch7_time_change_then_name_phone_books_new_slot(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     from app.services import calendar_service, messenger_service
 
     monkeypatch.setattr(messenger_service, "get_user_profile", lambda sid, plat: {})
@@ -3732,8 +3721,7 @@ def test_patch7_time_change_then_name_phone_books_new_slot(
 
 
 def test_patch7_time_change_unavailable_restores_original_pending(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     """When the NEW time is busy, the old pending slot must NOT be
     silently committed; pending is restored and the user is asked."""
     from app.services import calendar_service, messenger_service
@@ -3775,8 +3763,7 @@ def test_patch7_time_change_unavailable_restores_original_pending(
 
 
 def test_patch7_no_time_change_signal_is_a_noop(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     """Messages that don't look like time changes must not touch
     pending_booking. They should fall through to the existing commit
     flow (which will extract name+phone)."""
@@ -4736,8 +4723,7 @@ def test_challenge_fallback_handles_none_lead():
 
 
 def test_compound_booking_books_when_message_has_datetime_phone(
-    enable_engine, monkeypatch, fresh_conversation,
-):
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,):
     """User volunteers a full booking in one message; the deterministic
     commit hook must book even when no pending_booking was recorded by
     a previous turn."""

@@ -44,6 +44,7 @@ from app.flows.parent_flow import (
 )
 from app.models.conversation import Conversation
 from app.models.lead import Lead
+from app.services import admin_config_service
 
 
 # -- helpers ---------------------------------------------------------------
@@ -54,6 +55,13 @@ def _reset_executor_state():
     parent_tool_executor.reset_state()
     yield
     parent_tool_executor.reset_state()
+
+
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service, "get_camp_registration_status", lambda: "open",
+    )
 
 
 def _conv(**kwargs) -> Conversation:
@@ -261,7 +269,7 @@ def test_08b_stale_clear_with_question_defers_to_engine(monkeypatch):
     assert not (conv.pending_booking or {}).get("requested_datetime_iso")
 
 
-def test_09_booking_blocked_until_required_fields_present():
+def test_09_booking_blocked_until_required_fields_present(camp_registration_open):
     """book_consultation requires name + phone + datetime + child_age."""
     conv = _conv()
     lead = _lead(conv)  # nothing known yet
@@ -279,7 +287,7 @@ def test_09_booking_blocked_until_required_fields_present():
     assert res["reason"] == "missing_name"
 
 
-def test_10_future_pending_confirmation_books_that_slot(monkeypatch):
+def test_10_future_pending_confirmation_books_that_slot(monkeypatch, camp_registration_open):
     """A future confirmed pending slot + „კი" with contact present → books
     that exact slot."""
     booking = _install_fake_booking(monkeypatch)
@@ -297,7 +305,7 @@ def test_10_future_pending_confirmation_books_that_slot(monkeypatch):
     assert "ჩაგინიშნეთ" in reply
 
 
-def test_11_contact_after_future_slot_books_confirmed_slot(monkeypatch):
+def test_11_contact_after_future_slot_books_confirmed_slot(monkeypatch, camp_registration_open):
     """Contact arriving after a FUTURE slot confirmation books only that
     confirmed slot — never a random stale time."""
     booking = _install_fake_booking(monkeypatch)

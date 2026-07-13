@@ -30,10 +30,18 @@ from app.agent.tools.parent_tool_executor import ParentToolExecutor
 from app.flows import parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
-from app.services import sheets_service
+from app.services import admin_config_service, sheets_service
+from app.services.session_key_service import conversation_cache_key
 
 
 TBILISI = ZoneInfo("Asia/Tbilisi")
+
+
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service, "get_camp_registration_status", lambda: "open",
+    )
 
 
 # =========================================================================
@@ -125,7 +133,8 @@ def test_trim_booking_success_drops_tu_kidev_raime(monkeypatch):
     conv = Conversation(
         sender_id="s_trim_8", platform="messenger", segment="PARENT",
     )
-    book_consultation_success_for_conversation[conv.sender_id] = True
+    cache_key = conversation_cache_key(conv)
+    book_consultation_success_for_conversation[cache_key] = True
     raw = (
         "10 ივნისს, 11:00 საათზე კონსულტაცია ჩაგინიშნეთ. "
         "თუ კიდევ რაიმე გაგიჩნდებათ, მომწერეთ და დაგეხმარებით."
@@ -133,10 +142,10 @@ def test_trim_booking_success_drops_tu_kidev_raime(monkeypatch):
     out = parent_flow._trim_booking_success_response(conv, raw)
     assert "თუ კიდევ რაიმე" not in out
     assert "კონსულტაცია ჩაგინიშნეთ" in out
-    book_consultation_success_for_conversation.pop(conv.sender_id, None)
+    book_consultation_success_for_conversation.pop(cache_key, None)
 
 
-def test_booking_confirmation_first_booking_is_concise():
+def test_booking_confirmation_first_booking_is_concise(camp_registration_open):
     """End-to-end against the deterministic pending-commit path: the
     booking-success response must contain date/time + ჩაგინიშნეთ +
     მენეჯერი დაგიკავშირდებათ — and NOTHING else."""
@@ -187,7 +196,7 @@ def test_booking_confirmation_first_booking_is_concise():
     assert "საჯაროდ არ გამოქვეყნდება" not in response
 
 
-def test_booking_confirmation_reschedule_includes_old_cancel_line():
+def test_booking_confirmation_reschedule_includes_old_cancel_line(camp_registration_open):
     """Reschedule confirmation must say „ძველი კონსულტაცია გაუქმებულია."
     and stay concise."""
     import app.services.calendar_service as calendar_service
@@ -398,7 +407,7 @@ def _reschedule_lead_conv() -> tuple[Conversation, Lead]:
     return conv, lead
 
 
-def test_reschedule_calls_mark_old_booking_rescheduled(monkeypatch):
+def test_reschedule_calls_mark_old_booking_rescheduled(monkeypatch, camp_registration_open):
     import app.services.calendar_service as calendar_service
 
     monkeypatch.setattr(parent_flow, "TBILISI_TZ", TBILISI)
@@ -445,7 +454,7 @@ def test_reschedule_calls_mark_old_booking_rescheduled(monkeypatch):
 
 
 def test_reschedule_logs_warning_when_sheets_helper_fails(
-    monkeypatch, caplog,
+    monkeypatch, caplog, camp_registration_open,
 ):
     import app.services.calendar_service as calendar_service
     import logging
@@ -493,7 +502,7 @@ def test_reschedule_logs_warning_when_sheets_helper_fails(
 
 
 def test_reschedule_calendar_success_not_rolled_back_on_sheets_failure(
-    monkeypatch,
+    monkeypatch, camp_registration_open,
 ):
     import app.services.calendar_service as calendar_service
 

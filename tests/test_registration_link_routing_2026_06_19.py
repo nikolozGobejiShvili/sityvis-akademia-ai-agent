@@ -46,6 +46,12 @@ def _reset():
     yield
     conversation_service.conversations.clear()
 
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service, "get_camp_registration_status", lambda: "open",
+    )
+
 
 @pytest.fixture
 def stub_flows(monkeypatch):
@@ -174,7 +180,7 @@ def _parent_executor(sid="reg-camp"):
     return ParentToolExecutor(conversation=conv, lead=lead, sender_id=sid, platform="instagram")
 
 
-def test_camp_registration_url_uses_admin_config(monkeypatch):
+def test_camp_registration_url_uses_admin_config(monkeypatch, camp_registration_open):
     monkeypatch.setattr(
         admin_config_service, "get_camp_facts",
         lambda: {"name": "ბანაკი", "registration_url": _CAMP_URL, "phone": "558674733"},
@@ -184,7 +190,7 @@ def test_camp_registration_url_uses_admin_config(monkeypatch):
     assert result["registration_url"] == _CAMP_URL
 
 
-def test_camp_registration_url_missing_safe_fallback(monkeypatch):
+def test_camp_registration_url_missing_safe_fallback(monkeypatch, camp_registration_open):
     monkeypatch.setattr(
         admin_config_service, "get_camp_facts",
         lambda: {"name": "ბანაკი", "registration_url": "", "phone": "558674733"},

@@ -37,6 +37,12 @@ def _reset():
     yield
     conversation_service.conversations.clear()
 
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service, "get_camp_registration_status", lambda: "open",
+    )
+
 
 @pytest.fixture
 def engine_on(monkeypatch):
@@ -73,7 +79,7 @@ _REGISTRATION_INPUTS = [
 
 
 @pytest.mark.parametrize("msg", _REGISTRATION_INPUTS)
-def test_live_registration_returns_admin_link(engine_on, msg):
+def test_live_registration_returns_admin_link(engine_on, camp_registration_open, msg):
     out = conversation_service.process_message("reg-live", msg, "instagram")
     assert _ADMIN_URL in out, f"registration link missing for {msg!r}: {out!r}"
     for age in _AGE_PHRASES:
@@ -114,7 +120,7 @@ def test_bare_greeting_still_menu(engine_on):
 # =========================================================================
 
 
-def test_missing_registration_url_safe_fallback(engine_on, monkeypatch):
+def test_missing_registration_url_safe_fallback(engine_on, monkeypatch, camp_registration_open):
     monkeypatch.setattr(
         admin_config_service, "get_camp_facts",
         lambda: {"name": "ბანაკი", "registration_url": ""},

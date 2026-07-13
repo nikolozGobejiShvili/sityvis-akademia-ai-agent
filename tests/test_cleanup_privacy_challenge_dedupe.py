@@ -19,6 +19,7 @@ import pytest
 from app.flows import parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
+from app.services.session_key_service import conversation_cache_key
 
 
 @pytest.fixture
@@ -29,10 +30,11 @@ def success_flag():
     )
 
     def _set(sender_id: str, value: bool) -> None:
+        cache_key = conversation_cache_key(platform="instagram", sender_id=sender_id)
         if value:
-            book_consultation_success_for_conversation[sender_id] = True
+            book_consultation_success_for_conversation[cache_key] = True
         else:
-            book_consultation_success_for_conversation.pop(sender_id, None)
+            book_consultation_success_for_conversation.pop(cache_key, None)
 
     yield _set
     book_consultation_success_for_conversation.clear()

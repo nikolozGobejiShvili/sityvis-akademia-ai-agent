@@ -109,6 +109,14 @@ def fake_redis(monkeypatch):
     redis_state_service.reset()
 
 
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        followup_service.admin_config_service,
+        "get_camp_registration_status",
+        lambda: "open",
+    )
+
 @pytest.fixture(autouse=True)
 def _clear_conversations():
     """Each test starts with an empty in-memory dict — simulating a
@@ -253,7 +261,7 @@ def _utc_iso(seconds_ago: int) -> str:
     return (datetime.utcnow() - timedelta(seconds=seconds_ago)).isoformat()
 
 
-def test_scheduler_log_includes_counters_when_due(monkeypatch, caplog):
+def test_scheduler_log_includes_counters_when_due(monkeypatch, caplog, camp_registration_open):
     _patch_followup_settings(
         monkeypatch,
         FOLLOWUP_TEST_MODE=True,
@@ -298,7 +306,7 @@ def test_scheduler_log_counts_zero_when_empty(monkeypatch, caplog):
     assert "tick complete total=0 due=0 sent=0 skipped=0" in full
 
 
-def test_scheduler_log_separates_parent_from_other(monkeypatch, caplog):
+def test_scheduler_log_separates_parent_from_other(monkeypatch, caplog, camp_registration_open):
     _patch_followup_settings(
         monkeypatch,
         FOLLOWUP_TEST_MODE=True,
@@ -329,7 +337,7 @@ def test_scheduler_log_separates_parent_from_other(monkeypatch, caplog):
     assert send.call_count == 1
 
 
-def test_scheduler_log_marks_due_when_send_fails(monkeypatch, caplog):
+def test_scheduler_log_marks_due_when_send_fails(monkeypatch, caplog, camp_registration_open):
     _patch_followup_settings(
         monkeypatch,
         FOLLOWUP_TEST_MODE=True,
@@ -362,7 +370,7 @@ def test_scheduler_log_marks_due_when_send_fails(monkeypatch, caplog):
 
 
 def test_cli_simulation_sends_followup_after_hydrate(
-    monkeypatch, caplog, fake_redis,
+    monkeypatch, caplog, fake_redis, camp_registration_open,
 ):
     """Reproduce the live-bug scenario:
       1. Live server stamped `last_bot_message_at` 200 seconds ago

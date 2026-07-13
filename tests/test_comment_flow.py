@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -146,6 +148,26 @@ def reset_state():
     conversation_service.conversations.clear()
     comment_service.post_content_cache.clear()
     webhook._processed_comments_lru.clear()
+
+
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        comment_service.admin_config_service,
+        "get_camp_registration_status",
+        lambda: "open",
+    )
+
+
+@pytest.fixture
+def camp_streams_visible(monkeypatch):
+    tbilisi = ZoneInfo("Asia/Tbilisi")
+    fixed_now = datetime(2026, 7, 13, 12, 0, tzinfo=tbilisi)
+    monkeypatch.setattr(
+        admin_config_service,
+        "_now_tbilisi",
+        lambda: (fixed_now, tbilisi),
+    )
 
 
 # =========================================================================
@@ -393,7 +415,9 @@ def test_dm_runs_even_without_dm_history(monkeypatch):
 # test verifies the rich-DM key facts instead.
 
 
-def test_parent_first_contact_dm_carries_camp_facts(monkeypatch):
+def test_parent_first_contact_dm_carries_camp_facts(
+    monkeypatch, camp_registration_open, camp_streams_visible,
+):
     """PATCH 3 — the rich DM must contain location (locative form),
     price, at least one stream date, and the registration URL."""
     _swap_settings(
@@ -892,7 +916,9 @@ def test_patch3_parent_rich_dm_contains_price(monkeypatch):
     assert "2150" in sent[0]["text"]
 
 
-def test_patch3_parent_rich_dm_contains_registration_url(monkeypatch):
+def test_patch3_parent_rich_dm_contains_registration_url(
+    monkeypatch, camp_registration_open,
+):
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=["banaki"],
@@ -905,7 +931,9 @@ def test_patch3_parent_rich_dm_contains_registration_url(monkeypatch):
     assert "https://" in text
 
 
-def test_patch3_parent_rich_dm_contains_stream_dates(monkeypatch):
+def test_patch3_parent_rich_dm_contains_stream_dates(
+    monkeypatch, camp_streams_visible,
+):
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=["banaki"],

@@ -48,6 +48,12 @@ def _reset():
     yield
     conversation_service.conversations.clear()
 
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service, "get_camp_registration_status", lambda: "open",
+    )
+
 
 # =========================================================================
 # Detector — TRUE for clear camp + registration/sign-up intent.
@@ -125,7 +131,7 @@ _FULLPATH_CAMP_REG = [
 
 
 @pytest.mark.parametrize("msg", _FULLPATH_CAMP_REG)
-def test_fullpath_camp_registration_skips_menu(parent_engine_on, msg):
+def test_fullpath_camp_registration_skips_menu(parent_engine_on, camp_registration_open, msg):
     conversation_service.conversations.clear()  # fresh / flushed state
     out = conversation_service.process_message("reg-fp", msg, "instagram")
     assert _MENU not in out, f"menu wrongly shown for: {msg!r}"
@@ -138,7 +144,7 @@ def test_fullpath_camp_registration_skips_menu(parent_engine_on, msg):
     assert conversation_service.conversations["reg-fp"].segment == "PARENT"
 
 
-def test_fullpath_fresh_state_does_not_change_routing(parent_engine_on):
+def test_fullpath_fresh_state_does_not_change_routing(parent_engine_on, camp_registration_open):
     """No prior state (Redis flushed in tests) → still skips the menu and
     returns the deterministic Admin registration link (not the engine)."""
     conversation_service.conversations.clear()
@@ -170,7 +176,7 @@ def _camp_info_executor(sender_id="reg-url"):
     )
 
 
-def test_registration_answer_uses_configured_admin_url(monkeypatch):
+def test_registration_answer_uses_configured_admin_url(monkeypatch, camp_registration_open):
     monkeypatch.setattr(
         admin_config_service, "get_camp_facts",
         lambda: {"name": "ბანაკი", "registration_url": _REG_URL, "phone": "558674733"},
@@ -181,7 +187,7 @@ def test_registration_answer_uses_configured_admin_url(monkeypatch):
     assert result["registration_url"] == _REG_URL  # exactly the Admin value
 
 
-def test_registration_answer_does_not_invent_link_when_missing(monkeypatch):
+def test_registration_answer_does_not_invent_link_when_missing(monkeypatch, camp_registration_open):
     # Non-empty camp facts WITHOUT a registration_url → must NOT fall back to
     # camp_2026.yaml's URL and must NOT invent one.
     monkeypatch.setattr(

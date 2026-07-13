@@ -137,6 +137,14 @@ def _reset_conversation_state():
     conversation_service.conversations.clear()
 
 
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        followup_service.admin_config_service,
+        "get_camp_registration_status",
+        lambda: "open",
+    )
+
 @pytest.fixture(autouse=True)
 def _force_agent_enabled(monkeypatch):
     """Default to AGENT_ENABLED=true for every follow-up test. The
@@ -249,7 +257,7 @@ def test_empty_snapshot_returns_empty_list():
     "booked", "declined", "manager_handoff_completed",
     "asked_no_more_messages", "followup_exhausted", "registered",
 ])
-def test_skip_blocked_reasons(send_recorder, blocked_reason):
+def test_skip_blocked_reasons(send_recorder, camp_registration_open, blocked_reason):
     conv = _make_conversation(followup_blocked_reason=blocked_reason)
     conversation_service.conversations[conv.sender_id] = conv
     followup_service.check_and_send_followups()
@@ -258,7 +266,7 @@ def test_skip_blocked_reasons(send_recorder, blocked_reason):
     assert conv.followup_stage == ""
 
 
-def test_skip_when_lead_calendly_booked(send_recorder):
+def test_skip_when_lead_calendly_booked(send_recorder, camp_registration_open):
     conv = _make_conversation(booked=True)
     conversation_service.conversations[conv.sender_id] = conv
     followup_service.check_and_send_followups()
@@ -273,7 +281,7 @@ def test_skip_non_parent_segments(send_recorder, segment):
     assert send_recorder.calls == []
 
 
-def test_skip_when_no_last_bot_message_at(send_recorder):
+def test_skip_when_no_last_bot_message_at(send_recorder, camp_registration_open):
     conv = _make_conversation(last_bot_offset=None)
     conv.last_bot_message_at = ""
     conversation_service.conversations[conv.sender_id] = conv
@@ -289,7 +297,7 @@ def test_skip_when_sender_id_missing(send_recorder):
 
 
 @pytest.mark.parametrize("platform", ["", "unknown", "telegram", "viber"])
-def test_skip_unsupported_platform(send_recorder, platform):
+def test_skip_unsupported_platform(send_recorder, camp_registration_open, platform):
     conv = _make_conversation(platform=platform)
     conversation_service.conversations[conv.sender_id] = conv
     followup_service.check_and_send_followups()
@@ -301,7 +309,7 @@ def test_skip_unsupported_platform(send_recorder, platform):
 # =========================================================================
 
 
-def test_stage_1_not_sent_before_24h(send_recorder):
+def test_stage_1_not_sent_before_24h(send_recorder, camp_registration_open):
     conv = _make_conversation(last_bot_offset=timedelta(hours=23))
     conversation_service.conversations[conv.sender_id] = conv
     followup_service.check_and_send_followups()
@@ -309,7 +317,7 @@ def test_stage_1_not_sent_before_24h(send_recorder):
     assert conv.followup_stage == ""
 
 
-def test_stage_1_sent_at_24h(send_recorder):
+def test_stage_1_sent_at_24h(send_recorder, camp_registration_open):
     conv = _make_conversation(last_bot_offset=timedelta(hours=25))
     conversation_service.conversations[conv.sender_id] = conv
     followup_service.check_and_send_followups()
@@ -317,7 +325,7 @@ def test_stage_1_sent_at_24h(send_recorder):
     assert conv.followup_stage == "first_24h"
 
 
-def test_stage_2_not_sent_before_72h_after_stage_1(send_recorder):
+def test_stage_2_not_sent_before_72h_after_stage_1(send_recorder, camp_registration_open):
     conv = _make_conversation(
         followup_stage="first_24h", last_bot_offset=timedelta(hours=70),
     )
@@ -327,7 +335,7 @@ def test_stage_2_not_sent_before_72h_after_stage_1(send_recorder):
     assert conv.followup_stage == "first_24h"
 
 
-def test_stage_2_sent_at_72h_after_stage_1(send_recorder):
+def test_stage_2_sent_at_72h_after_stage_1(send_recorder, camp_registration_open):
     conv = _make_conversation(
         followup_stage="first_24h", last_bot_offset=timedelta(hours=73),
     )
@@ -337,7 +345,7 @@ def test_stage_2_sent_at_72h_after_stage_1(send_recorder):
     assert conv.followup_stage == "second_3d"
 
 
-def test_stage_3_sent_at_168h_after_stage_2(send_recorder):
+def test_stage_3_sent_at_168h_after_stage_2(send_recorder, camp_registration_open):
     conv = _make_conversation(
         followup_stage="second_3d", last_bot_offset=timedelta(hours=170),
     )
@@ -348,7 +356,7 @@ def test_stage_3_sent_at_168h_after_stage_2(send_recorder):
     assert conv.followup_blocked_reason == "followup_exhausted"
 
 
-def test_no_send_after_stage_3(send_recorder):
+def test_no_send_after_stage_3(send_recorder, camp_registration_open):
     conv = _make_conversation(
         followup_stage="third_7d", last_bot_offset=timedelta(days=30),
     )
@@ -357,7 +365,7 @@ def test_no_send_after_stage_3(send_recorder):
     assert send_recorder.calls == []
 
 
-def test_second_tick_is_idempotent(send_recorder):
+def test_second_tick_is_idempotent(send_recorder, camp_registration_open):
     """Two ticks within the same window must not double-send."""
     conv = _make_conversation(last_bot_offset=timedelta(hours=25))
     conversation_service.conversations[conv.sender_id] = conv
@@ -366,7 +374,7 @@ def test_second_tick_is_idempotent(send_recorder):
     assert len(send_recorder.calls) == 1
 
 
-def test_last_bot_message_at_resets_after_send(send_recorder):
+def test_last_bot_message_at_resets_after_send(send_recorder, camp_registration_open):
     """The brief's "If no followup_sent_at exists, use
     last_bot_message_at consistently and document that follow-up
     sends update it" — verify behaviour."""
@@ -383,7 +391,7 @@ def test_last_bot_message_at_resets_after_send(send_recorder):
 # =========================================================================
 
 
-def test_admin_template_used_when_present(send_recorder, monkeypatch):
+def test_admin_template_used_when_present(send_recorder, monkeypatch, camp_registration_open):
     captured: dict[str, Any] = {}
 
     def fake_render(template_id, context):
@@ -403,7 +411,7 @@ def test_admin_template_used_when_present(send_recorder, monkeypatch):
     assert captured["context"]["name"] == "ნინო"
 
 
-def test_fallback_used_when_admin_template_empty(send_recorder, monkeypatch):
+def test_fallback_used_when_admin_template_empty(send_recorder, monkeypatch, camp_registration_open):
     monkeypatch.setattr(
         followup_service.admin_config_service,
         "render_template",
@@ -418,7 +426,7 @@ def test_fallback_used_when_admin_template_empty(send_recorder, monkeypatch):
     assert "ბანაკთან" in body or "კითხვა" in body
 
 
-def test_render_exception_falls_back_safely(send_recorder, monkeypatch):
+def test_render_exception_falls_back_safely(send_recorder, monkeypatch, camp_registration_open):
     """A template render that raises must not kill the tick."""
     def boom(*_a, **_k):
         raise RuntimeError("YAML broken")
@@ -438,7 +446,7 @@ def test_render_exception_falls_back_safely(send_recorder, monkeypatch):
 # =========================================================================
 
 
-def test_instagram_routes_through_send_message(send_recorder):
+def test_instagram_routes_through_send_message(send_recorder, camp_registration_open):
     conv = _make_conversation(
         platform="instagram", last_bot_offset=timedelta(hours=25),
     )
@@ -448,7 +456,7 @@ def test_instagram_routes_through_send_message(send_recorder):
     assert send_recorder.calls[0]["sender_id"] == conv.sender_id
 
 
-def test_messenger_routes_through_send_message(send_recorder):
+def test_messenger_routes_through_send_message(send_recorder, camp_registration_open):
     conv = _make_conversation(
         platform="messenger", last_bot_offset=timedelta(hours=25),
     )
@@ -514,7 +522,7 @@ def test_kill_switch_skips_comment_followup_tick(monkeypatch):
 # =========================================================================
 
 
-def test_save_to_redis_called_after_send(send_recorder, monkeypatch):
+def test_save_to_redis_called_after_send(send_recorder, monkeypatch, camp_registration_open):
     saved: list[Conversation] = []
 
     def fake_is_enabled():
@@ -537,7 +545,7 @@ def test_save_to_redis_called_after_send(send_recorder, monkeypatch):
     assert saved[0].followup_stage == "first_24h"
 
 
-def test_save_to_redis_skipped_when_disabled(send_recorder, monkeypatch):
+def test_save_to_redis_skipped_when_disabled(send_recorder, monkeypatch, camp_registration_open):
     saved: list[Conversation] = []
     monkeypatch.setattr(
         followup_service.redis_state_service, "is_enabled", lambda: False,
@@ -555,7 +563,7 @@ def test_save_to_redis_skipped_when_disabled(send_recorder, monkeypatch):
     assert saved == []
 
 
-def test_send_failure_still_advances_stage(send_recorder):
+def test_send_failure_still_advances_stage(send_recorder, camp_registration_open):
     """A failed send must NOT trigger an infinite retry loop on the
     next tick. The stage advances; the operator sees the WARN line."""
     send_recorder.return_value = False
@@ -616,7 +624,7 @@ def test_sim_followup_script_imports():
     }
 
 
-def test_one_bad_conversation_does_not_kill_the_tick(send_recorder, monkeypatch):
+def test_one_bad_conversation_does_not_kill_the_tick(send_recorder, monkeypatch, camp_registration_open):
     """If conversation A raises during processing, conversation B
     still gets its follow-up."""
     bad = _make_conversation(sender_id="bad")

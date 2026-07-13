@@ -21,6 +21,8 @@ from app.agent.tools import parent_tool_executor as pte
 from app.flows import parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
+from app.services import admin_config_service
+from app.services.session_key_service import conversation_cache_key
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +35,14 @@ def _reset():
 
 
 @pytest.fixture
-def booking_executor(monkeypatch):
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service, "get_camp_registration_status", lambda: "open",
+    )
+
+
+@pytest.fixture
+def booking_executor(monkeypatch, camp_registration_open):
     """Mock the executor's book_consultation so a complete booking 'succeeds'
     without touching Calendar/Sheets/Meta, capturing the args it was called
     with so tests can assert the stored name/phone are used."""
@@ -43,7 +52,7 @@ def booking_executor(monkeypatch):
         captured["tool"] = tool
         captured["args"] = dict(args)
         if tool == "book_consultation":
-            pte.book_consultation_success_for_conversation[self.sender_id] = True
+            pte.book_consultation_success_for_conversation[self.cache_key] = True
             self.lead.calendly_booked = True
             self.lead.booked_datetime_iso = args.get("datetime_iso", "")
             self.conversation.state = "DONE"
@@ -63,8 +72,9 @@ def _conv(sid="slot", *, name="", phone="", child_age=""):
     return conv
 
 
-def _offer(sid, iso="2026-06-26T12:00:00", display="26 ივნისი 12:00"):
-    pte._last_slots_by_sender[sid] = [{"slot_id": 1, "datetime_iso": iso, "display": display}]
+def _offer(sid, iso="2027-06-26T12:00:00", display="26 ივნისი 12:00"):
+    key = conversation_cache_key(platform="instagram", sender_id=sid)
+    pte._last_slots_by_sender[key] = [{"slot_id": 1, "datetime_iso": iso, "display": display}]
 
 
 def _no_name_phone_reask(out: str) -> bool:
@@ -76,7 +86,7 @@ def _no_name_phone_reask(out: str) -> bool:
 def test_slot_helper_merges_lead_and_pending():
     conv = _conv(name="ნიკოლოზი", phone="595999733", child_age="14")
     conv.pending_booking = {
-        "requested_datetime_iso": "2026-06-26T12:00:00",
+        "requested_datetime_iso": "2027-06-26T12:00:00",
         "requested_date_text": "26 ივნისი", "requested_time_text": "12:00",
         "user_confirmed_datetime": True,
     }
@@ -124,7 +134,7 @@ def test_1_age_and_time_together_books_without_reask(booking_executor):
 def test_2_confirmation_not_stored_as_name(booking_executor):
     conv = _conv("t2", name="ნიკოლოზი", phone="595999733", child_age="14")
     conv.pending_booking = {
-        "requested_datetime_iso": "2026-06-26T12:00:00",
+        "requested_datetime_iso": "2027-06-26T12:00:00",
         "requested_date_text": "26 ივნისი", "requested_time_text": "12:00",
         "user_confirmed_datetime": True, "source": "user_selected_slot",
     }
@@ -159,7 +169,7 @@ def test_3_all_info_one_message(booking_executor):
 def test_4_only_time_given_books(booking_executor):
     conv = _conv("t4", name="ნიკოლოზი", phone="595999733", child_age="14")
     _offer("t4")
-    out = parent_flow._maybe_commit_pending_booking_engine(conv, "26 ივნისი 12:00 მაწყობს")
+    out = parent_flow._maybe_commit_pending_booking_engine(conv, "12:00 მაწყობს")
     assert _no_name_phone_reask(out)
     assert conv.lead.calendly_booked is True
     assert booking_executor["args"]["name"] == "ნიკოლოზი"
@@ -169,7 +179,7 @@ def test_4_only_time_given_books(booking_executor):
 def test_5_only_phone_missing_asks_phone(booking_executor):
     conv = _conv("t5", name="ნიკოლოზი", phone="", child_age="14")
     _offer("t5")
-    out = parent_flow._maybe_commit_pending_booking_engine(conv, "26 ივნისი 12:00 მაწყობს")
+    out = parent_flow._maybe_commit_pending_booking_engine(conv, "12:00 მაწყობს")
     assert out is not None
     assert "ნომერ" in out                                # asks for the number
     assert "მომწერეთ თქვენი სახელი და" not in out        # not name+phone
@@ -180,7 +190,7 @@ def test_5_only_phone_missing_asks_phone(booking_executor):
 def test_6_only_name_missing_asks_name(booking_executor):
     conv = _conv("t6", name="", phone="595999733", child_age="14")
     _offer("t6")
-    out = parent_flow._maybe_commit_pending_booking_engine(conv, "26 ივნისი 12:00 მაწყობს")
+    out = parent_flow._maybe_commit_pending_booking_engine(conv, "12:00 მაწყობს")
     assert out is not None
     assert "სახელ" in out                                # asks for the name
     assert conv.lead.calendly_booked is False
@@ -202,7 +212,7 @@ def test_question_with_pending_not_hijacked(booking_executor):
     # contact ask — only one slot missing but the turn did not advance booking.
     conv = _conv("tq", name="ნიკოლოზი", phone="", child_age="14")
     conv.pending_booking = {
-        "requested_datetime_iso": "2026-06-26T12:00:00",
+        "requested_datetime_iso": "2027-06-26T12:00:00",
         "requested_date_text": "26 ივნისი", "requested_time_text": "12:00",
         "user_confirmed_datetime": True,
     }

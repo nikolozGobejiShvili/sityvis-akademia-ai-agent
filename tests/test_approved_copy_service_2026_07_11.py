@@ -24,6 +24,14 @@ def _reset_approved_copy_cache():
     approved_copy_service.reset_cache()
 
 
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service, "get_camp_registration_status", lambda: "open",
+    )
+
+
+
 def _read_yaml() -> dict[str, Any]:
     return yaml.safe_load(
         approved_copy_service.APPROVED_COPY_PATH.read_text(encoding="utf-8")
@@ -488,7 +496,7 @@ def test_parent_flow_transport_approved_copy_failure_keeps_runtime_output(monkey
     assert parent_flow._transport_answer(city_ablative, pickup=False) == expected_city
 
 
-def test_parent_flow_registration_url_first_routes_through_approved_copy_service(monkeypatch):
+def test_parent_flow_registration_url_first_routes_through_approved_copy_service(monkeypatch, camp_registration_open):
     expected_url = _registration_url()
     approved_response = "approved registration url-first response"
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -503,7 +511,7 @@ def test_parent_flow_registration_url_first_routes_through_approved_copy_service
     assert calls == [("registration.url_first", {"registration_url": expected_url})]
 
 
-def test_parent_flow_registration_url_first_approved_copy_failure_keeps_runtime_output(monkeypatch):
+def test_parent_flow_registration_url_first_approved_copy_failure_keeps_runtime_output(monkeypatch, camp_registration_open):
     expected_response = parent_flow._render_camp_registration_answer()
     expected_url = _registration_url()
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -518,7 +526,7 @@ def test_parent_flow_registration_url_first_approved_copy_failure_keeps_runtime_
     assert calls == [("registration.url_first", {"registration_url": expected_url})]
 
 
-def test_camp_registration_copy_preserves_both_active_variants():
+def test_camp_registration_copy_preserves_both_active_variants(camp_registration_open):
     assert _render(
         "registration.url_first",
         registration_url=_registration_url(),
@@ -533,7 +541,7 @@ def test_camp_registration_copy_preserves_both_active_variants():
     ) == parent_flow._render_camp_fast_track_registration_answer()
 
 
-def test_parent_flow_fast_track_registration_routes_through_approved_copy_service(monkeypatch):
+def test_parent_flow_fast_track_registration_routes_through_approved_copy_service(monkeypatch, camp_registration_open):
     expected_url = _fast_track_registration_url()
     approved_response = "approved parent fast-track registration response"
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -548,7 +556,7 @@ def test_parent_flow_fast_track_registration_routes_through_approved_copy_servic
     assert calls == [("registration.fast_track", {"registration_url": expected_url})]
 
 
-def test_parent_flow_fast_track_registration_approved_copy_failure_keeps_runtime_output(monkeypatch):
+def test_parent_flow_fast_track_registration_approved_copy_failure_keeps_runtime_output(monkeypatch, camp_registration_open):
     expected_response = parent_flow.PARENT_BOOK_FAST_TRACK.strip()
     expected_url = _fast_track_registration_url()
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -563,7 +571,7 @@ def test_parent_flow_fast_track_registration_approved_copy_failure_keeps_runtime
     assert calls == [("registration.fast_track", {"registration_url": expected_url})]
 
 
-def test_parent_flow_start_book_intent_uses_fast_track_and_advances_state(monkeypatch):
+def test_parent_flow_start_book_intent_uses_fast_track_and_advances_state(monkeypatch, camp_registration_open):
     conversation = Conversation(
         sender_id="approved-copy-fast-track",
         platform="instagram",
@@ -591,7 +599,7 @@ def test_parent_flow_start_book_intent_uses_fast_track_and_advances_state(monkey
     assert conversation.lead.calendly_booked is False
 
 
-def test_parent_router_registration_consultation_first_routes_through_approved_copy_service(monkeypatch):
+def test_parent_router_registration_consultation_first_routes_through_approved_copy_service(monkeypatch, camp_registration_open):
     expected_url = _router_registration_url()
     approved_response = "approved router registration consultation-first response"
     calls: list[tuple[str, str | None, dict[str, Any]]] = []
@@ -616,7 +624,7 @@ def test_parent_router_registration_consultation_first_routes_through_approved_c
     ]
 
 
-def test_parent_router_registration_consultation_first_approved_copy_failure_keeps_runtime_output(monkeypatch):
+def test_parent_router_registration_consultation_first_approved_copy_failure_keeps_runtime_output(monkeypatch, camp_registration_open):
     expected_response = parent_turn_router._build_premium_registration_answer()
     expected_url = _router_registration_url()
     calls: list[tuple[str, str | None, dict[str, Any]]] = []

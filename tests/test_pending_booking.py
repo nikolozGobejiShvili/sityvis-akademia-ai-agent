@@ -29,7 +29,7 @@ import pytest
 from app.flows import parent_flow, parent_turn_router
 from app.models.conversation import Conversation
 from app.models.lead import Lead
-from app.services import conversation_service
+from app.services import admin_config_service, conversation_service
 
 
 # Robotic-phrase regression set (PART 8 + style-guide cross-check).
@@ -90,7 +90,14 @@ def mock_no_meta_profile(monkeypatch):
 
 
 @pytest.fixture
-def driver(mock_messenger_profile, mock_start_intent_greeting):
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service, "get_camp_registration_status", lambda: "open",
+    )
+
+
+@pytest.fixture
+def driver(mock_messenger_profile, mock_start_intent_greeting, camp_registration_open):
     def _drive(sender_id: str, messages: list[str]) -> list[str]:
         responses: list[str] = []
         for msg in messages:
@@ -275,7 +282,7 @@ def test_4_phone_with_country_code_continues_pending(driver, monkeypatch):
 
 
 def test_5_name_plus_phone_in_one_message_completes_booking(
-    mock_no_meta_profile, mock_start_intent_greeting, monkeypatch,
+    mock_no_meta_profile, mock_start_intent_greeting, monkeypatch, camp_registration_open,
 ):
     from app.services import calendar_service, sheets_service, notification_service
 
@@ -348,7 +355,7 @@ def test_6_invalid_phone_during_pending_asks_for_valid(driver):
 
 
 def test_7_phone_first_then_asks_for_name(
-    mock_no_meta_profile, mock_start_intent_greeting, monkeypatch,
+    mock_no_meta_profile, mock_start_intent_greeting, monkeypatch, camp_registration_open,
 ):
     sender = "pb-7"
     # Skip mocking calendar — we expect the booking attempt to NOT fire
@@ -384,7 +391,7 @@ def test_7_phone_first_then_asks_for_name(
 
 
 def test_8_name_after_phone_completes_pending_booking(
-    mock_no_meta_profile, mock_start_intent_greeting, monkeypatch,
+    mock_no_meta_profile, mock_start_intent_greeting, monkeypatch, camp_registration_open,
 ):
     from app.services import calendar_service, sheets_service, notification_service
 
