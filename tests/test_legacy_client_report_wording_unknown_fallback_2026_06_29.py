@@ -218,13 +218,17 @@ def test_13b_greeting_intro_gets_one_blue_heart(engine_on, emoji_on, monkeypatch
 
 
 def test_14_price_payment_wording_in_prompt():
-    # Client follow-up hotfix (2026-06-29) — updated payment wording; simple
-    # price and payment are separated (simple price must not carry payment terms).
+    # Current approved split: direct price asks get the full block, while pure
+    # payment-process asks stay price-free.
     prompt = parent_llm_engine._build_system_prompt()
+    assert "უპასუხე *სრული ფასის ბლოკით*" in prompt
+    assert "გადახდის გადანაწილება 6 თვემდე TBC-ისა და საქართველოს ბანკის საშუალებით" in prompt
+    assert "10%-იანი ფასდაკლება" in prompt
+    assert "pure გადახდის პროცესის კითხვაზე" in prompt
+    assert "*არ* დაწერო 2150" in prompt
+    assert "*არ* დააბრუნო სრული ფასის ბლოკი" in prompt
     assert ("ბანაკის ჯავშნის საფასურის გადახდა ხდება წინასწარ, ხოლო სრული თანხის — "
             "ხელშეკრულებით გათვალისწინებულ დროში.") in prompt
-    # The simple-price rule forbids payment terms in a simple price answer.
-    assert "მარტივ ფასის" in prompt
 
 
 def test_14b_price_answer_has_no_blue_heart(engine_on, emoji_on):
@@ -470,16 +474,21 @@ def test_hf7_intro_wording_output(engine_on, monkeypatch):
     assert "თვითგამოხქტვაში" not in out
 
 
-# 8. Simple price answer — no payment / installment / bank terms.
-def test_hf8_simple_price_no_payment(engine_on, emoji_on, monkeypatch):
-    monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _PRICE_WITH_PAYMENT)
+# 8. Price amount answer — deterministic full block, no heart.
+def test_hf8_price_amount_returns_full_price_block_without_llm_or_heart(engine_on, emoji_on, monkeypatch):
+    monkeypatch.setattr(
+        parent_flow,
+        "_run_llm_engine_safely",
+        lambda c, m: pytest.fail("LLM must not run for a camp price amount question"),
+    )
     out = parent_flow.handle(_conv("hf8"), "ბანაკის ფასი რა არის?")
     assert "2150" in out
-    for w in ("ტრანსპორტი", "განთავსება", "კვება", "სრული პროგრამა"):
+    for w in ("ტრანსპორტ", "განთავსება", "კვება", "სრული პროგრამა"):
+        assert w in out
+    for w in ("გადანაწილება", "TBC", "საქართველოს ბანკ", "10%"):
         assert w in out
     assert "თუ გსურთ, კონსულტაციაზე ჩაგწერთ, სადაც დეტალებს მენეჯერი გაგაცნობთ." in out
-    for bad in ("TBC", "საქართველოს ბანკ", "Bank of Georgia", "განვადებ", "წინასწარ",
-                "ჯავშნის საფასურ", "ხელშეკრულებ"):
+    for bad in ("ჯავშნის საფასურ", "ხელშეკრულებ", "რა გაინტერესებთ —", "ზრდასრულთა ღონისძიებ"):
         assert bad not in out
     assert _no_hearts(out)
 
