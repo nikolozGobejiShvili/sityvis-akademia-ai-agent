@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -154,6 +154,83 @@ def test_camp_manager_unknown_detail_copy_matches_current_runtime_functions():
 
     assert rendered == parent_flow._UNKNOWN_DETAIL_ENDING
     assert rendered == camp_topic_facts._unknown_ending()
+
+
+def test_camp_unknown_detail_ending_routes_through_approved_copy_service(monkeypatch):
+    calls: list[tuple[str, str | None, dict[str, Any]]] = []
+    original = approved_copy_service.get_approved_copy
+    manager_phone = "MANAGER_PHONE_TEST"
+
+    def spy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        calls.append((program, key_path, dict(kwargs)))
+        return original(program, key_path, **kwargs)
+
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: manager_phone)
+    monkeypatch.setattr(approved_copy_service, "get_approved_copy", spy)
+
+    assert camp_topic_facts._unknown_ending().endswith(manager_phone)
+    assert calls == [
+        (
+            "camp",
+            "manager.unknown_detail_ending",
+            {"manager_phone": manager_phone},
+        ),
+    ]
+
+
+def test_camp_unknown_detail_approved_copy_failure_keeps_yaml_fallback(monkeypatch):
+    fallback = str(camp_topic_facts._load_data().get("camp_unknown_ending") or "").strip()
+    manager_phone = "MANAGER_PHONE_TEST"
+    calls: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    def missing_copy(program: str, key_path: str | None = None, **kwargs: Any) -> str:
+        calls.append((program, key_path, dict(kwargs)))
+        raise approved_copy_service.ApprovedCopyNotFound("missing approved copy")
+
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: manager_phone)
+    monkeypatch.setattr(approved_copy_service, "get_approved_copy", missing_copy)
+
+    assert camp_topic_facts._unknown_ending() == fallback
+    assert calls == [
+        (
+            "camp",
+            "manager.unknown_detail_ending",
+            {"manager_phone": manager_phone},
+        ),
+    ]
+
+
+def test_camp_unknown_detail_runtime_fallback_shapes_stay_topic_prefixed():
+    ending = camp_topic_facts._unknown_ending()
+
+    assert camp_topic_facts.resolve_operational(
+        "ოთახში რამდენი ბავშვი იქნება?",
+    ).startswith("რაც შეეხება ოთახებში ბავშვების განაწილებას, ")
+    assert camp_topic_facts.resolve_operational(
+        "ოთახში რამდენი ბავშვი იქნება?",
+    ).endswith(ending)
+    assert camp_topic_facts.resolve_operational(
+        "რამდენი ადგილი დარჩა?",
+    ).startswith("რაც შეეხება კონკრეტულ ნაკადზე დარჩენილ ადგილებს, ")
+    assert camp_topic_facts.resolve_operational(
+        "რამდენი ადგილი დარჩა?",
+    ).endswith(ending)
+
+    _general, menu_fallback = camp_topic_facts.resolve_exact_detail(
+        "ზუსტად რა მენიუ ექნებათ?",
+    )
+    assert menu_fallback.startswith("რაც შეეხება ზუსტ მენიუს, ")
+    assert menu_fallback.endswith(ending)
+
+    _general, staff_fallback = camp_topic_facts.resolve_exact_detail(
+        "რამდენი ლიდერი იქნება?",
+    )
+    assert staff_fallback.startswith("რაც შეეხება სტაფის წევრების რაოდენობას, ")
+    assert staff_fallback.endswith(ending)
+
+    direct_call = camp_topic_facts.direct_call_fallback()
+    assert direct_call.startswith("რაც შეეხება ბავშვთან პირდაპირი კონტაქტის წესებს, ")
+    assert direct_call.endswith(ending)
 
 
 def test_camp_transport_copy_matches_current_runtime_functions():

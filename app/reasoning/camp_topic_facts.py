@@ -1,4 +1,4 @@
-"""Deterministic camp-TOPIC classifier + focused answer renderer (2026-06-28).
+﻿"""Deterministic camp-TOPIC classifier + focused answer renderer (2026-06-28).
 
 Live need: a camp-related question („უსაფრთხოება როგორ არის?", „კვება შედის?",
 „ბავშვი სულ ტელეფონშია") was answered with the whole camp description. This
@@ -237,7 +237,21 @@ def _is_parent_child_contact(low: str) -> bool:
 #    2026-06-29). Names the exact topic, then the EXACT approved ending — never
 #    invents, never adds an emoji, „გაგაცნობთ" verbatim, manager phone always. ──
 def _unknown_ending() -> str:
-    return str(_load_data().get("camp_unknown_ending") or "").strip()
+    fallback = str(_load_data().get("camp_unknown_ending") or "").strip()
+    try:
+        from app.services import admin_config_service, approved_copy_service
+
+        phone = (admin_config_service.get_manager_phone() or "").strip()
+        if not phone:
+            return fallback
+        rendered = approved_copy_service.get_approved_copy(
+            "camp",
+            "manager.unknown_detail_ending",
+            manager_phone=phone,
+        )
+        return rendered or fallback
+    except Exception:  # pragma: no cover - defensive fallback keeps current copy
+        return fallback
 
 
 def _fallback_for(topic_phrase: str) -> str:
