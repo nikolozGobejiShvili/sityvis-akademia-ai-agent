@@ -172,7 +172,7 @@ def test_9_consultation_offer_no_heart(engine_on):
 def test_10_booking_confirmation_one_heart(engine_on):
     sid = "e10"
     conv = _conv(sid)
-    pte.book_consultation_success_for_conversation[sid] = True
+    pte.book_consultation_success_for_conversation[parent_flow.conversation_cache_key(conv)] = True
     confirmation = (
         "კონსულტაცია 21 ივნისს, 14:00 ჩაგინიშნეთ. მენეჯერი დაგიკავშირდებათ. "
         + parent_flow._PRIVACY_NOTICE
