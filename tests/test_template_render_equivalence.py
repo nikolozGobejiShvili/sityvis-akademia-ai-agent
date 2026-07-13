@@ -32,6 +32,23 @@ ALLOWED_LOCATION_DIFF: dict[str, tuple[str, str]] = {
 }
 
 
+# ST-2 adult no-active copy alignment (19698cb). Keep this as an exact
+# old-to-new substitution so unrelated drift inside the same key still fails.
+ALLOWED_EXACT_TEMPLATE_DIFFS: dict[str, tuple[str, str]] = {
+    "adult/no_events": (
+        "ამ ეტაპზე ღონისძიებების განრიგი ზუსტდება.",
+        "ამ ეტაპზე აქტიური ღონისძიება სიაში არ მაქვს. თუ გსურთ, მენეჯერთან დაგაკავშირებთ.",
+    ),
+}
+
+ALLOWED_EXACT_PROMPT_DIFFS: dict[str, tuple[str, str]] = {
+    "system_adult": (
+        '"ამ ეტაპზე ღონისძიებების განრიგი ზუსტდება. როგორც კი დადასტურდება, სიამოვნებით გაგიზიარებთ თარიღებსა და თემებს."',
+        '"ამ ეტაპზე აქტიური ღონისძიება სიაში არ მაქვს. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."',
+    ),
+}
+
+
 # Owner-requested intentional rewrites in the P2 task — these templates
 # were rewritten in full (not by substring patch) to remove the
 # problem-assumption framing flagged in the live test. Any change to a
@@ -97,6 +114,19 @@ ALLOWED_FULL_PROMPT_REWRITES: set[str] = {
 }
 
 
+def _is_exact_substitution(
+    before: str,
+    after: str,
+    old: str,
+    new: str,
+) -> bool:
+    return (
+        before.count(old) == 1
+        and after.count(new) == 1
+        and before.replace(old, new, 1) == after
+    )
+
+
 @pytest.fixture(scope="module")
 def before_snapshot() -> dict:
     if not BEFORE_PATH.exists():
@@ -119,6 +149,7 @@ def test_all_templates_render_identical_except_allowed_location_correction(
     reset_cache()
     diffs: list[str] = []
     allowed_seen: list[str] = []
+    exact_seen: list[str] = []
 
     for key, before in before_snapshot["templates"].items():
         group, name = key.split("/", 1)
@@ -129,6 +160,11 @@ def test_all_templates_render_identical_except_allowed_location_correction(
             old, new = ALLOWED_LOCATION_DIFF[key]
             if before.replace(old, new) == after:
                 allowed_seen.append(key)
+                continue
+        if key in ALLOWED_EXACT_TEMPLATE_DIFFS:
+            old, new = ALLOWED_EXACT_TEMPLATE_DIFFS[key]
+            if _is_exact_substitution(before, after, old, new):
+                exact_seen.append(key)
                 continue
         if key in ALLOWED_FULL_REWRITES:
             # P2 owner-requested neutral rewrite. Just record that we
@@ -150,6 +186,11 @@ def test_all_templates_render_identical_except_allowed_location_correction(
         f"Expected these Phase 3 location corrections to still apply but "
         f"they were not seen as diffs: {sorted(missing_location)}"
     )
+    missing_exact = set(ALLOWED_EXACT_TEMPLATE_DIFFS) - set(exact_seen)
+    assert not missing_exact, (
+        f"Expected these exact template substitutions to still apply but "
+        f"they were not seen as diffs: {sorted(missing_exact)}"
+    )
 
 
 def test_all_prompts_render_identical(before_snapshot: dict) -> None:
@@ -157,10 +198,16 @@ def test_all_prompts_render_identical(before_snapshot: dict) -> None:
 
     reset_cache()
     diffs: list[str] = []
+    exact_seen: list[str] = []
     for name, before in before_snapshot["prompts"].items():
         after = load_prompt(name)
         if before == after:
             continue
+        if name in ALLOWED_EXACT_PROMPT_DIFFS:
+            old, new = ALLOWED_EXACT_PROMPT_DIFFS[name]
+            if _is_exact_substitution(before, after, old, new):
+                exact_seen.append(name)
+                continue
         if name in ALLOWED_FULL_PROMPT_REWRITES:
             # Owner-approved expansion; skip the byte-equivalence check.
             # The wording-rule + integration tests (see
@@ -171,6 +218,11 @@ def test_all_prompts_render_identical(before_snapshot: dict) -> None:
             f"  {name}: before len={len(before)} after len={len(after)}"
         )
     assert not diffs, "Prompt diffs found:\n" + "\n".join(diffs)
+    missing_exact = set(ALLOWED_EXACT_PROMPT_DIFFS) - set(exact_seen)
+    assert not missing_exact, (
+        f"Expected these exact prompt substitutions to still apply but "
+        f"they were not seen as diffs: {sorted(missing_exact)}"
+    )
 
 
 def test_calendar_constants_unchanged(before_snapshot: dict) -> None:
