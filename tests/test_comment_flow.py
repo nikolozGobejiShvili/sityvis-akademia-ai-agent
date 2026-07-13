@@ -19,7 +19,7 @@ import pytest
 
 import app.config as config_module
 from app.routes import webhook
-from app.services import comment_service, conversation_service
+from app.services import admin_config_service, comment_service, conversation_service
 
 
 # -- helpers --------------------------------------------------------------
@@ -218,7 +218,8 @@ def test_determine_segment_normalises_env_with_whitespace(monkeypatch):
 
 def _run_handle_comment(monkeypatch, *, intent="INTERESTED",
                         segment="PARENT", caption="#banaki",
-                        comment_text="მაინტერესებს"):
+                        comment_text="მაინტერესებს",
+                        adult_events: list[dict[str, Any]] | None = None):
     """Wire common mocks and invoke `handle_comment`."""
     async def _intent(_text):
         return intent
@@ -226,16 +227,11 @@ def _run_handle_comment(monkeypatch, *, intent="INTERESTED",
     monkeypatch.setattr(comment_service, "detect_comment_intent", _intent)
     _patch_sheets(monkeypatch)
     sent = _patch_messenger(monkeypatch)
-    # Generic Adult Event Comment Patch (2026-06-09).
-    # The new `_build_active_adult_events_list_dm` helper reads admin
-    # config from disk; the legacy comment-flow tests under this
-    # module exercise the older `settings.EVENTS`-driven fallback and
-    # do not stub admin config. Force the admin-active-events lookup
-    # to return [] so the new active-events list never takes
-    # precedence over the legacy fallback under test here.
+    # Adult event comment DMs are now sourced from admin_config. Keep
+    # tests deterministic by supplying the active-event list explicitly.
     monkeypatch.setattr(
         comment_service.admin_config_service,
-        "get_active_adult_events", lambda *a, **kw: [],
+        "get_active_adult_events", lambda *a, **kw: list(adult_events or []),
     )
     client = _RecordingAsyncClient(
         get_response=_FakeAsyncResponse(payload={"caption": caption}),
@@ -424,59 +420,64 @@ def test_parent_first_contact_dm_carries_camp_facts(monkeypatch):
 # =========================================================================
 
 
+
 def test_adult_first_contact_dm_with_no_events(monkeypatch):
-    """ADULT segment + empty EVENTS → friendly no-events DM (PATCH 3)."""
+    """ADULT segment + no active admin events -> canonical no-active DM."""
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=[],
-        ADULT_HASHTAGS=["event", "sagamo", "ღონისძიება", "საღამო"],
-        EVENTS="",
+        ADULT_HASHTAGS=["event", "sagamo"],
+        EVENTS="legacy settings event should be ignored",
         ENABLE_PUBLIC_COMMENT_REPLY=False,
     )
+    monkeypatch.setattr(
+        comment_service,
+        "_parse_events_blocks",
+        lambda: pytest.fail("legacy settings.EVENTS parser must not own adult DMs"),
+    )
     _client, sent = _run_handle_comment(
-        monkeypatch, segment="ADULT", caption="#ღონისძიება",
+        monkeypatch, segment="ADULT", caption="#event",
+        adult_events=[],
     )
     assert len(sent) == 1
+    assert sent[0]["text"] == admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
     assert sent[0]["text"] == comment_service.ADULT_NO_EVENTS_DM
-    # The PATCH 3 text greets and explains schedule TBD.
-    assert "მოხარულები ვართ" in sent[0]["text"]
-    assert "მომავალში" in sent[0]["text"]
 
 
 def test_adult_first_contact_dm_with_events(monkeypatch):
-    """ADULT segment + EVENTS populated → rich DM listing events."""
-    events = (
-        "=== EVENT 1 ===\n"
-        "სახელი: პოეზიის საღამო\n"
-        "თარიღი: 15 მაისი\n"
-        "დრო: 20:00\n"
-        "ლოკაცია: Rooms Tbilisi\n"
-        "ფასი: 120\n"
-    )
+    """ADULT segment + active admin event -> rich DM listing events."""
+    events = [{
+        "id": "poetry",
+        "title": "Poetry Evening",
+        "date_text": "15 May 20:00",
+        "location": "Rooms Tbilisi",
+        "price_text": "120",
+        "reservation_url": "https://example.com/poetry",
+    }]
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=[],
-        ADULT_HASHTAGS=["event", "ღონისძიება"],
-        EVENTS=events,
+        ADULT_HASHTAGS=["event"],
+        EVENTS="legacy settings event should be ignored",
         ENABLE_PUBLIC_COMMENT_REPLY=False,
     )
+    monkeypatch.setattr(
+        comment_service,
+        "_parse_events_blocks",
+        lambda: pytest.fail("legacy settings.EVENTS parser must not own adult DMs"),
+    )
     _client, sent = _run_handle_comment(
-        monkeypatch, segment="ADULT", caption="#ღონისძიება",
+        monkeypatch, segment="ADULT", caption="#event",
+        adult_events=events,
     )
     assert len(sent) == 1
     text = sent[0]["text"]
-    # Not the fallback.
     assert text != comment_service.ADULT_NO_EVENTS_DM
-    # Event facts present.
-    assert "პოეზიის საღამო" in text
-    assert "15 მაისი" in text
+    assert "Poetry Evening" in text
+    assert "15 May 20:00" in text
     assert "Rooms Tbilisi" in text
     assert "120" in text
-    # PATCH 3 emoji markers.
-    assert "📅" in text
-    assert "📍" in text
-    assert "💰" in text
-
+    assert "https://example.com/poetry" in text
 
 def test_has_adult_events_helper(monkeypatch):
     """PATCH 3 — helper now requires a populated `სახელი:` value, not
@@ -960,33 +961,38 @@ def test_patch3_parent_rich_dm_builder_fallback_when_facts_missing(monkeypatch):
 # -- PATCH 3.C — ADULT rich private reply --------------------------------
 
 
+
 def test_patch3_adult_rich_dm_lists_event_facts(monkeypatch):
-    events = (
-        "=== EVENT 1 ===\n"
-        "სახელი: კამერული მუსიკის საღამო\n"
-        "თარიღი: 20 ივნისი\n"
-        "დრო: 19:30\n"
-        "ლოკაცია: Stamba Lounge\n"
-        "ფასი: 150\n"
-    )
+    events = [{
+        "id": "chamber",
+        "title": "Chamber Music Evening",
+        "date_text": "20 June 19:30",
+        "location": "Stamba Lounge",
+        "price_text": "150",
+        "reservation_url": "https://example.com/chamber",
+    }]
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=[],
-        ADULT_HASHTAGS=["ღონისძიება"],
-        EVENTS=events,
+        ADULT_HASHTAGS=["event"],
+        EVENTS="legacy settings event should be ignored",
         ENABLE_PUBLIC_COMMENT_REPLY=False,
     )
+    monkeypatch.setattr(
+        comment_service,
+        "_parse_events_blocks",
+        lambda: pytest.fail("legacy settings.EVENTS parser must not own adult DMs"),
+    )
     _client, sent = _run_handle_comment(
-        monkeypatch, segment="ADULT", caption="#ღონისძიება",
+        monkeypatch, segment="ADULT", caption="#event",
+        adult_events=events,
     )
     text = sent[0]["text"]
-    assert "კამერული მუსიკის საღამო" in text
-    assert "20 ივნისი" in text
-    assert "19:30" in text
+    assert "Chamber Music Evening" in text
+    assert "20 June 19:30" in text
     assert "Stamba Lounge" in text
     assert "150" in text
-    assert "💰" in text and "📅" in text and "📍" in text
-
+    assert "https://example.com/chamber" in text
 
 def test_patch3_adult_rich_dm_uses_no_events_fallback(monkeypatch):
     """Even with the new builder, an empty events config still routes
@@ -1025,37 +1031,39 @@ def test_patch3_adult_rich_dm_with_only_placeholder_blocks(monkeypatch):
     assert sent[0]["text"] == comment_service.ADULT_NO_EVENTS_DM
 
 
-def test_patch3_adult_rich_dm_caps_at_three_events(monkeypatch):
-    """The DM lists at most three events even when more are
-    configured — the comment-origin first contact stays scannable."""
-    events_parts = []
-    for i in range(1, 6):
-        events_parts.append(
-            f"=== EVENT {i} ===\n"
-            f"სახელი: საღამო #{i}\n"
-            "თარიღი: 1 ივნისი\n"
-            "ლოკაცია: Hall\n"
-            "ფასი: 50\n"
-        )
-    events = "\n".join(events_parts)
+
+def test_patch3_adult_rich_dm_caps_at_active_event_list_max(monkeypatch):
+    """The DM lists at most the configured active-event cap."""
+    events = [
+        {
+            "id": f"event_{i}",
+            "title": f"Evening #{i}",
+            "date_text": "1 June",
+            "location": "Hall",
+            "price_text": "50",
+        }
+        for i in range(1, comment_service._ACTIVE_EVENT_LIST_MAX + 2)
+    ]
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=[],
-        ADULT_HASHTAGS=["ღონისძიება"],
-        EVENTS=events,
+        ADULT_HASHTAGS=["event"],
+        EVENTS="legacy settings event should be ignored",
         ENABLE_PUBLIC_COMMENT_REPLY=False,
     )
+    monkeypatch.setattr(
+        comment_service,
+        "_parse_events_blocks",
+        lambda: pytest.fail("legacy settings.EVENTS parser must not own adult DMs"),
+    )
     _client, sent = _run_handle_comment(
-        monkeypatch, segment="ADULT", caption="#ღონისძიება",
+        monkeypatch, segment="ADULT", caption="#event",
+        adult_events=events,
     )
     text = sent[0]["text"]
-    # First three present.
-    for i in (1, 2, 3):
-        assert f"საღამო #{i}" in text
-    # Fourth NOT listed.
-    assert "საღამო #4" not in text
-    assert "საღამო #5" not in text
-
+    for i in range(1, comment_service._ACTIVE_EVENT_LIST_MAX + 1):
+        assert f"Evening #{i}" in text
+    assert f"Evening #{comment_service._ACTIVE_EVENT_LIST_MAX + 1}" not in text
 
 def test_patch3_adult_rich_dm_handles_parser_exception(monkeypatch):
     """If _parse_events_blocks raises, the builder still returns the
@@ -1140,12 +1148,10 @@ def test_patch3_parent_fallback_constant_uses_new_text():
     assert "ბანაკის შესახებ დეტალებს" not in text
 
 
-def test_patch3_adult_no_events_fallback_constant_uses_new_text():
+
+def test_patch3_adult_no_events_fallback_constant_uses_admin_config_text():
     text = comment_service.ADULT_NO_EVENTS_DM
-    assert "მოხარულები ვართ" in text
-    assert "მომავალში" in text
-    # The PATCH 1 "მენეჯერთან დაგაკავშირებთ" suffix is gone.
-    assert "მენეჯერთან დაგაკავშირებთ" not in text
+    assert text == admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
 
 
 # =========================================================================

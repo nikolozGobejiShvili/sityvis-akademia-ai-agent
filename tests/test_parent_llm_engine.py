@@ -46,6 +46,7 @@ from app.flows import parent_flow, parent_turn_router
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.services import conversation_service
+from app.services.session_key_service import conversation_cache_key
 
 
 # -- fixtures --------------------------------------------------------------
@@ -684,37 +685,38 @@ def test_decline_does_not_book_or_notify(
 # =========================================================================
 
 
+
 def test_history_is_forwarded(enable_engine, monkeypatch, fresh_conversation):
     from app.services import messenger_service, openai_service
 
     monkeypatch.setattr(messenger_service, "get_user_profile", lambda sid, plat: {})
     fresh_conversation.history = [
-        {"role": "user", "content": "გამარჯობა"},
-        {"role": "assistant", "content": "გამარჯობა! რას გაინტერესებთ?"},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hello, what can I clarify?"},
     ]
 
     seen: list[list[dict]] = []
 
     def _chat(**kwargs):
         seen.append(kwargs.get("messages") or [])
-        return _mk_response(content="გასაგებია, ვუპასუხო კითხვებზე.")
+        return _mk_response(content="I can answer that.")
 
     monkeypatch.setattr(openai_service, "chat_with_tools", _chat)
 
-    parent_flow.handle(fresh_conversation, "ფასი?")
+    parent_flow.handle(fresh_conversation, "more details please")
 
     assert seen, "chat_with_tools should have been called at least once"
     messages = seen[0]
     user_contents = [m.get("content") for m in messages if m.get("role") == "user"]
     assistant_contents = [m.get("content") for m in messages if m.get("role") == "assistant"]
-    assert "გამარჯობა" in user_contents
-    assert any("გამარჯობა" in (c or "") for c in assistant_contents)
-    # Current user message also present.
-    assert "ფასი?" in user_contents
+    assert "hello" in user_contents
+    assert any("hello" in (c or "") for c in assistant_contents)
+    # Current user message also present on an LLM-owned path.
+    assert "more details please" in user_contents
 
 
 # =========================================================================
-# 17 — Tool loop max iterations
+# 17 ? Tool loop max iterations
 # =========================================================================
 
 
@@ -736,18 +738,12 @@ def test_tool_loop_caps_iterations(enable_engine, monkeypatch, fresh_conversatio
     monkeypatch.setattr(openai_service, "chat_with_tools", _chat)
     monkeypatch.setattr(parent_flow, "_handle_impl", lambda c, m: "FALLBACK_OK")
 
-    out = parent_flow.handle(fresh_conversation, "ფასი?")
-    # After the cap, engine returns "" → legacy fallback runs.
+    out = parent_flow.handle(fresh_conversation, "more details please")
+    # After the cap, engine returns "" -> legacy fallback runs.
     assert out == "FALLBACK_OK"
     # Engine should have called the LLM exactly MAX_TOOL_ITERATIONS times.
     from app.agent.llm.parent_llm_engine import MAX_TOOL_ITERATIONS
     assert call_count["n"] == MAX_TOOL_ITERATIONS
-
-
-# =========================================================================
-# 18 — Executor returns unknown_tool for unknown tool names
-# =========================================================================
-
 
 def test_executor_unknown_tool(fresh_conversation):
     lead = Lead(sender_id="sender_p3c", platform="instagram", segment="PARENT")
@@ -1786,7 +1782,7 @@ def test_patch3_engine_does_not_inject_raw_source_documents(
         return _mk_response(content="გასაგებია.")
 
     monkeypatch.setattr(openai_service, "chat_with_tools", _chat)
-    parent_flow.handle(fresh_conversation, "ფასი?")
+    parent_flow.handle(fresh_conversation, "more details please")
     assert seen
     full_prompt = " ".join(
         m.get("content") or "" for m in seen[0]
@@ -1842,31 +1838,39 @@ def test_patch3_engine_does_not_inject_raw_source_documents(
     # Raised 46 KB → 48 KB by Live Polish Patch (2026-06-09): კიმინდა
     # normalization, privacy wording rule, context-aware thank-you rule
     # — ~0.7 KB of curated wording policy.
-    assert len(full_prompt) < 48_000, (
+    # Raised 48 KB -> 56 KB after route-decision/source-of-truth rules expanded
+    # the curated system prompt. This still catches accidental raw source-document
+    # injection while accepting the current canonical prompt size.
+    assert len(full_prompt) < 56_000, (
         f"engine prompt too large: {len(full_prompt)} chars"
     )
 
 
-def test_patch3_sales_context_changes_when_price_was_asked(
+
+def test_patch3_sales_context_uses_prior_price_interest_on_llm_path(
     enable_engine, monkeypatch, fresh_conversation,
 ):
-    """When the user has asked price in this message, the sales context
-    must mention price (so the model knows to frame value around it)."""
+    """A prior price question still shapes sales context on an LLM-owned turn."""
     from app.services import messenger_service, openai_service
 
     monkeypatch.setattr(messenger_service, "get_user_profile", lambda sid, plat: {})
+    fresh_conversation.history.append({"role": "user", "content": "ფასი?"})
+    fresh_conversation.history.append({
+        "role": "assistant",
+        "content": parent_flow._camp_price_direct_answer(),
+    })
     seen: list[list[dict]] = []
     monkeypatch.setattr(
         openai_service, "chat_with_tools",
         lambda **kwargs: (seen.append(kwargs.get("messages") or []),
-                          _mk_response(content="2150 ლარია."))[1],
+                          _mk_response(content="Got it."))[1],
     )
-    parent_flow.handle(fresh_conversation, "ფასი?")
+    parent_flow.handle(fresh_conversation, "more details please")
+    assert seen
     joined = "\n".join(
         m["content"] for m in seen[0] if m.get("role") == "system"
     )
     assert "ფასი" in joined or "ღირებულება" in joined
-
 
 def test_patch3_sales_context_for_ineligible_age(
     enable_engine, monkeypatch, fresh_conversation,
@@ -2592,7 +2596,8 @@ def test_patch5_explicit_slot_choice_records_pending_booking(
     monkeypatch.setattr(messenger_service, "get_user_profile", lambda sid, plat: {})
 
     # Pre-seed the offered-slots cache as if get_available_slots had run.
-    parent_tool_executor._last_slots_by_sender[fresh_conversation.sender_id] = [
+    cache_key = conversation_cache_key(fresh_conversation)
+    parent_tool_executor._last_slots_by_sender[cache_key] = [
         {
             "slot_id": 1,
             "datetime_iso": "2030-05-27T13:00:00+04:00",
@@ -4431,7 +4436,7 @@ def test_patch8_ineligible_age_engine_response_end_to_end(
             "თუ გნებავთ, კონსულტაციაზე ჩაგწერთ."
         )),
     )
-    out = parent_flow.handle(fresh_conversation, "ფასი მაინტერესებს")
+    out = parent_flow.handle(fresh_conversation, "more details please")
     assert "კონსულტაციაზე ჩაგწერთ" not in out
     assert "მენეჯერთან" in out
 
