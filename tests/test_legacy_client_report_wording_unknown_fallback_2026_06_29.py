@@ -26,7 +26,7 @@ from app.flows import parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.reasoning import camp_topic_facts as ctf
-from app.services import conversation_service, messenger_service
+from app.services import admin_config_service, conversation_service, messenger_service
 
 _MGR = "558 67 47 33"
 _ENDING = "ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"
@@ -69,6 +69,15 @@ def engine_on(monkeypatch):
 def emoji_on(monkeypatch):
     """The client 💙 policy is pinned OFF in conftest; opt back in here."""
     monkeypatch.setattr(parent_flow, "_CLIENT_EMOJI_ENABLED", True, raising=False)
+
+
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service,
+        "get_camp_registration_status",
+        lambda: "open",
+    )
 
 
 def _conv(sid="c", state="ASK_CHALLENGE", child_age="12", segment="PARENT", history=True):
@@ -475,7 +484,9 @@ def test_hf7_intro_wording_output(engine_on, monkeypatch):
 
 
 # 8. Price amount answer — deterministic full block, no heart.
-def test_hf8_price_amount_returns_full_price_block_without_llm_or_heart(engine_on, emoji_on, monkeypatch):
+def test_hf8_price_amount_returns_full_price_block_without_llm_or_heart(
+    engine_on, emoji_on, camp_registration_open, monkeypatch
+):
     monkeypatch.setattr(
         parent_flow,
         "_run_llm_engine_safely",

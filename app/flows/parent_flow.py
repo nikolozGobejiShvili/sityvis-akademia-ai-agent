@@ -105,6 +105,10 @@ def _camp_registration_closed_answer() -> str:
     return _camp_status_message("full")
 
 
+def _camp_registration_closed_short_answer() -> str:
+    return _camp_status_short("full")
+
+
 available_slots = {}
 ask_name_retries: dict[str, bool] = {}
 invalid_phone_retries: dict[str, bool] = {}
@@ -867,6 +871,16 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     if unclear_response is not None:
         return unclear_response
 
+    camp_stream_lifecycle_response = _maybe_handle_camp_stream_lifecycle(
+        conversation,
+        message,
+    )
+    if camp_stream_lifecycle_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation,
+            camp_stream_lifecycle_response,
+        )
+
     # Camp stream/cohort direct answer (live bug 2026-07-07) — a message that
     # names a camp STREAM/cohort („ნაკადი" / „მესამე ნაკადი" / „3 ნაკადი") and
     # asks the age limit and/or price is unambiguous camp intent. Answer it
@@ -1200,15 +1214,16 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                 repeat_price_response = _strip_redundant_age_question_if_known(
                     conversation, repeat_price_response,
                 )
-                repeat_price_response = _ensure_camp_age_question(
-                    conversation, message, repeat_price_response,
-                )
-                repeat_price_response = _dedupe_child_age_questions(
-                    repeat_price_response,
-                )
-                repeat_price_response = _format_multipoint_paragraphs(
-                    repeat_price_response,
-                )
+                if _is_camp_registration_open():
+                    repeat_price_response = _ensure_camp_age_question(
+                        conversation, message, repeat_price_response,
+                    )
+                    repeat_price_response = _dedupe_child_age_questions(
+                        repeat_price_response,
+                    )
+                    repeat_price_response = _format_multipoint_paragraphs(
+                        repeat_price_response,
+                    )
             return _sanitise_booking_confirmation(
                 conversation, repeat_price_response,
             )
@@ -3679,6 +3694,17 @@ def _camp_price_full_block() -> str:
     )
 
 
+def _strip_closed_registration_cta(text: str) -> str:
+    """Remove the registration/consultation CTA from price copy when camp
+    registration is closed, while preserving the approved price facts."""
+    if _is_camp_registration_open():
+        return text
+    paragraphs = (text or "").rstrip().split("\n\n")
+    if paragraphs and "კონსულტაციაზე ჩაგწერთ" in paragraphs[-1]:
+        return "\n\n".join(paragraphs[:-1]).rstrip()
+    return (text or "").rstrip()
+
+
 # Exact-amount / bank-schedule questions never get an invented number — we give
 # the full price block, then defer the exact monthly amount / bank schedule /
 # commission / exact reservation fee to a manager.
@@ -3718,13 +3744,14 @@ def _camp_price_manager_deferral_line() -> str:
 
 
 def _camp_price_full_block_with_manager_deferral() -> str:
-    return f"{_camp_price_full_block()}\n\n{_camp_price_manager_deferral_line()}"
+    block = _strip_closed_registration_cta(_camp_price_full_block())
+    return f"{block}\n\n{_camp_price_manager_deferral_line()}"
 
 def _camp_price_answer(message: str) -> str:
     """The full price block, plus the manager deferral line appended when the
     user asked for an exact monthly amount / bank schedule / commission / exact
     reservation fee."""
-    block = _camp_price_full_block()
+    block = _strip_closed_registration_cta(_camp_price_full_block())
     if _is_camp_price_exact_amount_question(message):
         return _camp_price_full_block_with_manager_deferral()
     return block
@@ -3732,7 +3759,7 @@ def _camp_price_answer(message: str) -> str:
 
 def _camp_price_direct_answer() -> str:
     """Direct camp-price answer → the approved full price block."""
-    return _camp_price_full_block()
+    return _strip_closed_registration_cta(_camp_price_full_block())
 
 
 def _assistant_gave_camp_price(conversation: Conversation) -> bool:
@@ -4577,21 +4604,25 @@ def _transport_answer(city_ablative: str, *, pickup: bool) -> str:
             )
             if details_defer:
                 return f"{included} {details_defer}"
+    defer_suffix = f": {phone}" if phone else ""
     if city_ablative:
         return (
             _TRANSPORT_INCLUDED_PREFIX
             + f"რაც შეეხება {city_ablative} ტრანსპორტირების ზუსტ დეტალებს, "
-            "ამ ინფორმაციას მენეჯერი გაგაცნობთ: 558 67 47 33"
+            + "ამ ინფორმაციას მენეჯერი გაგაცნობთ"
+            + defer_suffix
         )
     if pickup:
         return (
             _TRANSPORT_INCLUDED_PREFIX
             + "რაც შეეხება ტრანსპორტის გასვლის ზუსტ ადგილს და დროს, "
-            "ამ დეტალებს მენეჯერი გაგაცნობთ: 558 67 47 33"
+            + "ამ დეტალებს მენეჯერი გაგაცნობთ"
+            + defer_suffix
         )
     return (
         _TRANSPORT_INCLUDED_PREFIX
-        + "ტრანსპორტირების ზუსტ დეტალებს მენეჯერი გაგაცნობთ: 558 67 47 33"
+        + "ტრანსპორტირების ზუსტ დეტალებს მენეჯერი გაგაცნობთ"
+        + defer_suffix
     )
 
 
@@ -5878,6 +5909,141 @@ def _format_stream_dates_dative(dates_text: str) -> str:
             out = out.replace(nom, dat)
             break
     return out.replace("-", "–")
+
+
+_CAMP_STREAM_DATE_QUESTION_MARKERS: tuple[str, ...] = (
+    "როდის", "თარიღ", "რიცხვ", "გრაფიკ",
+)
+_CAMP_STREAM_STARTED_QUESTION_MARKERS: tuple[str, ...] = (
+    "დაიწყ", "დაწყებ", "მიმდინარე",
+)
+_CAMP_STREAM_LIFECYCLE_CAMP_MARKERS: tuple[str, ...] = (
+    "ბანაკ", "ნაკად",
+)
+_STREAM_NAME_NUMERALS: tuple[tuple[str, int], ...] = (
+    ("III", 3), ("II", 2), ("I", 1),
+)
+
+
+def _configured_camp_streams() -> tuple[list[dict], int | None]:
+    try:
+        from app.services import admin_config_service
+        facts = admin_config_service.get_camp_facts() or {}
+    except Exception:  # pragma: no cover - defensive
+        return [], None
+    streams = [s for s in (facts.get("streams") or []) if isinstance(s, dict)]
+    return streams, facts.get("year") if isinstance(facts.get("year"), int) else None
+
+
+def _active_configured_camp_streams() -> tuple[list[dict], int | None]:
+    streams, year = _configured_camp_streams()
+    active: list[dict] = []
+    for stream in streams:
+        status = str(stream.get("status") or "active").strip().lower()
+        if status and status != "active":
+            continue
+        if stream.get("active") is False:
+            continue
+        active.append(stream)
+    return active, year
+
+
+def _stream_number_from_name(stream: dict, fallback: int) -> int:
+    name = str(stream.get("name") or "").strip().upper()
+    for roman, number in _STREAM_NAME_NUMERALS:
+        if roman in name:
+            return number
+    match = re.search(r"\d+", name)
+    if match:
+        return int(match.group(0))
+    return fallback
+
+
+def _camp_stream_fact_line(stream: dict, stream_number: int) -> str | None:
+    dates = str(stream.get("dates_text") or "").strip()
+    if not dates:
+        return None
+    return (
+        f"ბანაკის მე-{stream_number} ნაკადი ტარდება "
+        f"{_format_stream_dates_dative(dates)}."
+    )
+
+
+def _latest_started_camp_stream() -> tuple[dict, int] | None:
+    try:
+        from app.services import admin_config_service
+        now_dt = admin_config_service._now_tbilisi()[0]
+    except Exception:  # pragma: no cover - defensive
+        now_dt = datetime.now(ZoneInfo("Asia/Tbilisi"))
+    today = now_dt.date() if hasattr(now_dt, "date") else date.today()
+    streams, year = _active_configured_camp_streams()
+    started: list[tuple[date, int, dict]] = []
+    for index, stream in enumerate(streams, start=1):
+        dates = str(stream.get("dates_text") or "").strip()
+        if not dates:
+            continue
+        try:
+            from app.services import admin_config_service
+            start = admin_config_service._parse_camp_stream_start_date(
+                dates,
+                now=now_dt,
+                year=year,
+            )
+        except Exception:  # pragma: no cover - defensive
+            start = None
+        if start is not None and start <= today:
+            started.append((start, _stream_number_from_name(stream, index), stream))
+    if not started:
+        return None
+    _, number, stream = max(started, key=lambda item: item[0])
+    return stream, number
+
+
+def _camp_stream_dates_answer() -> str | None:
+    current = _latest_started_camp_stream()
+    if current is not None:
+        stream, number = current
+        return _camp_stream_fact_line(stream, number)
+    streams, _year = _active_configured_camp_streams()
+    lines: list[str] = []
+    for index, stream in enumerate(streams, start=1):
+        line = _camp_stream_fact_line(stream, _stream_number_from_name(stream, index))
+        if line:
+            lines.append(line)
+    return "\n".join(lines) if lines else None
+
+
+def _is_camp_stream_lifecycle_question(message: str) -> bool:
+    low = (message or "").lower()
+    has_stream = "ნაკად" in low
+    has_camp = "ბანაკ" in low
+    asks_started = any(marker in low for marker in _CAMP_STREAM_STARTED_QUESTION_MARKERS)
+    if asks_started and has_camp:
+        return True
+    if not has_stream:
+        return False
+    return asks_started or any(
+        marker in low for marker in _CAMP_STREAM_DATE_QUESTION_MARKERS
+    )
+
+
+def _maybe_handle_camp_stream_lifecycle(
+    conversation: Conversation,
+    message: str,
+) -> str | None:
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+    if not _is_camp_stream_lifecycle_question(message):
+        return None
+    low = (message or "").lower()
+    current = _latest_started_camp_stream()
+    if current is not None and any(
+        marker in low for marker in _CAMP_STREAM_STARTED_QUESTION_MARKERS
+    ):
+        stream, number = current
+        line = _camp_stream_fact_line(stream, number)
+        return f"დიახ, {line}" if line else None
+    return _camp_stream_dates_answer()
 
 
 def _maybe_handle_camp_stream_query(

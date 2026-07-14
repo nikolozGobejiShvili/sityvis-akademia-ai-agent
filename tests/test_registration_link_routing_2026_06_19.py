@@ -106,7 +106,9 @@ def test_is_registration_link_request_false(msg):
     "რეგისტრაციის ფორმა სად არის",
     "როგორ დავრეგისტრირდე?",
 ])
-def test_fresh_ambiguous_registration_asks_clarification(stub_flows, msg):
+def test_fresh_ambiguous_registration_asks_clarification(
+    stub_flows, camp_registration_open, msg
+):
     out = conversation_service.process_message("amb", msg, "instagram")
     assert _CLARIFY in out, f"expected registration clarification for {msg!r}"
     assert _MENU not in out                # not the generic menu

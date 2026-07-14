@@ -1001,11 +1001,22 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
             response = identity_reply
         elif _is_registration_link_request(message_text):
             # Registration/link request with NO clear target (UNCLEAR
-            # segment) → ask a registration-specific clarification; never
-            # guess or invent a link. Once the user names camp / an event,
-            # the recovery loop re-classifies and the camp / adult flow
-            # returns the configured Admin link.
-            response = _REGISTRATION_LINK_CLARIFICATION
+            # segment). When camp registration is closed, fail closed to the
+            # canonical camp lifecycle answer instead of asking for a linkable
+            # program and risking a stale registration CTA.
+            if not parent_flow._is_camp_registration_open():
+                _trace.set_route_decision(
+                    route_owner="conversation_service",
+                    domain="camp",
+                    intent="camp_registration",
+                    sub_intent="registration_link",
+                    answer_source="deterministic_handler",
+                    approved_copy_id="camp_registration_closed",
+                    deterministic_reason="unclear_closed_registration_request",
+                )
+                response = parent_flow._camp_registration_closed_short_answer()
+            else:
+                response = _REGISTRATION_LINK_CLARIFICATION
         else:
             response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
     elif route_segment == "PARENT":

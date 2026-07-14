@@ -164,6 +164,15 @@ def _adult_conversation(sender_id: str = "st1-adult") -> Conversation:
     return conversation
 
 
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service,
+        "get_camp_registration_status",
+        lambda: "open",
+    )
+
+
 def _parent_conversation(sender_id: str = "st1-parent") -> Conversation:
     conversation = Conversation(
         sender_id=sender_id,
@@ -363,7 +372,7 @@ def test_approved_copy_yaml_is_program_scoped_for_camp():
 
     assert not (forbidden_flat_keys & seen_keys)
 
-def test_approved_copy_behavior_is_currently_frozen():
+def test_approved_copy_behavior_is_currently_frozen(camp_registration_open):
     assert parent_flow._camp_price_direct_answer() == EXPECTED_CAMP_PRICE_BLOCK
     assert parent_flow._camp_payment_process_answer() == EXPECTED_PAYMENT_PROCESS
     assert adult_flow._no_active_events_reply() == EXPECTED_ADULT_NO_ACTIVE
