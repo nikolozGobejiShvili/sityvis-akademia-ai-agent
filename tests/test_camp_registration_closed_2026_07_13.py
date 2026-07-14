@@ -165,8 +165,13 @@ def test_parent_tool_registration_and_calendar_paths_are_closed(monkeypatch):
     assert "registration_url" not in registration
 
     all_info = executor.execute(TOOL_GET_CAMP_INFO, {"topic": "all"})
-    assert all_info["success"] is True
-    assert all_info["registration_url"] == ""
+    assert all_info == {
+        "success": False,
+        "reason": "camp_public_info_limited",
+        "topic": "all",
+        "message": parent_flow._camp_registration_closed_answer(),
+    }
+    assert "registration_url" not in all_info
 
     slots = executor.execute(TOOL_GET_AVAILABLE_SLOTS, {})
     assert slots["success"] is False

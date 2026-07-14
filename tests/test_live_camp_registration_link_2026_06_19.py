@@ -98,9 +98,8 @@ def test_live_registration_returns_admin_link(engine_on, camp_registration_open,
 def test_camp_interest_still_normal_flow(engine_on):
     out = conversation_service.process_message("interest", "ბანაკი მაინტერესებს", "instagram")
     assert _ADMIN_URL not in out          # registration interceptor did NOT fire
-    # General camp interest is now answered by the deterministic approved intro
-    # (client hotfix 2026-07-03), not the registration link.
-    assert "ციფრულ ხმაურს" in out
+    # Final public Camp policy limits general Camp sales/info after the final stream starts.
+    assert out == parent_flow._camp_registration_closed_answer()
 
 
 # =========================================================================

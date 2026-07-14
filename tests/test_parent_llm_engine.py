@@ -178,7 +178,7 @@ def _mk_response(*, content: str = "", tool_calls: list[dict[str, Any]] | None =
 # =========================================================================
 
 
-def test_flag_off_routes_to_legacy_flow(disable_engine, monkeypatch, fresh_conversation):
+def test_flag_off_routes_to_legacy_flow(disable_engine, monkeypatch, fresh_conversation, camp_registration_open):
     monkeypatch.setattr(parent_flow, "_handle_impl", lambda c, m: "LEGACY_OK")
     called = {"engine": 0}
 
@@ -205,7 +205,7 @@ def test_flag_off_routes_to_legacy_flow(disable_engine, monkeypatch, fresh_conve
 # =========================================================================
 
 
-def test_flag_on_uses_engine_response(enable_engine, monkeypatch, fresh_conversation):
+def test_flag_on_uses_engine_response(enable_engine, monkeypatch, fresh_conversation, camp_registration_open):
     def _engine(**kwargs):
         return "ENGINE_REPLY"
 
@@ -224,7 +224,7 @@ def test_flag_on_uses_engine_response(enable_engine, monkeypatch, fresh_conversa
 # =========================================================================
 
 
-def test_engine_exception_falls_back(enable_engine, monkeypatch, fresh_conversation):
+def test_engine_exception_falls_back(enable_engine, monkeypatch, fresh_conversation, camp_registration_open):
     def _boom(**kwargs):
         raise RuntimeError("kaboom")
 
@@ -242,7 +242,7 @@ def test_engine_exception_falls_back(enable_engine, monkeypatch, fresh_conversat
 # =========================================================================
 
 
-def test_engine_empty_response_falls_back(enable_engine, monkeypatch, fresh_conversation):
+def test_engine_empty_response_falls_back(enable_engine, monkeypatch, fresh_conversation, camp_registration_open):
     monkeypatch.setattr(
         "app.agent.llm.parent_llm_engine.run_parent_llm_turn",
         lambda **kwargs: "",
@@ -258,7 +258,7 @@ def test_engine_empty_response_falls_back(enable_engine, monkeypatch, fresh_conv
 # =========================================================================
 
 
-def test_greeting_returns_natural_welcome(enable_engine, monkeypatch, fresh_conversation):
+def test_greeting_returns_natural_welcome(enable_engine, monkeypatch, fresh_conversation, camp_registration_open):
     from app.services import openai_service
 
     welcome = "გასაგებია. ბანაკის შესახებ რას გაინტერესებთ?"
@@ -1750,7 +1750,7 @@ def test_patch3_followup_strategy_yaml_loads_with_required_keys():
 
 
 def test_patch3_engine_messages_contain_sales_context(
-    enable_engine, monkeypatch, fresh_conversation,
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,
 ):
     from app.services import messenger_service, openai_service
 
@@ -1852,7 +1852,7 @@ def test_patch3_engine_does_not_inject_raw_source_documents(
 
 
 def test_patch3_sales_context_uses_prior_price_interest_on_llm_path(
-    enable_engine, monkeypatch, fresh_conversation,
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,
 ):
     """A prior price question still shapes sales context on an LLM-owned turn."""
     from app.services import messenger_service, openai_service
@@ -2679,7 +2679,7 @@ def test_patch5_pending_booking_round_trips_through_serialisation(fresh_conversa
 
 
 def test_patch5_modality_question_preserves_pending_booking(
-    enable_engine, monkeypatch, fresh_conversation,
+    enable_engine, monkeypatch, fresh_conversation, camp_registration_open,
 ):
     """User asks about modality after selecting slot — pending_booking
     must survive."""
@@ -4233,7 +4233,7 @@ def test_parent_greeting_returns_exact_static_template():
 
 
 def test_parent_greeting_bypass_does_not_fire_after_first_bot_reply(
-    enable_engine, monkeypatch,
+    enable_engine, monkeypatch, camp_registration_open,
 ):
     """Once the bot has replied once, subsequent state=START turns
     route through the engine — the static welcome only fires on the

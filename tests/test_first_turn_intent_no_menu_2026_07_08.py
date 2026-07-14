@@ -117,7 +117,8 @@ def test_fullflow_bare_greeting_still_menu(monkeypatch):
     assert MENU_MARKER in out
 
 
-def test_fullflow_bare_topic_word_still_menu(monkeypatch):
+def test_fullflow_bare_topic_word_uses_final_camp_policy(monkeypatch):
     _mock_llm(monkeypatch, "GREETING")
     out = parent_flow.handle(_fresh(), "ბანაკი")
-    assert MENU_MARKER in out
+    assert out == parent_flow._camp_registration_closed_answer()
+    assert MENU_MARKER not in out

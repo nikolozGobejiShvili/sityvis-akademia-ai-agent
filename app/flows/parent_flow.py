@@ -109,6 +109,208 @@ def _camp_registration_closed_short_answer() -> str:
     return _camp_status_short("full")
 
 
+_FINAL_CAMP_POLICY_PRICE_ALLOWED = "price_allowed"
+_FINAL_CAMP_POLICY_REGISTRATION_CLOSED = "registration_closed"
+_FINAL_CAMP_POLICY_CURRENT_DETAILS_LIMITED = "current_details_limited"
+_FINAL_CAMP_POLICY_FUTURE_INFO_PENDING = "future_info_pending"
+_FINAL_CAMP_POLICY_SUNDAY_SCHOOL_PENDING = "sunday_school_pending"
+_FINAL_CAMP_POLICY_CURRENT_PARENT_HANDOFF = "current_parent_handoff"
+
+_FINAL_CAMP_REGISTRATION_ACTION_MARKERS: tuple[str, ...] = (
+    "რეგისტრ", "დარეგისტრ", "დავრეგისტრ", "ჩაწერ", "ჩავწერ",
+    "ჩავეწერ", "ბმულ", "ლინკ", "ფორმ", "ადგილი", "ადგილები",
+    "არის ადგილი", "თავისუფალ", "შემიძლია შემოვუერთ", "შეუერთ",
+    "მიღება", "მიიღებთ", "ჯავშ", "დაჯავშ", "კონსულტ", "კოსულტ",
+    "ჩამწერ", "register", "sign up", "signup", "join", "available",
+    "availability", "place", "spot", "book", "booking", "consultation",
+)
+_FINAL_CAMP_CURRENT_DETAIL_MARKERS: tuple[str, ...] = (
+    "ნაკად", "როდის", "თარიღ", "რიცხვ", "დაიწყ", "დაწყებ",
+    "მიმდინარე", "ახლა", "სად", "ლოკაცი", "კაჭრეთ", "მისამართ",
+    "ხანგრძლივ", "რამდენი დღე", "დღიან", "განრიგ", "გრაფიკ",
+    "პროგრამ", "რა ხდება", "რას აკეთ", "აქტივობ", "ტრანსპორტ",
+    "წაყვან", "წამოყვან", "მარშრუტ", "კვება", "მენიუ", "ოთახ",
+    "აუზ", "სტადიონ", "სასტუმრო", "გართობა", "conditions",
+    "condition", "date", "stream", "started", "start", "location",
+    "duration", "schedule", "transport", "program", "details",
+)
+_FINAL_CAMP_FUTURE_MARKERS: tuple[str, ...] = (
+    "შემდეგ", "მომავალ", "ახალ", "კიდევ", "იქნება", "გაიხსნ",
+    "როდის იქნება", "მომავალ წელს", "next", "future", "another",
+    "again",
+)
+_FINAL_CAMP_SUNDAY_SCHOOL_DIRECTION_MARKERS: tuple[str, ...] = (
+    "ახლა რა გაქვთ", "ამ ეტაპზე რა გაქვთ", "რა გაქვთ ახლა",
+    "ალტერნატივ", "სხვა რა", "რისი შეთავაზება", "შეუძლია ჩაერთოს",
+    "რა შეუძლია", "what is available", "alternative", "instead",
+)
+_FINAL_CAMP_PARENT_SUPPORT_MARKERS: tuple[str, ...] = (
+    "დავურეკ", "დაურეკ", "დარეკ", "დავუკავშირდ", "კონტაქტ",
+    "ვნახ", "ნახვა", "ჩამოსვლ", "მოვინახულ", "მშობელ",
+)
+
+
+def _final_camp_policy_has_registration_action(message: str) -> bool:
+    low = (message or "").lower()
+    if _is_reservation_fee_amount_question(message):
+        return False
+    if _is_camp_registration_link_request(message):
+        return True
+    if any(marker in low for marker in _FINAL_CAMP_REGISTRATION_ACTION_MARKERS):
+        return True
+    try:
+        if _is_explicit_consultation_request(message):
+            return True
+    except Exception:  # pragma: no cover - defensive only
+        pass
+    try:
+        if _looks_like_availability_question(message):
+            return True
+    except Exception:  # pragma: no cover - defensive only
+        pass
+    return False
+
+
+def _final_camp_policy_has_future_intent(message: str) -> bool:
+    low = (message or "").lower()
+    if _final_camp_policy_price_allowed(message) and "კიდევ ერთხელ" in low:
+        return False
+    return any(marker in low for marker in _FINAL_CAMP_FUTURE_MARKERS)
+
+
+def _final_camp_policy_has_current_detail(message: str) -> bool:
+    low = (message or "").lower()
+    if any(marker in low for marker in _FINAL_CAMP_CURRENT_DETAIL_MARKERS):
+        return True
+    try:
+        from app.reasoning import camp_topic_facts as _ctf
+        if (
+            _ctf.detect_camp_topic(message) is not None
+            or _ctf.resolve_operational(message) is not None
+            or _ctf.resolve_exact_detail(message) is not None
+            or (_ctf._is_medical(low) and _ctf.medical_answer() is not None)
+        ):
+            return True
+    except Exception:  # pragma: no cover - defensive only
+        pass
+    return False
+
+
+def _final_camp_policy_has_current_parent_support(message: str) -> bool:
+    low = (message or "").lower()
+    try:
+        if (
+            _is_explicit_manager_number_request(message)
+            or _is_self_call_manager_request(message)
+            or _has_self_call_intent(message)
+        ):
+            return True
+    except Exception:  # pragma: no cover - defensive only
+        pass
+    return any(marker in low for marker in _FINAL_CAMP_PARENT_SUPPORT_MARKERS)
+
+
+def _final_camp_policy_has_sunday_school_direction(message: str) -> bool:
+    low = (message or "").lower()
+    return (
+        _is_sunday_school_intent(message)
+        or any(marker in low for marker in _FINAL_CAMP_SUNDAY_SCHOOL_DIRECTION_MARKERS)
+        or _msg_is_child_offering(message)
+    )
+
+
+def _final_camp_policy_has_recent_camp_context(conversation: Conversation) -> bool:
+    turns = list(getattr(conversation, "history", []) or [])[-8:]
+    for turn in reversed(turns):
+        if not isinstance(turn, dict):
+            continue
+        content = str(turn.get("content") or "").lower()
+        if any(marker in content for marker in _CAMP_INTENT_KEYWORDS):
+            return True
+        if any(marker in content for marker in _CAMP_STATUS_KEYWORDS):
+            return True
+        if _camp_price_value() in content:
+            return True
+    return False
+
+
+def _final_camp_policy_price_allowed(message: str) -> bool:
+    if _is_reservation_fee_amount_question(message):
+        return True
+    return (
+        _is_camp_price_amount_question(message)
+        or _is_camp_payment_process_question(message)
+        or _has_camp_price_discount_question(message)
+    )
+
+
+def _final_camp_public_policy_category(
+    conversation: Conversation,
+    message: str,
+    *,
+    fallback_category: str | None = None,
+) -> str | None:
+    """Classify closed-registration Camp turns into the final public policy."""
+    try:
+        if _is_camp_registration_open():
+            return None
+    except Exception:
+        pass
+    if getattr(conversation, "segment", "") == "ADULT":
+        return None
+
+    has_camp = _msg_has_camp_intent(message)
+    camp_context = has_camp or _final_camp_policy_has_recent_camp_context(conversation)
+    if _final_camp_policy_has_sunday_school_direction(message) and not camp_context:
+        return _FINAL_CAMP_POLICY_SUNDAY_SCHOOL_PENDING
+    if not camp_context and not fallback_category:
+        return None
+
+    if _final_camp_policy_has_future_intent(message):
+        return _FINAL_CAMP_POLICY_FUTURE_INFO_PENDING
+    if _final_camp_policy_has_current_parent_support(message):
+        return _FINAL_CAMP_POLICY_CURRENT_PARENT_HANDOFF
+    if _final_camp_policy_has_registration_action(message):
+        return _FINAL_CAMP_POLICY_REGISTRATION_CLOSED
+    if _final_camp_policy_price_allowed(message):
+        return _FINAL_CAMP_POLICY_PRICE_ALLOWED
+    if _final_camp_policy_has_sunday_school_direction(message):
+        return _FINAL_CAMP_POLICY_SUNDAY_SCHOOL_PENDING
+    if _final_camp_policy_has_current_detail(message):
+        return _FINAL_CAMP_POLICY_CURRENT_DETAILS_LIMITED
+    return fallback_category or _FINAL_CAMP_POLICY_CURRENT_DETAILS_LIMITED
+
+
+def _maybe_handle_final_camp_public_policy(
+    conversation: Conversation,
+    message: str,
+    *,
+    fallback_category: str | None = None,
+) -> str | None:
+    category = _final_camp_public_policy_category(
+        conversation,
+        message,
+        fallback_category=fallback_category,
+    )
+    if category is None:
+        return None
+    if category == _FINAL_CAMP_POLICY_PRICE_ALLOWED:
+        if _final_camp_policy_has_current_detail(message):
+            price_response = _maybe_handle_repeat_camp_price(conversation, message)
+            if price_response is not None:
+                return price_response
+        return None
+    if category == _FINAL_CAMP_POLICY_CURRENT_PARENT_HANDOFF:
+        return None
+    if category == _FINAL_CAMP_POLICY_SUNDAY_SCHOOL_PENDING:
+        return _render_sunday_school_answer()
+    if category == _FINAL_CAMP_POLICY_FUTURE_INFO_PENDING:
+        return _camp_status_message("coming_soon")
+    if category == _FINAL_CAMP_POLICY_REGISTRATION_CLOSED:
+        conversation.pending_booking = None
+    return _camp_registration_closed_answer()
+
+
 available_slots = {}
 ask_name_retries: dict[str, bool] = {}
 invalid_phone_retries: dict[str, bool] = {}
@@ -777,6 +979,16 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     injection_response = _maybe_handle_offtopic_injection(conversation, message)
     if injection_response is not None:
         return injection_response
+
+    final_camp_policy_response = _maybe_handle_final_camp_public_policy(
+        conversation,
+        message,
+    )
+    if final_camp_policy_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation,
+            final_camp_policy_response,
+        )
 
     # Client follow-up hotfix (2026-06-30) — LIMITED multi-question FIRST: a
     # message with TWO distinct camp parts (price + sports, safety +

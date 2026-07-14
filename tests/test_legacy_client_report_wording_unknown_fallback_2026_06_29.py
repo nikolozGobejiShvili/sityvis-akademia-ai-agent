@@ -71,7 +71,7 @@ def emoji_on(monkeypatch):
     monkeypatch.setattr(parent_flow, "_CLIENT_EMOJI_ENABLED", True, raising=False)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def camp_registration_open(monkeypatch):
     monkeypatch.setattr(
         admin_config_service,

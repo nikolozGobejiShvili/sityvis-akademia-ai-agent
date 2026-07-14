@@ -71,6 +71,15 @@ def _reset():
 
 
 @pytest.fixture(autouse=True)
+def camp_registration_open(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service,
+        "get_camp_registration_status",
+        lambda: "open",
+    )
+
+
+@pytest.fixture(autouse=True)
 def _mock_calendar(monkeypatch):
     """BUG 6 (2026-07-06) — the daypart handler now offers REAL calendar free
     slots. Mock the calendar so the daypart-in-booking test is deterministic."""

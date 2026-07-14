@@ -20,7 +20,7 @@ import app.config as config_module
 from app.flows import parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
-from app.services import messenger_service
+from app.services import admin_config_service, messenger_service
 
 _SPORTS = "სპორტული აქტივობები"
 _SPORTS_ANSWER = (
@@ -120,6 +120,7 @@ def test_sports_answer_still_available_end_to_end(monkeypatch):
         USE_SLIM_PROMPTS=False,
     )
     monkeypatch.setattr(parent_flow, "settings", swapped)
+    monkeypatch.setattr(admin_config_service, "get_camp_registration_status", lambda: "open")
     monkeypatch.setattr(messenger_service, "get_user_profile", lambda s, p: {})
     # a prior assistant turn so the static welcome doesn't own the turn.
     conv = _conv("sp", history=[{"role": "assistant", "content": "_prior"}])
@@ -158,6 +159,7 @@ def engine_sports(monkeypatch):
         USE_SLIM_PROMPTS=False,
     )
     monkeypatch.setattr(parent_flow, "settings", swapped)
+    monkeypatch.setattr(admin_config_service, "get_camp_registration_status", lambda: "open")
     monkeypatch.setattr(messenger_service, "get_user_profile", lambda s, p: {})
     # If the transport interceptor fails to preempt, this "engine" leaks sports.
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _SPORTS_ANSWER)

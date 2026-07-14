@@ -230,11 +230,12 @@ def test_12_same_intent_variants_full_block_on_repeat(engine_on):
     assert "როგორც ზემოთ" not in out2
 
 
-def test_13_dates_after_price_not_suppressed(engine_on):
+def test_13_dates_after_price_now_limited_by_final_camp_policy(engine_on):
     conv = _price_conv("b13")
     _turn(conv, "რა ღირს?")
     out = _turn(conv, "როდის არის ბანაკი?")
-    assert out == _DATES_ANSWER                        # answered normally, not suppressed
+    assert out == parent_flow._camp_registration_closed_answer()
+    assert _DATES_ANSWER not in out
     assert "როგორც ზემოთ" not in out
 
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -48,6 +49,50 @@ def camp_registration_open(monkeypatch):
     )
     monkeypatch.setattr(
         admin_config_service, "is_camp_registration_open", lambda: True,
+    )
+    yield
+
+
+_CAMP_REGISTRATION_DEFAULT_OPEN_EXCLUDED_FILES = {
+    "test_admin_config.py",
+    "test_camp_info_vs_registration_2026_06_20.py",
+    "test_camp_registration_closed_2026_07_13.py",
+    "test_camp_stream_and_price_asabove_2026_07_07.py",
+    "test_closed_camp_live_qa_hotfix_2026_07_14.py",
+    "test_comment_flow.py",
+    "test_final_camp_public_policy_2026_07_14.py",
+    "test_first_turn_intent_no_menu_2026_07_08.py",
+    "test_legacy_sunday_school_and_duplicate_age_guard_2026_06_27.py",
+    "test_live_camp_registration_link_2026_06_19.py",
+    "test_source_of_truth_guard_2026_07_10.py",
+}
+
+
+@pytest.fixture(autouse=True)
+def _default_camp_registration_open_for_legacy_tests(request, monkeypatch):
+    """Default legacy tests to pre-closure registration behavior.
+
+    Release Checkpoint #1 intentionally keeps the real test config closed.
+    Most older tests predate that lifecycle state and assert historical open
+    registration, booking, and sales flows. Keep the new closed-policy tests
+    and config/source-of-truth guards on the real or explicitly patched state.
+    """
+    test_file = Path(str(request.node.fspath)).name
+    if test_file in _CAMP_REGISTRATION_DEFAULT_OPEN_EXCLUDED_FILES:
+        yield
+        return
+
+    from app.services import admin_config_service
+
+    monkeypatch.setattr(
+        admin_config_service,
+        "get_camp_registration_status",
+        lambda: "open",
+    )
+    monkeypatch.setattr(
+        admin_config_service,
+        "is_camp_registration_open",
+        lambda: True,
     )
     yield
 

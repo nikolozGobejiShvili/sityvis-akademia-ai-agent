@@ -81,9 +81,8 @@ _INFO_INPUTS = [
 def test_info_request_is_not_registration_link(engine_on, msg):
     out = conversation_service.process_message("info", msg, "instagram")
     assert _ADMIN_URL not in out, f"info request wrongly returned the link: {msg!r}"
-    # A camp INFO / interest request is now answered by the deterministic
-    # approved intro (client hotfix 2026-07-03), never the registration link.
-    assert "ციფრულ ხმაურს" in out, f"info request did not get the camp intro: {msg!r}"
+    # Final public Camp policy limits general Camp sales/info after the final stream starts.
+    assert out == parent_flow._camp_registration_closed_answer(), msg
 
 
 # =========================================================================
@@ -122,7 +121,8 @@ def test_bare_greeting_still_menu(engine_on):
 def test_format_question_is_not_link(engine_on):
     out = conversation_service.process_message("fmt", "ბანაკის ფორმატი რა არის", "instagram")
     assert _ADMIN_URL not in out
-    assert len(engine_on) == 1
+    assert out == parent_flow._camp_registration_closed_answer()
+    assert engine_on == []
 
 
 def test_already_enrolled_is_not_link(engine_on):

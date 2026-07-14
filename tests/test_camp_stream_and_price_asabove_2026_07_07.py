@@ -130,34 +130,37 @@ def test_case1_stream_age_price_direct(engine):
     out = parent_flow.handle(_conv("c1"), "მაინტერესებს 3 ნაკადის ასოკობრივი ზღვარი და ფასი")
     assert _MENU not in out
     assert "SENTINEL_ENGINE" not in out
-    assert "მე-3 ნაკადი" in out
-    assert "14" in out and "20" in out and "ივლის" in out
-    assert "9–17" in out
     assert "2150" in out
-    assert "ტრანსპორტირება" in out
+    assert "ტრანსპორტ" in out
+    assert "მე-3 ნაკადი" not in out
+    assert "14-20 ივლისი" not in out
+    assert "9–17" not in out
 
 
 def test_case2_ordinal_stream_age_price_direct(engine):
     out = parent_flow.handle(_conv("c2"), "მესამე ნაკადის ასაკობრივი ზღვარი და ღირებულება მაინტერესებს")
     assert _MENU not in out
-    assert "მე-3 ნაკადი" in out and "14" in out and "20" in out
-    assert "9–17" in out and "2150" in out
+    assert "2150" in out and "ტრანსპორტ" in out
+    assert "მე-3 ნაკადი" not in out and "14-20 ივლისი" not in out
+    assert "9–17" not in out
 
 
 def test_case3_stream_price_direct(engine):
     out = parent_flow.handle(_conv("c3"), "3 ნაკადი რა ღირს?")
     assert _MENU not in out
     assert "SENTINEL_ENGINE" not in out
-    assert "მე-3 ნაკადი" in out and "ივლის" in out
-    assert "2150" in out and "ტრანსპორტირება" in out
+    assert "2150" in out and "ტრანსპორტ" in out
+    assert "მე-3 ნაკადი" not in out and "14-20 ივლისი" not in out
+    assert "რეგისტრაციის ბმული" not in out
 
 
 def test_case4_stream_age_only_direct(engine):
     out = parent_flow.handle(_conv("c4"), "3 ნაკადის ასაკი მაინტერესებს")
     assert _MENU not in out
-    assert "მე-3 ნაკადი" in out and "ივლის" in out
-    assert "9–17" in out
-    assert "2150" not in out            # price was NOT asked → not volunteered
+    assert out == parent_flow._camp_registration_closed_answer()
+    assert "მე-3 ნაკადი" not in out and "14-20 ივლისი" not in out
+    assert "9–17" not in out
+    assert "2150" not in out            # price was NOT asked -> not volunteered
 
 
 # ══ BUG 1 — case 5: a bare greeting still shows the menu ══════════════════════

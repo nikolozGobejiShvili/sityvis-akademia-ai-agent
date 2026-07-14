@@ -848,6 +848,31 @@ def _build_pending_booking_record(
 # -- intent → response dispatcher -----------------------------------------
 
 
+def _final_camp_policy_answer_for_intent(
+    intent: str,
+    conversation: Conversation,
+    message: str,
+) -> str | None:
+    try:
+        from app.flows import parent_flow as canonical_parent_flow
+
+        fallback = None
+        if intent in {INTENT_DATES_QUESTION, INTENT_LOCATION_QUESTION, INTENT_CONDITIONS_QUESTION}:
+            fallback = canonical_parent_flow._FINAL_CAMP_POLICY_CURRENT_DETAILS_LIMITED
+        elif intent in {INTENT_REGISTRATION_QUESTION, INTENT_BOOKING_REQUEST}:
+            fallback = canonical_parent_flow._FINAL_CAMP_POLICY_REGISTRATION_CLOSED
+        if fallback is None:
+            return None
+        return canonical_parent_flow._maybe_handle_final_camp_public_policy(
+            conversation,
+            message,
+            fallback_category=fallback,
+        )
+    except Exception:  # pragma: no cover - router instrumentation must fail closed
+        logger.exception("[turn_router] final camp policy lookup failed")
+        return None
+
+
 def _response_for_intent(
     intent: str, conversation: Conversation, lead: Lead, message: str,
 ) -> str | None:
@@ -857,6 +882,10 @@ def _response_for_intent(
     "fall through to the state machine".
     """
     if intent == INTENT_BOOKING_REQUEST:
+        policy = _final_camp_policy_answer_for_intent(intent, conversation, message)
+        if policy is not None:
+            conversation.pending_booking = None
+            return policy
         if not _is_camp_registration_open():
             conversation.pending_booking = None
             return _camp_registration_closed_answer()
@@ -872,16 +901,20 @@ def _response_for_intent(
         return _build_premium_price_answer(conversation, message)
 
     if intent == INTENT_DATES_QUESTION:
-        return _build_premium_dates_answer()
+        policy = _final_camp_policy_answer_for_intent(intent, conversation, message)
+        return policy if policy is not None else _build_premium_dates_answer()
 
     if intent == INTENT_LOCATION_QUESTION:
-        return _build_premium_location_answer()
+        policy = _final_camp_policy_answer_for_intent(intent, conversation, message)
+        return policy if policy is not None else _build_premium_location_answer()
 
     if intent == INTENT_CONDITIONS_QUESTION:
-        return _build_premium_conditions_answer()
+        policy = _final_camp_policy_answer_for_intent(intent, conversation, message)
+        return policy if policy is not None else _build_premium_conditions_answer()
 
     if intent == INTENT_REGISTRATION_QUESTION:
-        return _build_premium_registration_answer()
+        policy = _final_camp_policy_answer_for_intent(intent, conversation, message)
+        return policy if policy is not None else _build_premium_registration_answer()
 
     if intent == INTENT_NO_CONCERN:
         return _build_no_concern_answer()
@@ -1039,13 +1072,13 @@ def maybe_handle_analyzer_interrupt(
                 _build_clarifying_question()
             )
         if "dates" in fact_types:
-            return _build_premium_dates_answer()
+            return _response_for_intent(INTENT_DATES_QUESTION, conversation, lead, message)
         if "location" in fact_types:
-            return _build_premium_location_answer()
+            return _response_for_intent(INTENT_LOCATION_QUESTION, conversation, lead, message)
         if "conditions" in fact_types:
-            return _build_premium_conditions_answer()
+            return _response_for_intent(INTENT_CONDITIONS_QUESTION, conversation, lead, message)
         if "registration" in fact_types:
-            return _build_premium_registration_answer()
+            return _response_for_intent(INTENT_REGISTRATION_QUESTION, conversation, lead, message)
         return _build_clarifying_question()
 
     if primary_intent == "unclear":

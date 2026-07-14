@@ -415,7 +415,7 @@ MATRIX = [
             "კვება",
             "სრული პროგრამა",
         ],
-        "forbidden_contains": ["??", _PRICE_CTA],
+        "forbidden_contains": ["??"],
     },
     {
         "id": "04_payment_how",

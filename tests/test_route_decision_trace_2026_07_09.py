@@ -21,6 +21,11 @@ from app.services.session_key_service import canonical_session_key
 
 def _enable_trace(monkeypatch):
     monkeypatch.setattr(conversation_trace, "_enabled", lambda: True)
+    monkeypatch.setattr(
+        admin_config_service,
+        "get_camp_registration_status",
+        lambda: "open",
+    )
     conversation_trace.reset_history()
     conversation_service.conversations.clear()
 

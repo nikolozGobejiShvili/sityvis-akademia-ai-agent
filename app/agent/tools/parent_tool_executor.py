@@ -195,6 +195,22 @@ def _is_camp_registration_open() -> bool:
 def _registration_closed_tool_result(**extra: Any) -> dict[str, Any]:
     return {"success": False, "reason": "camp_registration_closed", **extra}
 
+
+def _camp_public_info_limited_tool_result(topic: str) -> dict[str, Any]:
+    try:
+        from app.flows import parent_flow
+
+        message = parent_flow._camp_registration_closed_answer()
+    except Exception:  # pragma: no cover - defensive structured fallback
+        logger.exception("[parent_executor] closed camp policy message failed")
+        message = ""
+    return {
+        "success": False,
+        "reason": "camp_public_info_limited",
+        "topic": topic,
+        "message": message,
+    }
+
 @dataclass
 class ParentToolExecutor:
     """Executes the closed-set of tools the PARENT LLM is allowed to call.
@@ -378,8 +394,11 @@ class ParentToolExecutor:
             }
 
         registration_open = _is_camp_registration_open()
-        if topic == "registration" and not registration_open:
-            return _registration_closed_tool_result(topic="registration")
+        if not registration_open:
+            if topic == "registration":
+                return _registration_closed_tool_result(topic="registration")
+            if topic != "price":
+                return _camp_public_info_limited_tool_result(topic)
         # Config-unification patch: read camp facts from the admin-first
         # helper so an operator price/location/streams edit in the
         # Admin Panel takes effect immediately for the LLM's
