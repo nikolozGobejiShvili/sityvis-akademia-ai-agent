@@ -626,7 +626,7 @@ def test_prompt_forbids_thavisuplaia_without_check():
 # =========================================================================
 
 
-def test_reschedule_executor_blocks_when_calendar_busy(monkeypatch):
+def test_reschedule_executor_blocks_when_calendar_busy(monkeypatch, camp_registration_open):
     """The executor's reschedule path calls `check_slot_available`,
     which now uses the multi-busy backend. A busy event on a side
     calendar must surface as `slot_unavailable`."""

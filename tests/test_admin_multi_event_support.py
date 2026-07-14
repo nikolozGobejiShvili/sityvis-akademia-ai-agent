@@ -627,7 +627,7 @@ def test_executor_surfaces_title_date_location_price(sections_path):
     assert e["price_text"] == "200 ლარი"
 
 
-def test_executor_event_details_by_title(sections_path):
+def test_executor_event_details_by_title(sections_path, adult_events_june_2026_clock):
     admin_config_service.save_adult_event(
         {
             "id": "poetry",

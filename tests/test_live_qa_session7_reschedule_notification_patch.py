@@ -56,6 +56,7 @@ from app.flows import parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.services import notification_service
+from app.services.session_key_service import conversation_cache_key
 
 
 TBILISI = ZoneInfo("Asia/Tbilisi")
@@ -131,7 +132,7 @@ def test_reschedule_intent_phrases_cover_live_examples():
         )
 
 
-def test_check_consultation_slot_marks_pending_as_reschedule(monkeypatch):
+def test_check_consultation_slot_marks_pending_as_reschedule(monkeypatch, camp_registration_open):
     """When the lead is already booked and the user proposes a
     DIFFERENT free slot, the pending_booking source is „reschedule"
     and the old event_id is stashed."""
@@ -165,7 +166,7 @@ def test_check_consultation_slot_marks_pending_as_reschedule(monkeypatch):
 
 
 def test_check_consultation_slot_keeps_user_requested_source_when_not_booked(
-    monkeypatch,
+    monkeypatch, camp_registration_open,
 ):
     """When the lead is NOT already booked, the source stays the
     legacy „user_requested_exact_slot" — no reschedule marker."""
@@ -204,7 +205,7 @@ def test_check_consultation_slot_keeps_user_requested_source_when_not_booked(
 
 
 def test_book_consultation_reroutes_to_reschedule_when_already_booked(
-    monkeypatch,
+    monkeypatch, camp_registration_open,
 ):
     """The executor's safety net: even if `_check_consultation_slot`
     never ran, `_book_consultation` detects the already-booked-at-
@@ -316,7 +317,7 @@ def test_reschedule_does_not_cancel_old_when_new_booking_fails(monkeypatch):
 
 
 def test_pending_commit_reschedule_response_mentions_old_cancellation(
-    monkeypatch,
+    monkeypatch, camp_registration_open,
 ):
     """End-to-end through `_maybe_commit_pending_booking_engine`:
     when the pending booking is a reschedule and the executor
@@ -370,7 +371,7 @@ def test_pending_commit_reschedule_response_mentions_old_cancellation(
 
 
 def test_pending_commit_reschedule_old_cancel_failure_does_not_claim_success(
-    monkeypatch,
+    monkeypatch, camp_registration_open,
 ):
     """When new booking succeeded but old cancel failed, the response
     must NOT claim the old was cancelled — surface a manager-handoff
@@ -738,7 +739,7 @@ def test_trim_booking_success_strips_help_cta_when_tool_succeeded():
     conv = Conversation(
         sender_id="s_trim", platform="instagram", segment="PARENT",
     )
-    book_consultation_success_for_conversation[conv.sender_id] = True
+    book_consultation_success_for_conversation[conversation_cache_key(conv)] = True
     raw = (
         "10 ივნისს, 19:00 საათზე კონსულტაცია ჩაგინიშნეთ. "
         "თუ დამატებითი კითხვა გაქვთ, მომწერეთ და დაგეხმარებით. "
@@ -770,7 +771,7 @@ def test_trim_booking_success_no_op_when_not_success_turn():
     assert "თუ დამატებითი კითხვა გაქვთ" in out
 
 
-def test_pending_commit_message_is_concise():
+def test_pending_commit_message_is_concise(camp_registration_open):
     """The deterministic pending-commit success response must be
     short: greeting + datetime + manager line. No help CTA, no privacy
     note."""

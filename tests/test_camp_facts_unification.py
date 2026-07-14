@@ -10,6 +10,9 @@ directly.
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -177,6 +180,14 @@ def test_comment_rich_dm_uses_admin_price_when_present(monkeypatch):
 
 
 def test_get_camp_info_dates_uses_admin_streams(monkeypatch):
+    monkeypatch.setattr(
+        admin_config_service,
+        "_now_tbilisi",
+        lambda: (
+            datetime(2026, 6, 20, 12, 0, tzinfo=ZoneInfo("Asia/Tbilisi")),
+            ZoneInfo("Asia/Tbilisi"),
+        ),
+    )
     monkeypatch.setattr(
         admin_config_service, "get_section",
         lambda _sid: {

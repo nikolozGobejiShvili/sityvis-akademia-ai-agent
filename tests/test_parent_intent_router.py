@@ -113,7 +113,7 @@ def mock_start_intent_greeting(monkeypatch):
 
 
 @pytest.fixture
-def driver(mock_messenger_profile, mock_start_intent_greeting):
+def driver(mock_messenger_profile, mock_start_intent_greeting, camp_registration_open):
     """Returns a (sender_id, messages) → list[response] driver."""
     def _drive(sender_id: str, messages: list[str]) -> list[str]:
         responses: list[str] = []
@@ -454,7 +454,7 @@ def test_12_conditions_question_returns_concise_conditions(driver):
 # -- test 13. Multiple factual questions ---------------------------------
 
 
-def test_13_two_factual_questions_priority_takes_one(driver):
+def test_13_two_factual_questions_priority_takes_one(driver, camp_streams_visible):
     """Per PART 3 priority: only the highest-priority intent is handled.
 
     For ``ask_dates`` (priority 4 in the dates slot) and ``ask_location``

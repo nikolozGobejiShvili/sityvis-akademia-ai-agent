@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -325,6 +327,31 @@ def run_messages(conversation_service, sender_id: str, platform: str, messages: 
         responses.append(response)
         print(f"\nUSER: {message}\nBOT: {response}\n")
     return responses
+
+
+@pytest.fixture
+def state() -> dict:
+    module_snapshot = dict(sys.modules)
+    state = install_mocks()
+    install_comment_mocks(state)
+    try:
+        yield state
+    finally:
+        for name in list(sys.modules):
+            if name == "app" or name.startswith("app."):
+                if name not in module_snapshot:
+                    del sys.modules[name]
+        for name, module in module_snapshot.items():
+            if name == "app" or name.startswith("app."):
+                sys.modules[name] = module
+
+
+@pytest.fixture
+def conversation_service(state: dict):
+    from app.services import conversation_service
+
+    conversation_service.conversations.clear()
+    return conversation_service
 
 
 def test_parent_flow(conversation_service, state: dict) -> None:

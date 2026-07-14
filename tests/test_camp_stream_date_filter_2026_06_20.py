@@ -250,7 +250,7 @@ def test_get_camp_info_all_streams_hidden_no_invented_dates(frozen_camp):
 # ===========================================================================
 
 
-def test_registration_link_still_works(frozen_camp):
+def test_registration_link_still_works(frozen_camp, camp_registration_open):
     """Test 9 — registration topic still returns the configured link."""
     frozen_camp(7, 14)  # even when ALL streams are hidden
     out = _make_executor()._get_camp_info({"topic": "registration"})

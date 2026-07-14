@@ -95,24 +95,23 @@ def test_plain_decline_still_declines(message):
     assert _COLD_CLOSE in out
 
 
-def test_price_objection_reaches_engine_not_cold_close(engine_on, monkeypatch):
-    """End-to-end: a price objection with „არ მინდა" must reach the engine
-    (which answers the objection), NOT the deterministic cold-close."""
+def test_price_objection_uses_deterministic_price_not_cold_close(engine_on, monkeypatch):
+    """A price objection containing a decline phrase is still handled as price,
+    not as a cold-close or free LLM objection path."""
     seen = {"called": False}
 
     def _chat(**kw):
         seen["called"] = True
-        return _mk("გასაგებია, ფასში შედის ტრანსპორტი, განთავსება, კვება და "
-                   "პროგრამა. გადახდა 6 თვემდე გადანაწილდება TBC-ით ან "
-                   "საქართველოს ბანკით. გნებავთ კონსულტაცია?")
+        return _mk("ENGINE_REPLY")
 
     monkeypatch.setattr(openai_service, "chat_with_tools", _chat)
     conv = _conv()
     out = parent_flow.handle(conv, "ამდენის გადახდა არ მინდა მაგრამ ბავშვი ძალიან მინდა")
-    assert seen["called"], "engine must be consulted for a price objection"
+    assert seen["called"] is False
     assert _COLD_CLOSE not in out          # lead NOT killed
-    assert "6 თვემდე" in out               # objection answered with installments
-
+    assert "2150" not in out
+    assert "TBC" in out
+    assert "6 თვემდე" in out
 
 # ==========================================================================
 # #2 — phone correction

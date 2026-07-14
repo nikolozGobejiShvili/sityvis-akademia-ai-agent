@@ -705,7 +705,7 @@ def test_fetch_post_content_does_not_log_token_on_exception(
 
 
 def test_send_dm_from_comment_uses_specific_event_dm_when_tag_matches(
-    sections_path, monkeypatch,
+    sections_path, monkeypatch, adult_events_june_2026_clock,
 ):
     """Integration: when a comment mentions an event tag, the DM sent
     to the user is the specific-event DM, not the generic catalogue."""

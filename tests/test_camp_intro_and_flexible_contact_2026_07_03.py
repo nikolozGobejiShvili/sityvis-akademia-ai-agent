@@ -98,11 +98,12 @@ def test_camp_intro_interest_only():
     assert _OLD_INTRO_PHRASE not in out
 
 
-def test_camp_price_still_defers_to_engine():
+def test_camp_price_returns_deterministic_full_block():
     out = _turn(_conv("i4", prior_bot=True), "ბანაკის ფასი რა არის?")
     assert "ციფრულ ხმაურს" not in out          # not the intro
-    assert _SENTINEL in out                     # engine answers price
-
+    assert _SENTINEL not in out                 # deterministic price owner
+    assert "2150" in out
+    assert "TBC" in out
 
 def test_camp_consultation_defers_not_intro():
     out = _turn(_conv("i5", prior_bot=True), "კონსულტაციაზე ჩამწერეთ ბანაკზე")

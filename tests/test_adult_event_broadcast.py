@@ -173,7 +173,7 @@ def _mock_messenger(monkeypatch):
 
 
 def test_broadcast_sends_to_subscribed_users(
-    sections_path, fake_events_ws, kill_switch_on, monkeypatch,
+    sections_path, fake_events_ws, kill_switch_on, monkeypatch, adult_events_june_2026_clock,
 ):
     _seed_event(sections_path, {
         "id": "poetry", "title": "ქართული პოეზიის საღამო",

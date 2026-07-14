@@ -311,14 +311,15 @@ def test_12_new_user_camp_interest_asks_age(monkeypatch):
     assert "რამდენი წლის" in out
 
 
-def test_13_new_user_price_question_asks_age(monkeypatch):
+def test_13_new_user_price_question_returns_full_block(monkeypatch):
     conv = _parent_conv(child_age="", segment="PARENT")
     out = _handle_mocked_engine(
         monkeypatch, conv, "ფასი მაინტერესებს",
         "ბანაკის ფასი 2150 ლარია.",
     )
-    assert "რამდენი წლისაა" in out
-
+    assert "2150" in out
+    assert "TBC" in out
+    assert "რამდენი წლისაა" not in out
 
 def test_14_known_age_same_camp_message_does_not_reask(monkeypatch):
     conv = _parent_conv(child_age="12", segment="PARENT")

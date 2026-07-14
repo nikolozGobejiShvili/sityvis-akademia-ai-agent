@@ -122,13 +122,13 @@ def test_off_nika_contact_still_captured():
 # =========================================================================
 # FLAG ON — decline + topic switch reaches the topic answer
 # =========================================================================
-def test_on_decline_topic_switch_reaches_engine(reasoning_on, monkeypatch):
+def test_on_decline_topic_switch_price_uses_deterministic_owner(reasoning_on, monkeypatch):
     seen = _mock_engine(monkeypatch)
     conv = _conv()
     out = parent_flow.handle(conv, "არ მინდა მადლობა, ფასი მაინტერესებს")
-    assert out == _ENGINE_REPLY            # the new topic was answered
-    assert seen["n"] == 1                  # engine WAS reached (deferral worked)
-
+    assert "2150" in out
+    assert "TBC" in out
+    assert seen["n"] == 0
 
 def test_on_plain_decline_still_closes(reasoning_on, monkeypatch):
     # A pure decline (no topic switch) must STILL cold-close — the layer only

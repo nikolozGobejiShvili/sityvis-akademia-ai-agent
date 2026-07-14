@@ -231,7 +231,7 @@ def mock_start_intent_greeting(monkeypatch):
 
 
 @pytest.fixture
-def routed(smart_router, mock_messenger_profile, mock_start_intent_greeting):
+def routed(smart_router, mock_messenger_profile, mock_start_intent_greeting, camp_registration_open):
     """One-shot fixture combining everything required to drive a PARENT
     conversation under the analyzer."""
     return None

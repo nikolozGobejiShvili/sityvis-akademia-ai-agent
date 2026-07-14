@@ -83,7 +83,7 @@ def _mock_calendar(monkeypatch):
     monkeypatch.setattr(calendar_service, "book_slot", _book)
 
 
-def test_booking_rejects_age_9_when_admin_min_is_10(monkeypatch):       # (#5)
+def test_booking_rejects_age_9_when_admin_min_is_10(monkeypatch, camp_registration_open):       # (#5)
     monkeypatch.setattr(admin_config_service, "get_camp_age_bounds", lambda: (10, 17))
     _mock_calendar(monkeypatch)
     res = _executor(child_age="9").execute("book_consultation", {
@@ -94,7 +94,7 @@ def test_booking_rejects_age_9_when_admin_min_is_10(monkeypatch):       # (#5)
     assert res["age_min"] == 10 and res["age_max"] == 17
 
 
-def test_booking_rejects_age_17_when_admin_max_is_16(monkeypatch):      # (#6)
+def test_booking_rejects_age_17_when_admin_max_is_16(monkeypatch, camp_registration_open):      # (#6)
     monkeypatch.setattr(admin_config_service, "get_camp_age_bounds", lambda: (9, 16))
     _mock_calendar(monkeypatch)
     res = _executor(child_age="17").execute("book_consultation", {

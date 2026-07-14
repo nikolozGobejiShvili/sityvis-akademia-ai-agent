@@ -111,13 +111,14 @@ def test_bug1_non_price_message_untouched():
     assert out == resp
 
 
-def test_bug1_price_still_defers_to_engine():
-    # The first camp-price ask still reaches the engine (not made deterministic).
+def test_bug1_price_now_uses_deterministic_full_block():
     c = _conv("b1e", child_age="13")
     c.history.append({"role": "assistant", "content": "გამარჯობა"})
     c.history.append({"role": "user", "content": _PRICE_MSG})
     out = parent_flow.handle(c, _PRICE_MSG)
-    assert _SENTINEL in out
+    assert _SENTINEL not in out
+    assert "2150" in out
+    assert "TBC" in out
 
 
 # ── Bug 2 — booking slot-selection bare 1–9 → afternoon/evening ───────────────

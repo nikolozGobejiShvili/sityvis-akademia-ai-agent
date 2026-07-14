@@ -101,7 +101,7 @@ def test_find_section_from_post_id_field_aliases(mapped_sections):
 
 
 # ── Camp mapped post ─────────────────────────────────────────────────────────
-def test_1_camp_mapped_price(mapped_sections, caption, sent):
+def test_1_camp_mapped_price(mapped_sections, caption, sent, camp_registration_open, camp_streams_visible):
     caption["text"] = ""  # caption fetch irrelevant — routed by post_id
     assert _dm("CAMP_POST_1", "ფასი რა არის?", "PARENT")
     m = sent["msg"]
@@ -110,7 +110,7 @@ def test_1_camp_mapped_price(mapped_sections, caption, sent):
     assert _CATEGORY not in m
 
 
-def test_2_camp_mapped_generic_info(mapped_sections, caption, sent):
+def test_2_camp_mapped_generic_info(mapped_sections, caption, sent, camp_registration_open, camp_streams_visible):
     assert _dm("CAMP_POST_1", "მინდა ინფორმაცია", "PARENT")
     m = sent["msg"]
     assert "ციფრულ ხმაურს" in m                       # approved Camp intro
@@ -171,7 +171,7 @@ def test_6_hashtag_camp_price_no_post_id_map(caption, sent):
     assert _CATEGORY not in m
 
 
-def test_7_hashtag_camp_info_no_post_id_map(caption, sent):
+def test_7_hashtag_camp_info_no_post_id_map(caption, sent, camp_registration_open, camp_streams_visible):
     caption["text"] = "camp info #camp"
     assert _dm("H2", "მინდა ინფორმაცია")
     m = sent["msg"]

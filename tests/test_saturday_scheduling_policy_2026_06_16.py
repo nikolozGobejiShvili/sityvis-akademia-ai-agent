@@ -328,7 +328,7 @@ def _mock_calendar_success(monkeypatch):
     return check_calls, book_calls, sheets_calls, notify_calls
 
 
-def test_executor_books_saturday_slot(monkeypatch):
+def test_executor_books_saturday_slot(monkeypatch, camp_registration_open):
     """A valid Saturday consultation booking proceeds: validation passes,
     the (mocked) Calendar call is made, and the booking succeeds."""
     check_calls, book_calls, sheets_calls, _ = _mock_calendar_success(monkeypatch)
@@ -349,7 +349,7 @@ def test_executor_books_saturday_slot(monkeypatch):
     assert sheets_calls, "Sheets row should be written on a successful booking"
 
 
-def test_executor_rejects_sunday_slot_no_calendar_no_sheets(monkeypatch):
+def test_executor_rejects_sunday_slot_no_calendar_no_sheets(monkeypatch, camp_registration_open):
     """A Sunday booking is rejected at the business-day gate — before any
     Calendar query, Calendar booking, or Sheets write."""
     monkeypatch.setattr(
@@ -383,7 +383,7 @@ def test_executor_rejects_sunday_slot_no_calendar_no_sheets(monkeypatch):
     assert lead.calendly_booked is False
 
 
-def test_executor_books_weekday_slot_unchanged(monkeypatch):
+def test_executor_books_weekday_slot_unchanged(monkeypatch, camp_registration_open):
     """Weekday booking still works exactly as before."""
     _, book_calls, _, _ = _mock_calendar_success(monkeypatch)
     executor, conv, lead = _make_executor("wed_booker")
@@ -401,7 +401,7 @@ def test_executor_books_weekday_slot_unchanged(monkeypatch):
     assert book_calls
 
 
-def test_executor_books_saturday_busy_slot_is_unavailable(monkeypatch):
+def test_executor_books_saturday_busy_slot_is_unavailable(monkeypatch, camp_registration_open):
     """FreeBusy is respected end-to-end: a busy Saturday slot is refused
     (slot_unavailable) and never written to Calendar."""
     monkeypatch.setattr(calendar_service, "check_slot_available", lambda *a, **k: False)
@@ -447,7 +447,7 @@ def test_weekend_rejection_text_names_sunday_not_saturday():
     assert "შაბათ-კვირას" not in out
 
 
-def test_saturday_outside_hours_hint_says_mon_sat_not_mon_fri(monkeypatch):
+def test_saturday_outside_hours_hint_says_mon_sat_not_mon_fri(monkeypatch, camp_registration_open):
     """A Saturday slot OUTSIDE working hours is rejected as
     outside_business_hours (proving Saturday is a booking day that
     reaches the hours check), and the business-hours hint now reads

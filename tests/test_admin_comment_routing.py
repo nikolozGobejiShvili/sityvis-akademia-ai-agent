@@ -93,7 +93,7 @@ def test_resolve_section_from_post_no_hashtag_returns_none(mock_post):
 # -- (3) summer_camp DM via admin_config has expected facts -------------
 
 
-def test_parent_rich_dm_via_admin_config_contains_camp_facts():
+def test_parent_rich_dm_via_admin_config_contains_camp_facts(camp_registration_open, camp_streams_visible):
     # admin_config_service.get_section("summer_camp") feeds the builder.
     out = comment_service._build_parent_rich_dm()
     assert "ამბასადორ კაჭრეთში" in out

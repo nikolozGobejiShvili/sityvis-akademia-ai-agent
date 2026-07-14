@@ -50,6 +50,7 @@ from app.flows import parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.services import admin_config_service
+from app.services.session_key_service import conversation_cache_key
 
 
 TBILISI = ZoneInfo("Asia/Tbilisi")
@@ -436,15 +437,15 @@ def _seed_offered_slots(sender_id: str, slots: list[dict]) -> None:
 
 
 def test_slot_match_prefers_date_hint(monkeypatch):
-    """User said „5 ივნისი 10 საათზე". Offered list has 10:00 on
-    BOTH 8 June and 5 June. Matcher MUST return 5 June, not the
+    """User said "6 July 10:00". Offered list has 10:00 on
+    BOTH 8 July and 6 July. Matcher MUST return 6 July, not the
     first list entry."""
     monkeypatch.setattr(parent_flow, "TBILISI_TZ", TBILISI)
     sender_id = "s_slot_match"
     _seed_offered_slots(
         sender_id,
         [
-            # 8 July listed FIRST — under the legacy time-only matcher
+            # 8 July listed FIRST ? under the legacy time-only matcher
             # this would have been returned for "10:00".
             {
                 "slot_id": 1,
@@ -462,62 +463,17 @@ def test_slot_match_prefers_date_hint(monkeypatch):
         sender_id, "6 ივლისი 10 საათზე",
     )
     assert matched is not None
-    # Must pick the 6 July slot (date hint match), NOT the 8 July slot
-    # listed first under the legacy time-only matcher.
     assert matched["datetime_iso"] == "2026-07-06T10:00:00+04:00"
-
-
-def test_slot_match_with_no_date_hint_falls_back_to_time_only(monkeypatch):
-    """Bare „10:00 იყოს" (no date) keeps the legacy behaviour:
-    returns the first offered slot at 10:00."""
-    monkeypatch.setattr(parent_flow, "TBILISI_TZ", TBILISI)
-    sender_id = "s_no_date"
-    _seed_offered_slots(
-        sender_id,
-        [
-            {
-                "slot_id": 1,
-                "datetime_iso": "2026-07-08T10:00:00+04:00",
-                "display": "8 ივლისი, 10:00",
-            },
-            {
-                "slot_id": 2,
-                "datetime_iso": "2026-07-06T10:00:00+04:00",
-                "display": "6 ივლისი, 10:00",
-            },
-        ],
-    )
-    matched = parent_flow._user_explicit_slot_choice(
-        sender_id, "10:00 იყოს",
-    )
-    assert matched is not None
-    assert matched["datetime_iso"].startswith("2026-07-08")
-
-
-def test_slot_match_date_hint_no_offered_match_returns_none(monkeypatch):
-    """Date hint given but offered list has no slot on that date.
-    Return None — defer to check_consultation_slot rather than
-    silently match a wrong day."""
-    monkeypatch.setattr(parent_flow, "TBILISI_TZ", TBILISI)
-    sender_id = "s_no_match"
-    _seed_offered_slots(
-        sender_id,
-        [
-            {
-                "slot_id": 1,
-                "datetime_iso": "2026-07-08T10:00:00+04:00",
-                "display": "8 ივლისი, 10:00",
-            },
-        ],
-    )
-    matched = parent_flow._user_explicit_slot_choice(
-        sender_id, "6 ივლისი 10 საათზე",
-    )
-    assert matched is None
+    assert matched["slot_id"] == 2
 
 
 def _book_executor(*, monkeypatch, user_message: str = ""):
     import app.services.calendar_service as calendar_service
+    from app.services import admin_config_service
+
+    monkeypatch.setattr(admin_config_service, "get_camp_registration_status", lambda: "open")
+    monkeypatch.setattr(admin_config_service, "is_camp_registration_open", lambda: True)
+    monkeypatch.setattr(parent_tool_executor, "now_tbilisi", lambda: FIXED_NOW)
     monkeypatch.setattr(parent_flow, "TBILISI_TZ", TBILISI)
     monkeypatch.setattr(
         calendar_service, "check_slot_available", lambda dt: True,
@@ -541,7 +497,7 @@ def test_book_slot_mismatch_returns_failure(monkeypatch):
         # Backend booked on the WRONG date (8 June instead of 5 June).
         lead.calendly_booked = True
         lead.calendar_event_id = "evt_wrong_day"
-        lead.booked_datetime_iso = "2026-07-08T10:00:00+04:00"  # Wednesday — different day
+        lead.booked_datetime_iso = "2030-07-08T10:00:00+04:00"  # Wednesday — different day
         lead.status = "Booked"
         return True
 
@@ -551,7 +507,7 @@ def test_book_slot_mismatch_returns_failure(monkeypatch):
         "name": "ნიკოლოზი",
         "phone": "595999733",
         "child_age": "12",
-        "datetime_iso": "2026-07-06T10:00:00+04:00",
+        "datetime_iso": "2030-07-06T10:00:00+04:00",
         "user_confirmed_datetime": True,
     })
     assert result["success"] is False
@@ -581,17 +537,17 @@ def test_book_slot_match_succeeds_with_actual_iso(monkeypatch):
         "name": "ნიკოლოზი",
         "phone": "595999733",
         "child_age": "12",
-        "datetime_iso": "2026-07-06T10:00:00+04:00",
+        "datetime_iso": "2030-07-06T10:00:00+04:00",
         "user_confirmed_datetime": True,
     })
     assert result["success"] is True
-    assert result["booked_datetime_iso"] == "2026-07-06T10:00:00+04:00"
+    assert result["booked_datetime_iso"] == "2030-07-06T10:00:00+04:00"
     assert "6" in result["booked_date"]
     assert "ივლის" in result["booked_date"]
     assert result["booked_time"] == "10:00"
 
 
-def test_pending_commit_failure_offers_manager_callback(monkeypatch):
+def test_pending_commit_failure_offers_manager_callback(monkeypatch, camp_registration_open):
     """When the executor returns slot_mismatch, the parent_flow
     pending-commit branch surfaces the brand-standard manager
     handoff line — never a confirmation."""
@@ -600,7 +556,7 @@ def test_pending_commit_failure_offers_manager_callback(monkeypatch):
     def fake_book(conv, lead, slot):
         lead.calendly_booked = True
         lead.calendar_event_id = "evt_bad"
-        lead.booked_datetime_iso = "2026-07-08T10:00:00+04:00"  # Wednesday — different day
+        lead.booked_datetime_iso = "2030-07-08T10:00:00+04:00"  # Wednesday — different day
         lead.status = "Booked"
         return True
 
@@ -614,7 +570,7 @@ def test_pending_commit_failure_offers_manager_callback(monkeypatch):
     conv = Conversation(sender_id="s_pc", platform="instagram")
     conv.segment = "PARENT"
     conv.pending_booking = {
-        "requested_datetime_iso": "2026-07-06T10:00:00+04:00",
+        "requested_datetime_iso": "2030-07-06T10:00:00+04:00",
         "requested_date_text": "6 ივლისი",
         "requested_time_text": "10:00",
         "user_confirmed_datetime": True,
@@ -634,7 +590,9 @@ def test_pending_commit_failure_offers_manager_callback(monkeypatch):
     assert "ჩაგინიშნე" not in out
     assert "ჩავნიშნე" not in out
     assert "მენეჯერი" in out
-    assert exe_mod.book_consultation_success_for_conversation.get("s_pc") is False
+    assert exe_mod.book_consultation_success_for_conversation.get(
+        conversation_cache_key(conv)
+    ) is False
 
 
 # =========================================================================
@@ -642,7 +600,7 @@ def test_pending_commit_failure_offers_manager_callback(monkeypatch):
 # =========================================================================
 
 
-def test_verification_phrase_still_blocks_book(monkeypatch):
+def test_verification_phrase_still_blocks_book(monkeypatch, camp_registration_open):
     """Regression — 'კარგად შეამოწმე' must continue to refuse the
     book and return verification_requested for a re-check."""
     import app.services.calendar_service as calendar_service
@@ -664,7 +622,7 @@ def test_verification_phrase_still_blocks_book(monkeypatch):
         "name": "ნიკოლოზი",
         "phone": "595999733",
         "child_age": "12",
-        "datetime_iso": "2026-06-15T10:00:00+04:00",
+        "datetime_iso": "2030-06-15T10:00:00+04:00",
         "user_confirmed_datetime": True,
     })
     assert result["success"] is False

@@ -413,7 +413,7 @@ def test_handle_memory_info_short_circuits_before_engine(monkeypatch):
     assert "მყარი ჯავშანი" not in response
 
 
-def test_handle_unrelated_question_still_reaches_engine(monkeypatch):
+def test_handle_price_question_uses_deterministic_full_block(monkeypatch):
     _swap_engine_flag(monkeypatch, True)
     called = {"engine": 0}
 
@@ -425,9 +425,10 @@ def test_handle_unrelated_question_still_reaches_engine(monkeypatch):
 
     conv = _make_booked_conversation()
     response = parent_flow.handle(conv, "რა ღირს ბანაკი?")
-    assert called["engine"] == 1
-    assert response == "ENGINE_REPLY"
-
+    assert called["engine"] == 0
+    assert "ENGINE_REPLY" not in response
+    assert "2150" in response
+    assert "TBC" in response
 
 def test_handle_engine_response_strips_booking_cta_for_booked_lead(monkeypatch):
     """If the engine STILL emits "კონსულტაციაზე ჩაგწერთ" for an

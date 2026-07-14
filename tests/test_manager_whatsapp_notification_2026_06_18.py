@@ -171,7 +171,7 @@ def test_booking_notification_attempts_email_and_whatsapp(monkeypatch):
     assert result is True
 
 
-def test_booking_still_succeeds_when_whatsapp_fails_email_ok(monkeypatch):
+def test_booking_still_succeeds_when_whatsapp_fails_email_ok(monkeypatch, camp_registration_open):
     """End-to-end booking: WhatsApp failing must NOT block the booking,
     Calendar, Sheets, or email."""
     parent_tool_executor.reset_state()

@@ -23,12 +23,65 @@ the real ``.env``.
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
 import app.config as config_module
 from app.flows import adult_flow, parent_flow
 from app.services import redis_state_service
+
+
+@pytest.fixture
+def camp_registration_open(monkeypatch):
+    """Opt-in fixture for legacy/open-registration tests.
+
+    The real test config is intentionally closed for Release Checkpoint #1.
+    Tests that exercise historical registration, booking, or follow-up flows
+    must request this fixture explicitly.
+    """
+    from app.services import admin_config_service
+
+    monkeypatch.setattr(
+        admin_config_service, "get_camp_registration_status", lambda: "open",
+    )
+    monkeypatch.setattr(
+        admin_config_service, "is_camp_registration_open", lambda: True,
+    )
+    yield
+
+
+@pytest.fixture
+def adult_events_june_2026_clock(monkeypatch):
+    """Opt-in clock for legacy adult-event tests seeded with June 2026 dates."""
+    from app.services import admin_config_service
+
+    monkeypatch.setattr(
+        admin_config_service,
+        "_now_tbilisi",
+        lambda: (
+            datetime(2026, 6, 1, 12, 0, tzinfo=ZoneInfo("Asia/Tbilisi")),
+            ZoneInfo("Asia/Tbilisi"),
+        ),
+    )
+    yield
+
+
+@pytest.fixture
+def camp_streams_visible(monkeypatch):
+    """Opt-in clock for legacy camp rich-DM tests that expect visible streams."""
+    from app.services import admin_config_service
+
+    monkeypatch.setattr(
+        admin_config_service,
+        "_now_tbilisi",
+        lambda: (
+            datetime(2026, 7, 13, 12, 0, tzinfo=ZoneInfo("Asia/Tbilisi")),
+            ZoneInfo("Asia/Tbilisi"),
+        ),
+    )
+    yield
 
 
 @pytest.fixture(autouse=True)

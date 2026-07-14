@@ -62,7 +62,7 @@ def _fake_parent_engine(conversation, message):
 
 
 @pytest.fixture
-def live(monkeypatch):
+def live(monkeypatch, camp_registration_open):
     for mod in (
         conversation_service, parent_flow, adult_flow,
         parent_llm_engine, adult_llm_engine, config_module,

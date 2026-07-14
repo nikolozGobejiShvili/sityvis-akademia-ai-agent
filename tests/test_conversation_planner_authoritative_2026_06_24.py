@@ -44,10 +44,10 @@ def authoritative(monkeypatch):
 
 # ─────────────────── state recall (incl. typo) — response level ───────────────
 
-def test_state_recall_typo_returns_summary_not_booking_question(authoritative):
+def test_state_recall_typo_returns_summary_not_booking_question(authoritative, camp_registration_open):
     conv = _conv(
         state="DONE", name="ნუცა", phone="595999733", child_age="13",
-        calendly_booked=True, booked_datetime_iso="2026-06-25T12:00",
+        calendly_booked=True, booked_datetime_iso="2030-06-25T12:00",
     )
     resp = parent_flow.handle(conv, "გასაგებია ჩემზე რა ინფრომაცია გავქს?")
     assert "ნუცა" in resp
@@ -59,20 +59,20 @@ def test_state_recall_typo_returns_summary_not_booking_question(authoritative):
     assert "რომელი დღე" not in resp
 
 
-def test_booking_recall_uses_confirmed_booking(authoritative):
+def test_booking_recall_uses_confirmed_booking(authoritative, camp_registration_open):
     conv = _conv(
         state="DONE", name="ნუცა", phone="595999733", child_age="13",
-        calendly_booked=True, booked_datetime_iso="2026-06-25T12:00",
+        calendly_booked=True, booked_datetime_iso="2030-06-25T12:00",
     )
     resp = parent_flow.handle(conv, "კონსულტაცია როდის მაქვს?")
     assert "25" in resp and "12" in resp                        # the booked slot
     assert "ახალ ჩაწერას აღარ" in resp                          # no new-consultation offer
 
 
-def test_calm_correction_uses_existing_booking(authoritative):
+def test_calm_correction_uses_existing_booking(authoritative, camp_registration_open):
     conv = _conv(
         state="DONE", name="ნუცა", phone="595999733", child_age="13",
-        calendly_booked=True, booked_datetime_iso="2026-06-25T12:00",
+        calendly_booked=True, booked_datetime_iso="2030-06-25T12:00",
     )
     resp = parent_flow.handle(conv, "აბა რატო მთავაზობ ახალ კონსულტაციას?")
     assert "ჩანიშნულია" in resp
@@ -183,7 +183,7 @@ def test_flags_off_no_authoritative_effect(monkeypatch):
     monkeypatch.setattr(parent_flow, "settings", swapped)
     conv = _conv(
         state="DONE", name="ნუცა", phone="595999733", child_age="13",
-        calendly_booked=True, booked_datetime_iso="2026-06-25T12:00",
+        calendly_booked=True, booked_datetime_iso="2030-06-25T12:00",
     )
     # typo recall is NOT force-answered by the planner (shadow) → no summary
     resp = parent_flow.handle(conv, "გასაგებია ჩემზე რა ინფრომაცია გავქს?")

@@ -75,6 +75,7 @@ from app.agent.llm.adult_llm_engine import (
     _ensure_adult_intro_followup,
 )
 from app.agent.tools import parent_tool_executor
+from app.services.session_key_service import conversation_cache_key
 from app.agent.tools.parent_tool_executor import (
     ParentToolExecutor,
     _user_requested_verification,
@@ -300,7 +301,10 @@ def test_user_requested_verification_helper():
 def _book_executor(user_message: str, *, monkeypatch) -> ParentToolExecutor:
     import app.flows.parent_flow as parent_flow
     import app.services.calendar_service as calendar_service
+    from app.services import admin_config_service
 
+    monkeypatch.setattr(admin_config_service, "get_camp_registration_status", lambda: "open")
+    monkeypatch.setattr(admin_config_service, "is_camp_registration_open", lambda: True)
     monkeypatch.setattr(
         parent_tool_executor, "now_tbilisi", lambda: FIXED_NOW,
     )
@@ -487,7 +491,7 @@ def test_book_slot_success_path_returns_success(monkeypatch):
     # The per-turn success flag is set so the engine's sanitiser
     # accepts a „ჩაგინიშნეთ" reply.
     assert parent_tool_executor.book_consultation_success_for_conversation.get(
-        "s_book"
+        conversation_cache_key(exe.conversation)
     ) is True
 
 
@@ -497,7 +501,9 @@ def test_failed_booking_clears_per_turn_success_flag(monkeypatch):
     the final fake-booking guard cannot leak a stale confirmation."""
     import app.flows.parent_flow as parent_flow
 
-    parent_tool_executor.book_consultation_success_for_conversation["s_book"] = True
+    parent_tool_executor.book_consultation_success_for_conversation[
+        "s_book"
+    ] = True
     monkeypatch.setattr(
         parent_flow, "_book_selected_slot", lambda c, l, s: False,
     )
@@ -505,5 +511,5 @@ def test_failed_booking_clears_per_turn_success_flag(monkeypatch):
     result = exe._book_consultation(_book_args())
     assert result["success"] is False
     assert parent_tool_executor.book_consultation_success_for_conversation.get(
-        "s_book"
+        conversation_cache_key(exe.conversation)
     ) is False

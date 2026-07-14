@@ -77,7 +77,7 @@ def mock_start_intent_greeting(monkeypatch):
 
 
 @pytest.fixture
-def driver(mock_messenger_profile, mock_start_intent_greeting):
+def driver(mock_messenger_profile, mock_start_intent_greeting, camp_registration_open):
     def _drive(sender_id: str, messages: list[str]) -> list[str]:
         responses: list[str] = []
         for msg in messages:
@@ -380,16 +380,15 @@ def test_11_payment_question_grammar(driver):
     driver(sender, ["გამარჯობა, ბანაკი მაინტერესებს", "8"])
     _force_state(sender, "ASK_CHALLENGE", child_age="8")
     response = conversation_service.process_message(
-        sender, "პირობები მაინტერესებს გადახდის", "instagram",
+        sender, "გადახდა როგორ ხდება?", "instagram",
     )
     # Must NOT contain any of the awkward phrases.
     for bad in AWKWARD_STRINGS:
         assert bad not in response, f"awkward string {bad!r} found"
-    # MAY contain the correct locative form.
-    assert "ამბასადორ კაჭრეთში" in response or "კაჭრეთში" in response
-    # And the price from knowledge.
-    assert "2150" in response
-
+    assert "გადახდის გადანაწილება" in response
+    assert "TBC" in response
+    assert "საქართველოს ბანკ" in response
+    assert "2150" not in response
 
 # -- test 12. Grammar regression (all post-booking + interrupt paths) ----
 

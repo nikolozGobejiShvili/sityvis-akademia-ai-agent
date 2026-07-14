@@ -55,6 +55,7 @@ from app.services import admin_config_service
 
 
 TBILISI = ZoneInfo("Asia/Tbilisi")
+FIXED_NOW = datetime(2026, 6, 5, 9, 0, 0, tzinfo=TBILISI)
 
 
 # =========================================================================
@@ -635,6 +636,11 @@ def test_8_dakhi_only_no_name():
 
 def _reschedule_executor(monkeypatch, *, lead: Lead, user_message: str = ""):
     import app.services.calendar_service as calendar_service
+    from app.services import admin_config_service
+
+    monkeypatch.setattr(admin_config_service, "get_camp_registration_status", lambda: "open")
+    monkeypatch.setattr(admin_config_service, "is_camp_registration_open", lambda: True)
+    monkeypatch.setattr(parent_tool_executor, "now_tbilisi", lambda: FIXED_NOW)
     monkeypatch.setattr(parent_flow, "TBILISI_TZ", TBILISI)
     monkeypatch.setattr(
         calendar_service, "check_slot_available", lambda dt: True,
@@ -653,7 +659,7 @@ def _booked_lead() -> Lead:
         sender_id="s_resch", platform="instagram", segment="PARENT",
         name="ნიკოლოზი", phone="595999733", child_age="14",
         calendly_booked=True,
-        booked_datetime_iso="2026-07-06T15:00:00+04:00",
+        booked_datetime_iso="2030-07-06T15:00:00+04:00",
         calendar_event_id="evt_old_123",
         status="Booked",
     )
@@ -698,7 +704,7 @@ def test_9_successful_reschedule_new_then_cancel_order(monkeypatch):
         "evt_old_123",
         {
             "action": "reschedule",
-            "new_datetime_iso": "2026-07-08T10:00:00+04:00",
+            "new_datetime_iso": "2030-07-08T10:00:00+04:00",
         },
     )
     assert result["success"] is True
@@ -707,7 +713,7 @@ def test_9_successful_reschedule_new_then_cancel_order(monkeypatch):
     # ORDER guard: book must happen BEFORE cancel.
     assert booking_order == ["book", "cancel:evt_old_123"]
     assert lead.calendar_event_id == "evt_new_456"
-    assert lead.booked_datetime_iso == "2026-07-08T10:00:00+04:00"
+    assert lead.booked_datetime_iso == "2030-07-08T10:00:00+04:00"
 
 
 def test_9_new_booking_failure_preserves_old(monkeypatch):
@@ -728,7 +734,7 @@ def test_9_new_booking_failure_preserves_old(monkeypatch):
         "evt_old_123",
         {
             "action": "reschedule",
-            "new_datetime_iso": "2026-07-08T10:00:00+04:00",
+            "new_datetime_iso": "2030-07-08T10:00:00+04:00",
         },
     )
     assert result["success"] is False
@@ -739,7 +745,7 @@ def test_9_new_booking_failure_preserves_old(monkeypatch):
     # Lead state restored.
     assert lead.calendly_booked is True
     assert lead.calendar_event_id == "evt_old_123"
-    assert lead.booked_datetime_iso == "2026-07-06T15:00:00+04:00"
+    assert lead.booked_datetime_iso == "2030-07-06T15:00:00+04:00"
     assert lead.status == "Booked"
 
 
@@ -777,7 +783,7 @@ def test_9_old_cancel_failure_keeps_new_marks_handoff(monkeypatch):
         "evt_old_123",
         {
             "action": "reschedule",
-            "new_datetime_iso": "2026-07-08T10:00:00+04:00",
+            "new_datetime_iso": "2030-07-08T10:00:00+04:00",
         },
     )
     assert result["success"] is True
@@ -818,7 +824,7 @@ def test_9_new_booking_empty_event_id_preserves_old(monkeypatch):
         "evt_old_123",
         {
             "action": "reschedule",
-            "new_datetime_iso": "2026-07-08T10:00:00+04:00",
+            "new_datetime_iso": "2030-07-08T10:00:00+04:00",
         },
     )
     assert result["success"] is False
@@ -826,7 +832,7 @@ def test_9_new_booking_empty_event_id_preserves_old(monkeypatch):
     assert cancel_calls == []
     # Old state restored fully.
     assert lead.calendar_event_id == "evt_old_123"
-    assert lead.booked_datetime_iso == "2026-07-06T15:00:00+04:00"
+    assert lead.booked_datetime_iso == "2030-07-06T15:00:00+04:00"
 
 
 # =========================================================================
@@ -895,7 +901,7 @@ def test_11_namdvilad_tavisuplaia_triggers():
     assert _user_requested_verification("თავისუფალია ნამდვილად?") is True
 
 
-def test_11_verification_phrase_blocks_book(monkeypatch):
+def test_11_verification_phrase_blocks_book(monkeypatch, camp_registration_open):
     import app.services.calendar_service as calendar_service
     monkeypatch.setattr(parent_flow, "TBILISI_TZ", TBILISI)
     monkeypatch.setattr(

@@ -85,7 +85,7 @@ def _build_executor(sender_id: str = "tester") -> AdultToolExecutor:
 # ---------------------------------------------------------------------------
 
 
-def test_compact_events_does_not_send_zero_seats(sections_path):
+def test_compact_events_does_not_send_zero_seats(sections_path, adult_events_june_2026_clock):
     """seats_available=0 was triggering invented sold-out copy. The
     field must be OMITTED entirely when zero — the LLM must not see a
     falsy number it can interpret as „no seats left"."""
@@ -230,7 +230,7 @@ def test_disclosure_flag_cleared_at_start_of_next_turn(sections_path):
 # ---------------------------------------------------------------------------
 
 
-def test_event_details_includes_reservation_url_directly(sections_path):
+def test_event_details_includes_reservation_url_directly(sections_path, adult_events_june_2026_clock):
     """The executor must surface `reservation_url` in the details
     payload so the LLM can include it in the same response."""
     _seed_yaml(sections_path, [

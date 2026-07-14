@@ -276,7 +276,7 @@ def _utc_iso(seconds_ago: int) -> str:
     return (datetime.utcnow() - timedelta(seconds=seconds_ago)).isoformat()
 
 
-def test_first_followup_fires_after_test_mode_delay(monkeypatch):
+def test_first_followup_fires_after_test_mode_delay(monkeypatch, camp_registration_open):
     _patch_settings(
         monkeypatch,
         FOLLOWUP_TEST_MODE=True,
@@ -326,7 +326,7 @@ def test_first_followup_does_not_fire_before_test_delay(monkeypatch):
     assert conv.followup_stage == ""
 
 
-def test_first_followup_does_not_duplicate(monkeypatch):
+def test_first_followup_does_not_duplicate(monkeypatch, camp_registration_open):
     """Two consecutive scheduler ticks send AT MOST one follow-up per
     cadence stage. The second tick is a no-op because the stage
     advanced after the first send."""
@@ -351,7 +351,7 @@ def test_first_followup_does_not_duplicate(monkeypatch):
     assert send.call_count == 1
 
 
-def test_followup_marker_updates_after_send(monkeypatch):
+def test_followup_marker_updates_after_send(monkeypatch, camp_registration_open):
     _patch_settings(
         monkeypatch,
         FOLLOWUP_TEST_MODE=True,
@@ -512,7 +512,7 @@ def test_comment_dm_failure_does_not_stamp_marker(
 
 
 def test_comment_dm_marker_routes_followup_through_messenger(
-    monkeypatch, _clear_conversations,
+    monkeypatch, _clear_conversations, camp_registration_open,
 ):
     """End-to-end: a comment DM marker → scheduler fires a private DM
     (never a public comment-reply path) via `messenger_service.send_message`."""

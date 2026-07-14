@@ -177,7 +177,7 @@ def test_6_ss_full_no_camp_dm(monkeypatch):
     assert "შევსებულია" in text
 
 
-def test_7_camp_comment_still_sends_camp_dm(monkeypatch):
+def test_7_camp_comment_still_sends_camp_dm(monkeypatch, camp_registration_open, camp_streams_visible):
     # Camp section (type=camp) must STILL send a Summer-Camp DM — never the
     # Sunday-School DM (the leak guarantee this suite protects).
     # Comment-aware Camp DM (2026-07-04): the shared helper's comment text is an

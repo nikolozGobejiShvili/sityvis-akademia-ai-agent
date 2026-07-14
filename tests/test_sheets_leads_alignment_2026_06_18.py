@@ -240,7 +240,7 @@ def _assert_aligned_booking_write(fake: FakeWorksheet):
     return range_name
 
 
-def test_saturday_booking_writes_aligned_row(monkeypatch):
+def test_saturday_booking_writes_aligned_row(monkeypatch, camp_registration_open):
     fake = _header_only_sheet()
     _mock_booking_externals(monkeypatch, fake)
     result = _book_through_executor(monkeypatch, "sat-align", _iso(SAT, 12))
@@ -248,7 +248,7 @@ def test_saturday_booking_writes_aligned_row(monkeypatch):
     _assert_aligned_booking_write(fake)
 
 
-def test_weekday_booking_writes_aligned_row(monkeypatch):
+def test_weekday_booking_writes_aligned_row(monkeypatch, camp_registration_open):
     fake = _header_only_sheet()
     _mock_booking_externals(monkeypatch, fake)
     result = _book_through_executor(monkeypatch, "wed-align", _iso(WED, 12))
@@ -256,7 +256,7 @@ def test_weekday_booking_writes_aligned_row(monkeypatch):
     _assert_aligned_booking_write(fake)
 
 
-def test_saturday_and_weekday_use_identical_write_range(monkeypatch):
+def test_saturday_and_weekday_use_identical_write_range(monkeypatch, camp_registration_open):
     fake_sat = _header_only_sheet()
     _mock_booking_externals(monkeypatch, fake_sat)
     assert _book_through_executor(monkeypatch, "sat-x", _iso(SAT, 12))["success"]

@@ -96,7 +96,7 @@ def test_detect_darexistreba_in_camp_context():
 # =====================================================================
 # Required tests 1–3 — camp registration link priority
 # =====================================================================
-def test_1_adult_context_then_camp_registration_link():
+def test_1_adult_context_then_camp_registration_link(camp_registration_open):
     _seed("t1", segment="ADULT", child_age="14")
     out = conversation_service.process_message(
         "t1", "ბანაკის სარეგისტრაციო ლინკი მომწერე", "instagram",
@@ -107,7 +107,7 @@ def test_1_adult_context_then_camp_registration_link():
     assert "2150" not in out          # not a camp-info answer
 
 
-def test_2_camp_context_then_explicit_registration_link():
+def test_2_camp_context_then_explicit_registration_link(camp_registration_open):
     _seed("t2", segment="PARENT", child_age="14")
     out = conversation_service.process_message(
         "t2", "სარეგისტრაციო ლინკი მინდა", "instagram",
@@ -116,7 +116,7 @@ def test_2_camp_context_then_explicit_registration_link():
     assert _no_age_question(out)
 
 
-def test_3_unknown_child_age_camp_registration_link():
+def test_3_unknown_child_age_camp_registration_link(camp_registration_open):
     _seed("t3", segment="PARENT", child_age="", state="START")
     out = conversation_service.process_message(
         "t3", "ბანაკის რეგისტრაციის ლინკი მომწერე", "instagram",

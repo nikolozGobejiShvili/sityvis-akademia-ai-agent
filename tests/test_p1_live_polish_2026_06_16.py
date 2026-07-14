@@ -21,7 +21,7 @@ from app.agent.tools import parent_tool_executor
 from app.flows import parent_flow
 from app.models.conversation import Conversation
 from app.models.lead import Lead
-from app.services import calendar_service, notification_service, sheets_service
+from app.services import admin_config_service, calendar_service, notification_service, sheets_service
 
 _OFFER = "ბანაკში მონაწილეობა შესაძლებელია 9–17 წლის. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
 
@@ -234,13 +234,10 @@ def test_b2_named_past_event_fresh_first_try(_seed_past_gia):
 def test_b2_unknown_named_event_no_invention():
     conv = _camp_conv("b2-3")
     out = parent_flow._maybe_handle_event_inquiry(
-        conv, "გალაკტიონის საღამო მაინტერესებს",
+        conv, "გალაქტიონის საღამო მაინტერესებს",
     )
-    assert out is not None
-    assert "ვერ ვპოულობ" in out
-    assert "თქვენთვის თუ" not in out
+    assert out == admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY
     assert "2150" not in out
-
 
 def test_b2_generic_event_mention_defers_to_engine():
     conv = _camp_conv("b2-4")
@@ -276,9 +273,9 @@ def test_wording_handoff_success_has_paragraph_break():
     assert "\n\n" in parent_flow._UNDERAGE_HANDOFF_SUCCESS
 
 
-def test_wording_past_event_answer_has_paragraph_break():
+def test_wording_past_event_answer_uses_canonical_no_active_copy():
     conv = _camp_conv("w-1")
     out = parent_flow._maybe_handle_event_inquiry(
         conv, "გია მურღულიას ღონისძიება მაინტერესებს",
     )
-    assert out is not None and "\n\n" in out  # not one dense block
+    assert out == admin_config_service.ADULT_NO_ACTIVE_EVENTS_REPLY

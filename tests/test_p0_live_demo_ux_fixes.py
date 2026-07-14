@@ -404,21 +404,18 @@ def test_issue6_no_active_events_safe_fallback(monkeypatch):
 # around it is enforced by deterministic post-processors and IS tested here.
 
 
-def test_issue2_price_no_age_appends_age_question(monkeypatch):
-    """Camp answer with the child age still unknown → the camp age question
-    is appended (so a price question without age proceeds to qualify)."""
-    _enable_engine(
-        monkeypatch,
-        "ბანაკის სრული ღირებულებაა 2150 ლარი. ფასში შედის ტრანსპორტი, "
-        "განთავსება, კვება და პროგრამა.",
-    )
+def test_issue2_price_no_age_returns_deterministic_full_block(monkeypatch):
+    """Camp price is owned by the deterministic full-block handler and
+    does not append a qualification question on first price."""
+    _enable_engine(monkeypatch, "ENGINE_REPLY 2150 TBC")
     conv = Conversation(sender_id="iss2-noage", platform="instagram")
     conv.segment = "PARENT"
     conv.state = "ASK_CHALLENGE"
     conv.lead = Lead(sender_id="iss2-noage", platform="instagram", segment="PARENT")
     out = parent_flow.handle(conv, "ბანაკის ფასი რა არის?")
-    assert "რამდენი წლისაა" in out  # age question appended
-
+    assert "2150" in out
+    assert "TBC" in out
+    assert "რამდენი წლისაა" not in out
 
 def test_issue2_price_known_age_no_duplicate_age_question(monkeypatch):
     """Camp answer when the child age is already known → no duplicate age
