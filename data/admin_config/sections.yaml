@@ -3,6 +3,7 @@ sections:
   name: საზაფხულო ბანაკი
   type: camp
   status: active
+  registration_status: closed
   hashtags:
   - ბანაკი
   - banaki
