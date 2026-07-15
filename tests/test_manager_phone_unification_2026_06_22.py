@@ -61,11 +61,16 @@ def test_changing_canonical_propagates_everywhere(monkeypatch):
 
 
 def test_changing_operator_config_source_propagates(monkeypatch):
-    """Editing the operator-editable manager_contacts mirror changes BOTH the
+    """Editing the canonical summer_camp manager_contact changes BOTH the
     canonical helper AND the camp-info phone (proves one source of truth)."""
     monkeypatch.setattr(
-        admin_config_service, "load_manager_contacts_mirror",
-        lambda: {"manager_phone": "555 12 34 56"},
+        admin_config_service,
+        "get_section",
+        lambda sid: {
+            "id": "summer_camp", "name": "x", "type": "camp", "status": "active",
+            "hashtags": ["ბანაკი"], "auto_dm_template_id": "summer_camp_comment_dm",
+            "manager_contact": "555 12 34 56",
+        } if sid == "summer_camp" else None,
     )
     assert admin_config_service.get_manager_phone() == "555 12 34 56"
     assert admin_config_service.get_camp_facts().get("phone") == "555 12 34 56"
@@ -76,7 +81,7 @@ def test_changing_operator_config_source_propagates(monkeypatch):
 # ===========================================================================
 
 
-def test_camp_facts_falls_back_to_section_contact_when_canonical_empty(monkeypatch):
+def test_camp_facts_does_not_fall_back_when_canonical_empty(monkeypatch):
     monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "")
     monkeypatch.setattr(
         admin_config_service, "get_section",
@@ -86,7 +91,7 @@ def test_camp_facts_falls_back_to_section_contact_when_canonical_empty(monkeypat
             "manager_contact": "577 88 99 00",
         } if sid == "summer_camp" else None,
     )
-    assert admin_config_service.get_camp_facts().get("phone") == "577 88 99 00"
+    assert admin_config_service.get_camp_facts().get("phone") is None
 
 
 # ===========================================================================

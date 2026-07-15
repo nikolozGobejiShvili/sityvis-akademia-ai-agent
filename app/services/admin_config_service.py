@@ -778,21 +778,14 @@ def get_camp_facts() -> dict[str, Any]:
     if payment_terms:
         merged["payment_terms"] = payment_terms
 
-    # Manager-phone source-of-truth unification (2026-06-22): the camp-info
-    # `phone` the LLM hands to the user (registration / „all" topics) IS the
-    # manager number, so it MUST agree with the deterministic disclosure paths
-    # (PARENT `_render_manager_number_answer`, under-age fallback, ADULT) — all
-    # of which use `get_manager_phone()`. Prefer that single canonical chain
-    # (manager_contacts.yaml → env → company.yaml → adult_events.manager_contact);
-    # fall back to this section's `manager_contact`, then the legacy camp
-    # `phone`, only when the canonical helper is unconfigured. This removes the
-    # second, divergent chain the audit flagged.
+    # Manager-phone source-of-truth unification: camp-info `phone` is exposed
+    # only from the canonical Admin Config manager-contact accessor. Never fall
+    # back to legacy knowledge, environment, or user/callback data.
     canonical_phone = (get_manager_phone() or "").strip()
-    section_contact = (admin_section.get("manager_contact") or "").strip()
-    resolved_phone = canonical_phone or section_contact or (merged.get("phone") or "")
-    if resolved_phone:
-        merged["phone"] = resolved_phone
-
+    if canonical_phone:
+        merged["phone"] = canonical_phone
+    else:
+        merged.pop("phone", None)
     return merged
 
 
@@ -1948,19 +1941,32 @@ def find_active_events_on_day(day: int, *, now=None) -> list[dict[str, Any]]:
 # -- manager phone resolution ---------------------------------------------
 
 
+def _manager_phone_from_section(section_id: str) -> str:
+    try:
+        section = get_section(section_id)
+    except Exception:
+        section = None
+    if not isinstance(section, dict):
+        return ""
+    return (section.get("manager_contact") or "").strip()
+
+
 def get_manager_phone() -> str:
-    """Return the manager's phone number, sourced (in order) from:
+    """Return the manager phone from Admin Config only.
 
-      1. ``data/admin_config/manager_contacts.yaml`` (operator-editable)
-         keys: ``manager_phone`` or ``phone``.
-      2. ``settings.MANAGER_PHONE_NUMBER`` (.env).
-      3. ``app/agent/knowledge/company.yaml``  → ``company.phone``.
-      4. ``adult_events`` section's ``manager_contact``.
+    ``summer_camp.manager_contact`` is the canonical runtime owner for the
+    operator-facing manager contact. The optional manager_contacts mirror is
+    still accepted as an Admin Config override, but user/lead/callback phones,
+    environment values, prompt examples, and legacy knowledge fallbacks must
+    never become ``manager_phone``.
 
-    Returns "" when none are configured — the caller decides whether to
-    fall back to a generic "manager will reach out" wording. The number
-    is NEVER hard-coded in Python.
+    Returns "" when Admin Config has no manager contact; callers must use their
+    approved no-phone fallback instead of substituting another phone.
     """
+    section_phone = _manager_phone_from_section("summer_camp")
+    if section_phone:
+        return section_phone
+
     try:
         mirror = load_manager_contacts_mirror()
     except Exception:
@@ -1970,32 +1976,17 @@ def get_manager_phone() -> str:
             value = mirror.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+        manager_block = mirror.get("manager")
+        if isinstance(manager_block, dict):
+            for key in ("manager_phone", "phone"):
+                value = manager_block.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
 
-    try:
-        from app.config import settings
-        env_phone = (getattr(settings, "MANAGER_PHONE_NUMBER", "") or "").strip()
-        if env_phone:
-            return env_phone
-    except Exception:
-        pass
-
-    try:
-        from app.agent.services.knowledge_loader import load_knowledge
-        company = load_knowledge("company").get("company") or {}
-        company_phone = str(company.get("phone") or "").strip()
-        if company_phone:
-            return company_phone
-    except Exception:
-        pass
-
-    section = get_section("adult_events")
-    if isinstance(section, dict):
-        mc = (section.get("manager_contact") or "").strip()
-        if mc:
-            return mc
-
+    adult_phone = _manager_phone_from_section("adult_events")
+    if adult_phone:
+        return adult_phone
     return ""
-
 
 def load_business_hours_mirror() -> dict[str, Any]:
     raw = _safe_load_yaml(BUSINESS_HOURS_PATH)

@@ -5870,15 +5870,30 @@ def _is_explicit_manager_number_request(message: str) -> bool:
     return True
 
 
+def _manager_number_answer_fallback(
+    manager_phone: str,
+    *,
+    phone_known: bool,
+    self_call: bool,
+) -> str:
+    base = f"მენეჯერის ნომერია: {manager_phone}. შეგიძლიათ პირდაპირ დაუკავშირდეთ."
+    if self_call:
+        return base
+    if phone_known:
+        return base + " მენეჯერი ასევე თავად დაგიკავშირდებათ."
+    return (
+        base + " თუ გირჩევნიათ, დატოვეთ თქვენი ნომერი და მენეჯერი თავად "
+        "დაგიკავშირდებათ."
+    )
+
+
 def _render_manager_number_answer(
     lead: Lead | None = None, *, self_call: bool = False,
 ) -> str:
     """Disclose the configured manager number. CONTEXT-AWARE: when we ALREADY
     have the parent's phone (e.g. a consultation is booked), we do NOT ask for
     it again — we just give the number and note the manager will reach out.
-    When the phone is unknown we additionally offer a callback. The number is
-    read from ``admin_config_service.get_manager_phone()`` (company.yaml /
-    admin / env) — never invented.
+    When the phone is unknown we additionally offer a callback.
 
     ``self_call`` — the parent said they will phone the manager THEMSELVES
     („მე თვითონ დავურეკავ"). In that case we just give the number and never
@@ -5887,28 +5902,30 @@ def _render_manager_number_answer(
     from app.services import admin_config_service
 
     phone_known = bool(lead is not None and (lead.phone or "").strip())
-    phone = (admin_config_service.get_manager_phone() or "").strip()
-    if phone:
-        base = f"მენეჯერის ნომერია: {phone}. შეგიძლიათ პირდაპირ დაუკავშირდეთ."
+    manager_phone = (admin_config_service.get_manager_phone() or "").strip()
+    if manager_phone:
         if self_call:
-            # They will call themselves → no callback offer, no „I'll reach out".
-            return base
-        if phone_known:
-            # Already have their number → never re-ask for it.
-            return base + " მენეჯერი ასევე თავად დაგიკავშირდებათ."
+            key = "manager.direct_phone"
+        elif phone_known:
+            key = "manager.direct_phone_callback_known"
+        else:
+            key = "manager.direct_phone_with_callback"
         return (
-            base + " თუ გირჩევნიათ, დატოვეთ თქვენი ნომერი და მენეჯერი თავად "
-            "დაგიკავშირდებათ."
+            _approved_camp_copy(key, manager_phone=manager_phone)
+            or _manager_number_answer_fallback(
+                manager_phone,
+                phone_known=phone_known,
+                self_call=self_call,
+            )
         )
-    # No number configured → graceful fallback, never invents one. Never ask
-    # for the parent's number when they said they will call the manager.
+    # No number configured → graceful fallback, never invents one and never
+    # substitutes the parent's callback phone for the manager contact.
     if phone_known or self_call:
         return "მენეჯერი თავად დაგიკავშირდებათ."
     return (
         "მენეჯერი სიამოვნებით დაგეხმარებათ — დატოვეთ თქვენი ნომერი და "
         "თავად დაგიკავშირდებათ."
     )
-
 
 # Positive give-me / write-me / send-me request markers. Used to distinguish an
 # explicit request for the manager's number („მენეჯერის ნომერი მომწერეთ") from a
@@ -6924,16 +6941,17 @@ def planner_final_validate(conversation, plan, response: str) -> str:
         out = _planner_validate_response(conversation, plan, out)
         low = out.lower()
 
-        # 1) A manager-phone request MUST return the configured number.
+        # 1) A manager-phone request MUST return the configured number when one
+        # exists. If Admin Config has no manager phone, use the approved no-phone
+        # fallback instead of substituting a user/lead/callback/test number.
         if _cp.F_MUST_RETURN_MANAGER_PHONE in forbidden:
             try:
                 from app.services import admin_config_service
                 phone = (admin_config_service.get_manager_phone() or "").strip()
             except Exception:
-                phone = "558 67 47 33"
-            phone = phone or "558 67 47 33"
+                phone = ""
             digits = re.sub(r"\D", "", phone)
-            if digits and digits not in re.sub(r"\D", "", out):
+            if not digits or digits not in re.sub(r"\D", "", out):
                 logger.info("[planner][validator] forced manager-phone disclosure")
                 out = _render_manager_number_answer(getattr(conversation, "lead", None))
                 low = out.lower()

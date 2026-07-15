@@ -23,6 +23,12 @@ programs:
       exact_amount_manager_deferral_line: |-
         ჯავშნის ზუსტ თანხას, ბანკის გრაფიკსა და ყოველთვიურ გადასახადს მენეჯერი გაგაცნობთ : {manager_phone}
     manager:
+      direct_phone: |-
+        მენეჯერის ნომერია: {manager_phone}. შეგიძლიათ პირდაპირ დაუკავშირდეთ.
+      direct_phone_with_callback: |-
+        მენეჯერის ნომერია: {manager_phone}. შეგიძლიათ პირდაპირ დაუკავშირდეთ. თუ გირჩევნიათ, დატოვეთ თქვენი ნომერი და მენეჯერი თავად დაგიკავშირდებათ.
+      direct_phone_callback_known: |-
+        მენეჯერის ნომერია: {manager_phone}. შეგიძლიათ პირდაპირ დაუკავშირდეთ. მენეჯერი ასევე თავად დაგიკავშირდებათ.
       unknown_detail_ending: |-
         ამ დეტალებს მენეჯერი გაგაცნობთ : {manager_phone}
       parent_contact_visit_defer: |-
