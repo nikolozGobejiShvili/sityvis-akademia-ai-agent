@@ -71,7 +71,7 @@ def emoji_on(monkeypatch):
     monkeypatch.setattr(parent_flow, "_CLIENT_EMOJI_ENABLED", True, raising=False)
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def camp_registration_open(monkeypatch):
     monkeypatch.setattr(
         admin_config_service,
@@ -96,7 +96,7 @@ def _no_hearts(text):
 # =====================================================================
 # 1–5. Unknown-detail fallback with topic prefix + manager phone
 # =====================================================================
-def test_1_room_occupancy(engine_on):
+def test_1_room_occupancy(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u1"), "ოთახში რამდენი ბავშვი იქნება?")
     assert f"რაც შეეხება ოთახებში ბავშვების განაწილებას, {_ENDING}" in out
     assert "რამდენიმე ბავშვი" not in out and "კომფორტული განაწილება" not in out
@@ -104,21 +104,21 @@ def test_1_room_occupancy(engine_on):
     assert _no_hearts(out)
 
 
-def test_2_towels(engine_on):
+def test_2_towels(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u2"), "პირსახოცები იქნება?")
     assert f"რაც შეეხება პირსახოცებს, {_ENDING}" in out
     assert not any(w in out for w in ("დიახ, იქნება", "არა, არ იქნება", "თან წამოიღეთ"))
     assert _no_hearts(out)
 
 
-def test_3_hotel_guests(engine_on):
+def test_3_hotel_guests(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u3"), "სასტუმროში სხვა სტუმრებიც იქნებიან?")
     assert f"რაც შეეხება სასტუმროში სხვა სტუმრების ყოფნას, {_ENDING}" in out
     assert not any(w in out for w in ("მხოლოდ ბანაკისთვის", "სრულად დაჯავშნილი", "სხვა სტუმრები არ"))
     assert _no_hearts(out)
 
 
-def test_4_transport_departure(engine_on):
+def test_4_transport_departure(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u4"), "ტრანსპორტი საიდან გავა?")
     # 2026-07-06 — transport is now answered by the deterministic transport
     # interceptor (before the operational defer): it states the KNOWN fact
@@ -131,13 +131,13 @@ def test_4_transport_departure(engine_on):
     assert _no_hearts(out)
 
 
-def test_5_hourly_schedule(engine_on):
+def test_5_hourly_schedule(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u5"), "დღის განრიგი საათობრივად როგორია?")
     assert f"რაც შეეხება დღის ზუსტ განრიგს, {_ENDING}" in out
     assert _no_hearts(out)
 
 
-def test_5b_direct_call_rules(engine_on):
+def test_5b_direct_call_rules(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u5b"), "ბავშვს დღეში რამდენჯერ დავურეკავ?")
     assert f"რაც შეეხება ბავშვთან პირდაპირი კონტაქტის წესებს, {_ENDING}" in out
     assert not any(w in out for w in ("ნებისმიერ დროს", "შეუზღუდავად", "დღეში ორჯერ"))
@@ -147,7 +147,7 @@ def test_5b_direct_call_rules(engine_on):
 # =====================================================================
 # 6–9. Stream availability / remaining seats (never invent)
 # =====================================================================
-def test_6_seats_stream2(engine_on):
+def test_6_seats_stream2(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("s6"), "მე-2 ნაკადზე ადგილები გაქვთ?")
     assert _SEATS_FB in out
     assert not any(w in out for w in ("კი, ადგილები არის", "ადგილი იქნება", "დაგარეგისტრირებთ",
@@ -155,19 +155,19 @@ def test_6_seats_stream2(engine_on):
     assert _no_hearts(out)
 
 
-def test_7_seats_date_stream(engine_on):
+def test_7_seats_date_stream(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("s7"), "5-11 ივლისის ნაკადზე არის ადგილი?")
     assert _SEATS_FB in out
     assert not any(w in out for w in ("კი, ადგილი არის", "თავისუფალია", "დაგარეგისტრირებთ"))
 
 
-def test_8_seats_count(engine_on):
+def test_8_seats_count(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("s8"), "რამდენი ადგილი დარჩა?")
     assert _SEATS_FB in out
     assert not re.search(r"\d+\s*ადგილ", out)                # no invented count
 
 
-def test_9_seats_with_stream_date(engine_on):
+def test_9_seats_with_stream_date(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("s9"), "მე-2 ნაკადზე, 5-11 ივლისი, გაქვთ ადგილები?")
     assert "მე-2 ნაკადი ტარდება 5–11 ივლისს." in out         # known part (may confirm)
     assert _SEATS_FB in out                                  # unknown part deferred
@@ -177,21 +177,21 @@ def test_9_seats_with_stream_date(engine_on):
 # =====================================================================
 # 10–12. Known + unknown split
 # =====================================================================
-def test_10_discount_plus_seats_exact(engine_on):
+def test_10_discount_plus_seats_exact(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("k10"), "ორი ბავშვი მინდა გამოვუშვა, ფასდაკლება და ადგილები იქნება?")
     expected = ("დედმამიშვილებისთვის მოქმედებს 10%-იანი ფასდაკლება.\n\n" + _SEATS_FB)
     assert expected in out
     assert _no_hearts(out)
 
 
-def test_11_age_plus_seats(engine_on):
+def test_11_age_plus_seats(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("k11"), "მეორე ბავშვი 12 წლის არის და ადგილები გაქვთ?")
     assert "12 წლის ასაკი ბანაკისთვის შესაბამისია, რადგან პროგრამა 9–17 წლის ბავშვებისთვისაა." in out
     assert _SEATS_FB in out
     assert "რა არის მთავარი, რის მიღებაც გსურთ" not in out    # no generic discovery Q
 
 
-def test_12_exact_menu_split(engine_on):
+def test_12_exact_menu_split(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("k12"), "ზუსტად რა მენიუ ექნებათ?")
     assert "ბანაკში კვება ორგანიზებულია ჯანსაღი და დაბალანსებული მენიუს მიხედვით" in out
     assert f"რაც შეეხება ზუსტ მენიუს, {_ENDING}" in out
@@ -200,7 +200,7 @@ def test_12_exact_menu_split(engine_on):
 # =====================================================================
 # 13–16. Approved wording (intro / price / CTA / food)
 # =====================================================================
-def test_13_intro_wording_in_prompt():
+def test_13_intro_wording_in_prompt(camp_registration_open):
     # Client follow-up hotfix (2026-06-29) — updated intro wording.
     prompt = parent_llm_engine._build_system_prompt()
     assert ("სიტყვის აკადემიის ბანაკი 7-დღიანი გამოცდილებაა, სადაც ბავშვები ისვენებენ და, "
@@ -212,7 +212,7 @@ def test_13_intro_wording_in_prompt():
     assert prompt.count("თვითგამოხატვის პროცესში ერთვებიან") == 1  # the ban only
 
 
-def test_13b_greeting_intro_gets_one_blue_heart(engine_on, emoji_on, monkeypatch):
+def test_13b_greeting_intro_gets_one_blue_heart(engine_on, emoji_on, monkeypatch, camp_registration_open):
     intro = ("გამარჯობა! სიტყვის აკადემიის ბანაკი 7-დღიანი გამოცდილებაა. "
              "რამდენი წლის არის თქვენი შვილი?")
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: intro)
@@ -226,7 +226,7 @@ def test_13b_greeting_intro_gets_one_blue_heart(engine_on, emoji_on, monkeypatch
     assert "რამდენი წლის არის თქვენი შვილი" in out
 
 
-def test_14_price_payment_wording_in_prompt():
+def test_14_price_payment_wording_in_prompt(camp_registration_open):
     # Current approved split: direct price asks get the full block, while pure
     # payment-process asks stay price-free.
     prompt = parent_llm_engine._build_system_prompt()
@@ -240,19 +240,19 @@ def test_14_price_payment_wording_in_prompt():
             "ხელშეკრულებით გათვალისწინებულ დროში.") in prompt
 
 
-def test_14b_price_answer_has_no_blue_heart(engine_on, emoji_on):
+def test_14b_price_answer_has_no_blue_heart(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_conv("p14"), "ბანაკის ფასი რა არის?")
     assert "2150" in out
     assert _no_hearts(out)
 
 
-def test_15_consultation_cta_wording_in_prompt():
+def test_15_consultation_cta_wording_in_prompt(camp_registration_open):
     # Client follow-up hotfix (2026-06-29) — updated consultation CTA wording.
     prompt = parent_llm_engine._build_system_prompt()
     assert "თუ გსურთ, კონსულტაციაზე ჩაგწერთ, სადაც დეტალებს მენეჯერი გაგაცნობთ." in prompt
 
 
-def test_16_food_general_wording(engine_on):
+def test_16_food_general_wording(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("f16"), "კვება როგორია ბანაკში?")
     assert "ბანაკში კვება ორგანიზებულია ჯანსაღი და დაბალანსებული მენიუს მიხედვით" in out
     assert not re.search("[Ѐ-ӿ]", out)                       # no mixed-script / Cyrillic
@@ -261,7 +261,7 @@ def test_16_food_general_wording(engine_on):
 # =====================================================================
 # 17–24. Emoji policy (💙 only greeting / booking / farewell)
 # =====================================================================
-def test_17_greeting_one_blue_heart(emoji_on):
+def test_17_greeting_one_blue_heart(emoji_on, camp_registration_open):
     conv = _conv("e17", state="START", history=False)
     out = parent_flow._apply_client_emoji_policy(
         conv, "გამარჯობა, ბანაკზე ინფორმაცია მაინტერესებს",
@@ -271,7 +271,7 @@ def test_17_greeting_one_blue_heart(emoji_on):
     assert out.startswith("გამარჯობა 💙")
 
 
-def test_18_booking_confirmation_blue_heart(emoji_on, monkeypatch):
+def test_18_booking_confirmation_blue_heart(emoji_on, monkeypatch, camp_registration_open):
     monkeypatch.setattr(parent_flow, "_booking_success_this_turn", lambda c: True)
     base = ("კონსულტაცია ჩანიშნულია.\n\n"
             "თქვენი მონაცემები გამოიყენება მხოლოდ კონსულტაციისთვის და არ გასაჯაროვდება.")
@@ -281,7 +281,7 @@ def test_18_booking_confirmation_blue_heart(emoji_on, monkeypatch):
     assert "თქვენი მონაცემები გამოიყენება მხოლოდ კონსულტაციისთვის" in out   # privacy wording
 
 
-def test_19_farewell_blue_heart(emoji_on):
+def test_19_farewell_blue_heart(emoji_on, camp_registration_open):
     out = parent_flow._apply_client_emoji_policy(
         _conv("e19"), "მადლობა",
         "მადლობა თქვენ. თუ კიდევ დაგჭირდებათ ინფორმაცია, მომწერეთ.",
@@ -290,7 +290,7 @@ def test_19_farewell_blue_heart(emoji_on):
     assert "მადლობა თქვენ 💙" in out
 
 
-def test_20_generic_manager_cta_no_forced_heart(emoji_on):
+def test_20_generic_manager_cta_no_forced_heart(emoji_on, camp_registration_open):
     out = parent_flow._apply_client_emoji_policy(
         _conv("e20"), "მენეჯერთან დამაკავშირეთ",
         "მენეჯერის ნომერია: 558 67 47 33.",
@@ -298,23 +298,23 @@ def test_20_generic_manager_cta_no_forced_heart(emoji_on):
     assert _no_hearts(out)
 
 
-def test_21_unknown_fallback_no_heart(engine_on, emoji_on):
+def test_21_unknown_fallback_no_heart(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_conv("e21"), "პირსახოცები იქნება?")
     assert f"რაც შეეხება პირსახოცებს, {_ENDING}" in out
     assert _no_hearts(out)
 
 
-def test_22_price_no_heart(engine_on, emoji_on):
+def test_22_price_no_heart(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_conv("e22"), "ბანაკის ფასი რა არის?")
     assert _no_hearts(out)
 
 
-def test_23_safety_no_heart(engine_on, emoji_on):
+def test_23_safety_no_heart(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_conv("e23"), "უსაფრთხოება როგორ არის?")
     assert _no_hearts(out)
 
 
-def test_24_consultation_offer_no_heart(emoji_on):
+def test_24_consultation_offer_no_heart(emoji_on, camp_registration_open):
     # An OFFER (not a confirmed booking) must never get 💙.
     out = parent_flow._apply_client_emoji_policy(
         _conv("e24"), "კონსულტაციაზე ჩამწერეთ?",
@@ -323,7 +323,7 @@ def test_24_consultation_offer_no_heart(emoji_on):
     assert _no_hearts(out)
 
 
-def test_24b_no_period_after_heart_unit():
+def test_24b_no_period_after_heart_unit(camp_registration_open):
     # The guard removes any „." immediately after the heart, keeps the break.
     assert parent_flow._strip_period_after_heart("კონსულტაცია ჩანიშნულია 💙.") == "კონსულტაცია ჩანიშნულია 💙"
     assert parent_flow._strip_period_after_heart("გამარჯობა 💙. ტექსტი") == "გამარჯობა 💙 ტექსტი"
@@ -333,13 +333,13 @@ def test_24b_no_period_after_heart_unit():
 # =====================================================================
 # 25–29. Regressions — known flows must NOT hit the unknown fallback
 # =====================================================================
-def test_25_safety_still_works(engine_on):
+def test_25_safety_still_works(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("r25"), "ბანაკში უსაფრთხოება როგორ არის?")
     assert "24-საათიანი ვიდეომონიტორინგი" in out
     assert _ENDING not in out
 
 
-def test_26_parent_communication_still_works(engine_on):
+def test_26_parent_communication_still_works(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("r26"), "ბავშვთან კონტაქტი მექნება?")
     assert "ფოტო-ვიდეო მასალა" in out                        # known block returned
     # Client wording fix (2026-07-01): the direct-contact caveat is the approved
@@ -349,7 +349,7 @@ def test_26_parent_communication_still_works(engine_on):
     assert "აგიხსნით" not in out
 
 
-def test_27_sunday_school_not_camp_fallback(engine_on, monkeypatch):
+def test_27_sunday_school_not_camp_fallback(engine_on, monkeypatch, camp_registration_open):
     monkeypatch.setattr(
         "app.services.admin_config_service.get_sunday_school_status",
         lambda: {"status": "coming_soon", "availability_text": "საკვირაო სკოლა ივლისში დაემატება.",
@@ -360,13 +360,13 @@ def test_27_sunday_school_not_camp_fallback(engine_on, monkeypatch):
     assert _ENDING not in out
 
 
-def test_28_adult_event_not_camp_fallback(engine_on):
+def test_28_adult_event_not_camp_fallback(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("r28", state="START"), "ზრდასრულთა ღონისძიებები რა გაქვთ?")
     assert _ENDING not in out
     assert "დარჩენილ ადგილებს" not in out
 
 
-def test_29_stream_date_question_not_seats_fallback(engine_on):
+def test_29_stream_date_question_not_seats_fallback(engine_on, camp_registration_open):
     # A pure „when is stream 2?" (no seats/availability word) → engine dates,
     # NOT the remaining-seats fallback.
     out = parent_flow.handle(_conv("r29"), "მე-2 ნაკადი როდის არის?")
@@ -377,7 +377,7 @@ def test_29_stream_date_question_not_seats_fallback(engine_on):
 # =====================================================================
 # Unit: no red heart remains in the deterministic policy
 # =====================================================================
-def test_heart_constant_is_blue():
+def test_heart_constant_is_blue(camp_registration_open):
     assert parent_flow._HEART == "💙"
 
 
@@ -412,14 +412,14 @@ def _fresh(sid, child_age=""):
 
 
 # 1. Global unknown rule — un-normalizable topic → generic fallback.
-def test_hf1_generic_unknown_fallback(engine_on, emoji_on):
+def test_hf1_generic_unknown_fallback(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_conv("hf1"), "დაზღვევა გაქვთ ბანაკში?")
     assert _GENERIC_FB in out
     assert _no_hearts(out)
 
 
 # 2. First-turn unknown fallback (room) — before intro / age question.
-def test_hf2_first_turn_room(engine_on, emoji_on):
+def test_hf2_first_turn_room(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_fresh("hf2"), "ოთახში რამდენი ბავშვი იქნება?")
     assert _ROOM_FB in out
     assert "7-დღიანი" not in out
@@ -428,7 +428,7 @@ def test_hf2_first_turn_room(engine_on, emoji_on):
 
 
 # 3. First-turn typo room question.
-def test_hf3_first_turn_room_typo(engine_on):
+def test_hf3_first_turn_room_typo(engine_on, camp_registration_open):
     out = parent_flow.handle(_fresh("hf3"), "ოთხაში რამდენი ბავაში იქნება?")
     assert _ROOM_FB in out
     assert "7-დღიანი" not in out
@@ -436,7 +436,7 @@ def test_hf3_first_turn_room_typo(engine_on):
 
 
 # 4. First-turn towel fallback.
-def test_hf4_first_turn_towel(engine_on, emoji_on):
+def test_hf4_first_turn_towel(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_fresh("hf4"), "პირსახოცები იქნება?")
     assert _TOWEL_FB in out
     assert "7-დღიანი" not in out
@@ -445,7 +445,7 @@ def test_hf4_first_turn_towel(engine_on, emoji_on):
 
 
 # 5. First-turn stream availability fallback (never invents availability).
-def test_hf5_first_turn_seats(engine_on):
+def test_hf5_first_turn_seats(engine_on, camp_registration_open):
     out = parent_flow.handle(_fresh("hf5"), "მე-2 ნაკადზე ადგილები გაქვთ?")
     assert _SEATS_FB in out
     assert "7-დღიანი" not in out
@@ -454,7 +454,7 @@ def test_hf5_first_turn_seats(engine_on):
 
 
 # 6. Greeting 💙 placement (after greeting only, not after intro text).
-def test_hf6_greeting_emoji_placement(engine_on, emoji_on, monkeypatch):
+def test_hf6_greeting_emoji_placement(engine_on, emoji_on, monkeypatch, camp_registration_open):
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _INTRO)
     out = parent_flow.handle(_fresh("hf6"), "გამარჯობა ბანაკზე მაინტერესებს ინფორმაცია")
     assert out.startswith("გამარჯობა 💙")
@@ -470,7 +470,7 @@ def test_hf6_greeting_emoji_placement(engine_on, emoji_on, monkeypatch):
 
 
 # 7. Updated intro wording in the actual reply.
-def test_hf7_intro_wording_output(engine_on, monkeypatch):
+def test_hf7_intro_wording_output(engine_on, monkeypatch, camp_registration_open):
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _INTRO)
     out = parent_flow.handle(_fresh("hf7"), "ბანაკზე მაინტერესებს ინფორმაცია")
     # Approved deterministic Camp intro (client hotfix 2026-07-03) — exact text.
@@ -505,7 +505,7 @@ def test_hf8_price_amount_returns_full_price_block_without_llm_or_heart(
 
 
 # 9. Payment answer — approved payment wording, kept intact.
-def test_hf9_payment_answer(engine_on, emoji_on, monkeypatch):
+def test_hf9_payment_answer(engine_on, emoji_on, monkeypatch, camp_registration_open):
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _PAYMENT_APPROVED)
     out = parent_flow.handle(_conv("hf9"), "როგორ ხდება გადახდა?")
     assert _PAYMENT_APPROVED in out
@@ -514,7 +514,7 @@ def test_hf9_payment_answer(engine_on, emoji_on, monkeypatch):
 
 
 # 10. One-time payment question → payment wording (not the simple price).
-def test_hf10_onetime_payment(engine_on, monkeypatch):
+def test_hf10_onetime_payment(engine_on, monkeypatch, camp_registration_open):
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _PAYMENT_APPROVED)
     out = parent_flow.handle(_conv("hf10"), "ერთიანად ხდება გადახდა?")
     assert "ხელშეკრულებით გათვალისწინებულ დროში" in out
@@ -522,28 +522,28 @@ def test_hf10_onetime_payment(engine_on, monkeypatch):
 
 
 # 11. Purchase question → payment wording.
-def test_hf11_purchase(engine_on, monkeypatch):
+def test_hf11_purchase(engine_on, monkeypatch, camp_registration_open):
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _PAYMENT_APPROVED)
     out = parent_flow.handle(_conv("hf11"), "როგორ ხდება შეძენა?")
     assert "ხელშეკრულებით გათვალისწინებულ დროში" in out
 
 
 # 12. General accommodation → approved general sentence (no room count).
-def test_hf12_accommodation_general(engine_on):
+def test_hf12_accommodation_general(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("hf12"), "განთავსება როგორია?")
     assert "ბანაკში ბავშვები ნაწილდებიან კომფორტულ ოთახებში." in out
     assert not re.search(r"\d+\s*ბავშვ", out)
 
 
 # 13. Exact room count → unknown fallback (not the general sentence).
-def test_hf13_exact_room_count(engine_on):
+def test_hf13_exact_room_count(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("hf13"), "ოთახში რამდენი ბავშვი იქნება?")
     assert _ROOM_FB in out
     assert "ნაწილდებიან კომფორტულ ოთახებში" not in out
 
 
 # 14. Organization / team question → no age funnel, org defer.
-def test_hf14_org_question(engine_on, emoji_on):
+def test_hf14_org_question(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_conv("hf14"), "თქვენს უკან ვინ დგას?")
     assert "ეს არის სიტყვის აკადემიის AI ასისტენტი." in out
     assert _ORG_FB in out
@@ -553,7 +553,7 @@ def test_hf14_org_question(engine_on, emoji_on):
 
 
 # 15. Duplicate-age guard — unit.
-def test_hf15_duplicate_age_guard_unit():
+def test_hf15_duplicate_age_guard_unit(camp_registration_open):
     both = ("სიტყვის აკადემია დამოუკიდებელი გუნდია. რამდენი წლის არის თქვენი შვილი? "
             "თქვენი შვილი რამდენი წლისაა?")
     out = parent_flow._dedupe_child_age_questions(both)
@@ -564,7 +564,7 @@ def test_hf15_duplicate_age_guard_unit():
 
 
 # 15b. Duplicate-age guard — end to end (engine leaked two).
-def test_hf15b_duplicate_age_guard_end_to_end(engine_on, monkeypatch):
+def test_hf15b_duplicate_age_guard_end_to_end(engine_on, monkeypatch, camp_registration_open):
     dbl = ("სიამოვნებით დაგეხმარებით. რამდენი წლის არის თქვენი შვილი? "
            "თქვენი შვილი რამდენი წლისაა?")
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: dbl)
@@ -574,7 +574,7 @@ def test_hf15b_duplicate_age_guard_end_to_end(engine_on, monkeypatch):
 
 
 # 16. Thanks closing — no funnel continuation.
-def test_hf16_thanks_closing(engine_on, emoji_on):
+def test_hf16_thanks_closing(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_conv("hf16", child_age=""), "მადლობა")
     assert "💙" in out
     assert "❤️" not in out
@@ -586,7 +586,7 @@ def test_hf16_thanks_closing(engine_on, emoji_on):
 
 
 # 17. Decline + thanks — warm close, no age/phone/consultation.
-def test_hf17_decline_thanks(engine_on, emoji_on):
+def test_hf17_decline_thanks(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_conv("hf17", child_age=""), "მადლობა არ მინდა")
     assert "💙" in out
     assert "💙." not in out
@@ -596,7 +596,7 @@ def test_hf17_decline_thanks(engine_on, emoji_on):
 
 
 # 18. Soft close.
-def test_hf18_soft_close(engine_on):
+def test_hf18_soft_close(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("hf18", child_age=""), "ჯერ არა, მადლობა")
     assert "რამდენი წლის" not in out
     assert "9-ნიშნა" not in out
@@ -604,7 +604,7 @@ def test_hf18_soft_close(engine_on):
 
 
 # 19. Later close.
-def test_hf19_later_close(engine_on):
+def test_hf19_later_close(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("hf19", child_age=""), "მადლობა, მერე მოგწერთ")
     assert "რამდენი წლის" not in out
     assert "9-ნიშნა" not in out
@@ -612,33 +612,33 @@ def test_hf19_later_close(engine_on):
 
 
 # ── Regression — known flows keep working, no unknown fallback ──────────────
-def test_hf_reg_food_general_no_heart(engine_on, emoji_on):
+def test_hf_reg_food_general_no_heart(engine_on, emoji_on, camp_registration_open):
     out = parent_flow.handle(_conv("hfr1"), "კვება როგორია ბანაკში?")
     assert "ბანაკში კვება ორგანიზებულია ჯანსაღი და დაბალანსებული მენიუს მიხედვით" in out
     assert _ENDING not in out
     assert _no_hearts(out)
 
 
-def test_hf_reg_exact_menu_split(engine_on):
+def test_hf_reg_exact_menu_split(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("hfr2"), "ზუსტად რა მენიუ ექნებათ?")
     assert "ბანაკში კვება ორგანიზებულია ჯანსაღი და დაბალანსებული მენიუს მიხედვით" in out
     assert f"რაც შეეხება ზუსტ მენიუს, {_ENDING}" in out
 
 
-def test_hf_reg_safety_no_fallback(engine_on):
+def test_hf_reg_safety_no_fallback(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("hfr3"), "ბანაკში უსაფრთხოება როგორ არის?")
     assert "24-საათიანი ვიდეომონიტორინგი" in out
     assert _ENDING not in out
 
 
-def test_hf_reg_stream_date_known_not_seats(engine_on):
+def test_hf_reg_stream_date_known_not_seats(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("hfr4"), "მე-2 ნაკადი როდის არის?")
     assert _SEATS_FB not in out
     assert "დარჩენილ ადგილებს" not in out
 
 
 # ── Adversarial-review hardening (client follow-up hotfix 2026-06-29) ────────
-def test_hf_rev_bare_greeting_menu_preserved(engine_on, emoji_on):
+def test_hf_rev_bare_greeting_menu_preserved(engine_on, emoji_on, camp_registration_open):
     # Bare „გამარჯობა" first turn → welcome menu with 💙 on its OWN opening line
     # and the two-option menu preserved (not collapsed onto one line).
     out = parent_flow.handle(_fresh("rev1"), "გამარჯობა")
@@ -649,7 +649,7 @@ def test_hf_rev_bare_greeting_menu_preserved(engine_on, emoji_on):
     assert "\n" in out.split("💙", 1)[1]
 
 
-def test_hf_rev_gamarjobat_not_split():
+def test_hf_rev_gamarjobat_not_split(camp_registration_open):
     # The longer greeting „გამარჯობათ" must not be split by the shorter form.
     out = parent_flow._add_heart_after_greeting("გამარჯობათ, ბანაკი მშვენიერია.")
     assert out.startswith("გამარჯობა 💙")
@@ -657,7 +657,7 @@ def test_hf_rev_gamarjobat_not_split():
     assert "💙 თ" not in out                       # not split before „თ"
 
 
-def test_hf_rev_greeting_plus_unknown_no_heart(engine_on, emoji_on):
+def test_hf_rev_greeting_plus_unknown_no_heart(engine_on, emoji_on, camp_registration_open):
     # A first-turn greet + unknown-detail → the manager defer only, NO 💙.
     out = parent_flow.handle(_fresh("rev3"), "გამარჯობა, ოთახში რამდენი ბავშვია?")
     assert _ROOM_FB in out
@@ -665,7 +665,7 @@ def test_hf_rev_greeting_plus_unknown_no_heart(engine_on, emoji_on):
     assert "გამარჯობა" not in out                  # no invented greeting on the defer
 
 
-def test_hf_rev_price_upfront_leak_stripped(engine_on, monkeypatch):
+def test_hf_rev_price_upfront_leak_stripped(engine_on, monkeypatch, camp_registration_open):
     # A paraphrased upfront-payment leak („წინასწარ") is stripped from a simple
     # price answer even without the TBC / განვადება anchors.
     leak = ("ბანაკის საფასურია 2150 ლარი. ღირებულებაში შედის ტრანსპორტი, კვება. "
@@ -676,7 +676,7 @@ def test_hf_rev_price_upfront_leak_stripped(engine_on, monkeypatch):
     assert "წინასწარ" not in out
 
 
-def test_hf_rev_payment_via_gadasakhad_not_gutted(engine_on, monkeypatch):
+def test_hf_rev_payment_via_gadasakhad_not_gutted(engine_on, monkeypatch, camp_registration_open):
     # „გადასახადი როგორ ხდება?" is a PAYMENT question → the approved payment
     # wording survives (the price sanitizer must not gut it).
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: _PAYMENT_APPROVED)
@@ -684,7 +684,7 @@ def test_hf_rev_payment_via_gadasakhad_not_gutted(engine_on, monkeypatch):
     assert _PAYMENT_APPROVED in out
 
 
-def test_hf_rev_yes_thanks_not_closed(engine_on):
+def test_hf_rev_yes_thanks_not_closed(engine_on, camp_registration_open):
     # „კი, მადლობა" (a slot-offer confirmation) must NOT be cold-closed.
     assert parent_flow._is_thanks_or_farewell_close("კი, მადლობა") is False
     assert parent_flow._is_thanks_or_farewell_close("მადლობა, ჩამწერეთ") is False
@@ -693,7 +693,7 @@ def test_hf_rev_yes_thanks_not_closed(engine_on):
     assert parent_flow._is_thanks_or_farewell_close("მადლობა") is True
 
 
-def test_hf_rev_dedupe_asaki_ramdenia_form():
+def test_hf_rev_dedupe_asaki_ramdenia_form(camp_registration_open):
     # AGE_QUESTION_RE misses „ასაკი რამდენია?"; the dedup + ensure-guard must not.
     dbl = "გასაგებია. თქვენი შვილის ასაკი რამდენია? თქვენი შვილი რამდენი წლისაა?"
     out = parent_flow._dedupe_child_age_questions(dbl)
@@ -728,32 +728,32 @@ def _conv_hist(sid, prior, child_age="12"):
     return c
 
 
-def test_ed1_food_frequency(engine_on):
+def test_ed1_food_frequency(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed1"), "კვება დღეში რადმენჯერ არის?")
     assert _FOOD_GEN in out
     assert _FREQ_FB in out
     assert not re.search(r"დღეში\s*\d+", out)          # no invented frequency
 
 
-def test_ed2_food_frequency_repeat(engine_on):
+def test_ed2_food_frequency_repeat(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv_hist("ed2", _FOOD_GEN), "დღეში რამდენჯერ ექნებათ კვება არ იცი?")
     assert _FREQ_FB in out
     assert _FOOD_GEN not in out                          # no repeated general block
 
 
-def test_ed3_menu_detail(engine_on):
+def test_ed3_menu_detail(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed3"), "მენიუ როგორი იქნება?")
     assert _FOOD_GEN in out
     assert _MENU_FB2 in out
 
 
-def test_ed3b_menu_detail_variants(engine_on):
+def test_ed3b_menu_detail_variants(engine_on, camp_registration_open):
     for m in ("ზუსტად რა მენიუ ექნებათ?", "მენიუში რა იქნება?", "რა საჭმელები ექნებათ?", "დღის მენიუ როგორია?"):
         out = parent_flow.handle(_conv("ed3b"), m)
         assert _MENU_FB2 in out, m
 
 
-def test_ed4_stadium_no_age_question(engine_on):
+def test_ed4_stadium_no_age_question(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed4", child_age=""), "სტადიონი ექნებათ ბანაკში?")
     assert _STADIUM_FB in out
     assert "როგორია თქვენი შვილის ასაკი" not in out
@@ -761,37 +761,37 @@ def test_ed4_stadium_no_age_question(engine_on):
     assert "თქვენი შვილი რამდენი წლისაა" not in out
 
 
-def test_ed5_multi_price_sports(engine_on):
+def test_ed5_multi_price_sports(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed5"), "ფასი რა არის ბანაკის? და სპორტული აქტივობები იქნება?")
     assert "2150" in out
     assert "სპორტული აქტივობები" in out                  # sports NOT dropped
 
 
-def test_ed6_multi_food_menu(engine_on):
+def test_ed6_multi_food_menu(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed6"), "კვება შედის და მენიუ როგორი იქნება?")
     assert "ბანაკში კვება ორგანიზებულია" in out
     assert _MENU_FB2 in out
 
 
-def test_ed7_multi_safety_contact(engine_on):
+def test_ed7_multi_safety_contact(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed7"), "უსაფრთხოება როგორ არის და ბავშვთან კონტაქტი მექნება?")
     assert "უსაფრთხოებ" in out
     assert ("მშობლ" in out) or ("კომუნიკაცი" in out)     # parent-communication present
 
 
-def test_ed8_multi_price_stadium(engine_on):
+def test_ed8_multi_price_stadium(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed8"), "ფასი რა არის და სტადიონი ექნებათ?")
     assert "2150" in out
     assert _STADIUM_FB in out
 
 
-def test_ed8b_multi_price_seats(engine_on):
+def test_ed8b_multi_price_seats(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed8b"), "ფასი რა არის და ადგილები გაქვთ?")
     assert "2150" in out
     assert _SEATS_FB in out
 
 
-def test_ed9_political_qoc(engine_on):
+def test_ed9_political_qoc(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed9", child_age=""), "ქოცები ხართ თქვენ?")
     assert "პოლიტიკურ თემებზე პასუხს არ ვცემ" in out
     assert "ბანაკთან დაკავშირებულ კითხვებზე დაგეხმარებით" in out
@@ -800,59 +800,59 @@ def test_ed9_political_qoc(engine_on):
     assert _no_hearts(out)
 
 
-def test_ed10_political_nac(engine_on):
+def test_ed10_political_nac(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed10", child_age=""), "ნაცები ხართ?")
     assert "პოლიტიკურ თემებზე პასუხს არ ვცემ" in out
     assert "მსურს დაგეხმაროთ" not in out
     assert "რამდენი წლის" not in out
 
 
-def test_ed10b_political_no_false_positive():
+def test_ed10b_political_no_false_positive(camp_registration_open):
     import app.reasoning.camp_topic_facts as _ctf
     assert _ctf.political_reply("თქვენი ნაცნობი ვარ") is None    # „ნაცნობი" ≠ political
 
 
-def test_ed11_hotel_guests_no_cta(engine_on):
+def test_ed11_hotel_guests_no_cta(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed11"), "სხვა სტუმრები იქნებიან ბანაკში თუ მარტო ბანაკის ბავშვები იქნებიან?")
     assert _ENDING in out
     assert "კონსულტაციაზე ჩაგწერთ" not in out
     assert "აგიხსნით" not in out
 
 
-def test_ed12_staff_count(engine_on):
+def test_ed12_staff_count(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed12"), "რამდენი ადამიანისგან შედგება ბანაკის სტაფი?")
     assert _STAFF_LINE in out
     assert _STAFF_FB in out
     assert not re.search(r"\d+\s*(ადამიან|ლიდერ|სტაფ)", out)   # no invented count
 
 
-def test_ed13_staff_count_followup(engine_on):
+def test_ed13_staff_count_followup(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed13"), "რამდენი ადამიანი იქნება სტაფში არ იცი?")
     assert _STAFF_FB in out
 
 
-def test_ed14_unclear_phrase(engine_on):
+def test_ed14_unclear_phrase(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed14", child_age=""), "ჩემი შვილი ხელა ბავშვები იქნებიან?")
     assert ("გთხოვთ, განმიმარტეთ, რას გულისხმობთ „ხელა ბავშვებში“, რომ უკეთესად "
             "შევძლო თქვენი დახმარება.") in out
     assert "ასე უკეთ გაგვეცნობა თქვენი სურვილები" not in out
 
 
-def test_ed15_peer_same_age(engine_on):
+def test_ed15_peer_same_age(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed15", child_age=""), "ჩემი შვილი 14 წლის არის და მისი ტოლი ბავშვები თუ იქნებიან?")
     assert "14 წლის ასაკი ბანაკისთვის შესაბამისია" in out
     assert _PEER_FB in out
     assert "თანატოლები იქნებიან" not in out
 
 
-def test_ed16_age_group_count(engine_on):
+def test_ed16_age_group_count(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed16"), "რამდენი ბავშვი იქნება 14 წლის?")
     assert f"რაც შეეხება 14 წლის ბავშვების რაოდენობას, {_ENDING}" in out
     assert "კონსულტაციაზე ჩაგწერთ" not in out
     assert "აგიხსნით" not in out
 
 
-def test_ed17_final_guard_unit():
+def test_ed17_final_guard_unit(camp_registration_open):
     leaked = ("რაც შეეხება სტადიონს, ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33. "
               "როგორია თქვენი შვილის ასაკი, რომ უკეთ დაგეხმაროთ?")
     out = parent_flow._strip_extras_after_unknown_fallback(leaked)
@@ -868,6 +868,6 @@ def test_ed17_final_guard_unit():
     assert "აგიხსნით" not in out2
 
 
-def test_ed17b_final_guard_preserves_known_unknown_split():
+def test_ed17b_final_guard_preserves_known_unknown_split(camp_registration_open):
     split = ("დედმამიშვილებისთვის მოქმედებს 10%-იანი ფასდაკლება.\n\n" + _SEATS_FB)
     assert parent_flow._strip_extras_after_unknown_fallback(split) == split

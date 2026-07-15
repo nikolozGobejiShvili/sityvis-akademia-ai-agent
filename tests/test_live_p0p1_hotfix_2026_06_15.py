@@ -198,7 +198,7 @@ def test_buga_idempotent_single_dispatch(monkeypatch):
     assert out2 is not None and "უკვე" in out2  # already-handed-off reassurance
 
 
-def test_buga_end_to_end_via_handle(monkeypatch):
+def test_buga_end_to_end_via_handle(monkeypatch, camp_registration_open):
     # The deterministic pre-handlers run on the engine-ON path (live default).
     # Enable the engine; our handler returns BEFORE the LLM, so no OpenAI call.
     import dataclasses

@@ -299,7 +299,7 @@ def test_age_correction_before_booking(engine_on, monkeypatch):
 # ==========================================================================
 
 
-def test_process_message_persists_age_and_phone(engine_on, monkeypatch):
+def test_process_message_persists_age_and_phone(engine_on, monkeypatch, camp_registration_open):
     """Through conversation_service.process_message (the live path): after a
     camp-interest turn, the combined age+phone message persists BOTH facts on
     the stored lead and the reply does not re-ask the age."""

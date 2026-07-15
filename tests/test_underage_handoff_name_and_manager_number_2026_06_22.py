@@ -216,7 +216,7 @@ def test_real_name_only_still_asks_phone(monkeypatch):
 # ===========================================================================
 
 
-def test_transcript_end_to_end(engine_on, monkeypatch):
+def test_transcript_end_to_end(engine_on, monkeypatch, camp_registration_open):
     """Replay the reported live transcript on the under-age path:
     „კი მომწერე" → asks name + phone (not „სახელი მივიღე");
     „მენეჯერის ნომერი მომწერე" → discloses the manager number.

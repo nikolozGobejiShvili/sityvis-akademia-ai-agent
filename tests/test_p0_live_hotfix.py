@@ -67,7 +67,7 @@ _BUG1_CLEAR_CAMP = [
 
 
 @pytest.mark.parametrize("msg", _BUG1_CLEAR_CAMP)
-def test_bug1_fullpath_clear_camp_skips_menu(parent_engine_on, msg):
+def test_bug1_fullpath_clear_camp_skips_menu(parent_engine_on, msg, camp_registration_open):
     """FULL PATH: clear camp intent → NO menu, camp flow continues (engine
     consulted). Goes through conversation_service.process_message, not just
     the _has_explicit_georgian_camp_intent helper."""

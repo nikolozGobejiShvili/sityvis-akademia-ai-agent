@@ -214,7 +214,7 @@ def frozen_camp(monkeypatch):
     return _freeze
 
 
-def test_get_camp_info_dates_filters_started_stream(frozen_camp):
+def test_get_camp_info_dates_filters_started_stream(frozen_camp, camp_registration_open):
     frozen_camp(6, 23)  # I started today
     out = _make_executor()._get_camp_info({"topic": "dates"})
     assert out["success"] is True
@@ -223,7 +223,7 @@ def test_get_camp_info_dates_filters_started_stream(frozen_camp):
     assert out["duration_days"] == 7  # other facts unchanged
 
 
-def test_get_camp_info_all_topic_filters_streams(frozen_camp):
+def test_get_camp_info_all_topic_filters_streams(frozen_camp, camp_registration_open):
     frozen_camp(7, 5)  # I + II started
     out = _make_executor()._get_camp_info({"topic": "all"})
     assert [s["name"] for s in out["streams"]] == ["III ნაკადი"]
@@ -232,7 +232,7 @@ def test_get_camp_info_all_topic_filters_streams(frozen_camp):
     assert out["age_min"] == 9 and out["age_max"] == 17
 
 
-def test_get_camp_info_all_streams_hidden_no_invented_dates(frozen_camp):
+def test_get_camp_info_all_streams_hidden_no_invented_dates(frozen_camp, camp_registration_open):
     """Test 7 — when every stream has started the tool offers NO dates and
     invents none; the model is left with an empty list, not a fake date."""
     frozen_camp(7, 14)  # all started
@@ -267,7 +267,7 @@ def test_dates_answer_does_not_leak_registration_link(frozen_camp):
     assert "tinyurl" not in repr(out)
 
 
-def test_price_program_age_answers_unchanged(frozen_camp):
+def test_price_program_age_answers_unchanged(frozen_camp, camp_registration_open):
     """Test 10 — price / includes / age / conditions answers are unaffected."""
     frozen_camp(7, 14)  # date filter active, but these topics don't touch streams
     ex = _make_executor()
@@ -309,7 +309,7 @@ def test_legacy_router_dates_answer_filters_and_falls_back(monkeypatch):
 # ===========================================================================
 
 
-def test_get_camp_info_does_not_touch_booking_sheets_or_whatsapp(frozen_camp, monkeypatch):
+def test_get_camp_info_does_not_touch_booking_sheets_or_whatsapp(frozen_camp, monkeypatch, camp_registration_open):
     """Tests 11 + 12 — exercising the stream filter via get_camp_info must
     not reach Calendar, Sheets, Messenger/WhatsApp or notification code."""
     from app.services import calendar_service, sheets_service

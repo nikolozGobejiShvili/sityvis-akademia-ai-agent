@@ -179,7 +179,7 @@ def test_bugB_signal_detector_precision():
 
 
 # ── Combined end-to-end booking flow (both bugs on the same lead) ─────────────
-def test_full_booking_flow_phone_and_challenge():
+def test_full_booking_flow_phone_and_challenge(camp_registration_open):
     c = _conv("flow")
     # 1 — camp info → intro + age question (deterministic)
     out1 = _turn(c, "ბანაკზე ინფორმაცია მინდა")

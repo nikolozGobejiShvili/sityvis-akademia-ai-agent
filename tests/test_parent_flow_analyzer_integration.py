@@ -291,7 +291,7 @@ def test_manager_request_asks_for_phone_and_no_discovery(routed):
 
 
 def test_manager_request_with_known_phone_confirms_handoff(
-    smart_router, mock_messenger_profile, mock_start_intent_greeting, monkeypatch,
+    smart_router, mock_messenger_profile, mock_start_intent_greeting, monkeypatch, camp_registration_open,
 ):
     """When the lead already has a phone, the manager handler confirms
     handoff (and best-effort notifies) rather than re-asking."""
@@ -437,7 +437,7 @@ def test_registration_returns_url(routed):
 
 def test_normal_flow_still_works_with_analyzer_on(
     smart_router, mock_messenger_profile, mock_start_intent_greeting,
-    monkeypatch,
+    monkeypatch, camp_registration_open,
 ):
     """With analyzer ON but every message classified as answer_flow_question
     (the smart fake's default branch), the existing 7-step booking flow
@@ -536,7 +536,7 @@ def test_normal_flow_still_works_with_analyzer_on(
 # -- 10. Deterministic detector runs even with LLM analyzer off -----------
 
 
-def test_deterministic_detector_catches_manager_with_analyzer_off(monkeypatch):
+def test_deterministic_detector_catches_manager_with_analyzer_off(monkeypatch, camp_registration_open):
     """Post-PART-7: the deterministic detector ALWAYS runs, even when
     USE_LLM_TURN_ANALYZER is off. An obvious manager request must be
     caught and NOT stored as a psychological field.

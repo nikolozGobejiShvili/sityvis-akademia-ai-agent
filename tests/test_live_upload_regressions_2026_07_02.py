@@ -77,7 +77,7 @@ def _no_menu(out):
 # =====================================================================
 # Issue 1 — greeting + remaining seats
 # =====================================================================
-def test_greeting_seats_gets_heart_and_fallback():
+def test_greeting_seats_gets_heart_and_fallback(camp_registration_open):
     out = parent_flow.handle(_fresh("g1"), "გამარჯობა მეორე ნაკადზე ადგილები არის ?")
     assert "გამარჯობა 💙" in out
     assert _SEATS_FB in out
@@ -101,7 +101,7 @@ _SEATS_VARIANTS = [
 
 
 @pytest.mark.parametrize("msg", _SEATS_VARIANTS, ids=[f"s{i}" for i in range(len(_SEATS_VARIANTS))])
-def test_seats_variants_return_fallback_not_menu(msg):
+def test_seats_variants_return_fallback_not_menu(msg, camp_registration_open):
     out = parent_flow.handle(_fresh(f"sv-{abs(hash(msg)) % 9999}"), msg)
     assert _SEATS_FB in out, f"{msg!r} -> {out!r}"
     assert _no_menu(out)
@@ -112,7 +112,7 @@ def test_seats_variants_return_fallback_not_menu(msg):
     assert ("გამარჯობა 💙" in out) == greeted
 
 
-def test_seats_no_greeting_no_heart_midflow():
+def test_seats_no_greeting_no_heart_midflow(camp_registration_open):
     # A mid-conversation seats question (no greeting) → plain fallback, no heart.
     out = parent_flow.handle(_mid("m-seats"), "მე-2 ნაკადზე ადგილები გაქვთ?")
     assert _SEATS_FB in out
@@ -147,7 +147,7 @@ _SAFETY_CONTACT_VARIANTS = [
 @pytest.mark.parametrize(
     "msg", _SAFETY_CONTACT_VARIANTS,
     ids=[f"sc{i}" for i in range(len(_SAFETY_CONTACT_VARIANTS))])
-def test_safety_contact_variants(msg):
+def test_safety_contact_variants(msg, camp_registration_open):
     out = parent_flow.handle(_mid(f"scv-{abs(hash(msg)) % 9999}"), msg)
     assert "უსაფრთხოებ" in out                     # safety part present
     assert _DIRECT_CALL_FB in out                  # direct-call/parent-contact fallback present

@@ -168,7 +168,7 @@ def test_issue1_legacy_routing_skips_menu_and_continues_camp(
     assert conversation_service.conversations["iss1-legacy"].segment == "PARENT"
 
 
-def test_issue1_engine_path_skips_menu(monkeypatch):
+def test_issue1_engine_path_skips_menu(monkeypatch, camp_registration_open):
     """End-to-end (engine ON): the engine is consulted for clear camp
     intent and the menu is never returned."""
     _enable_engine(

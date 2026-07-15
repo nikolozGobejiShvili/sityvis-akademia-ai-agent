@@ -70,7 +70,7 @@ def _reset():
     parent_flow._sunday_school_notified_senders.clear()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def camp_registration_open(monkeypatch):
     monkeypatch.setattr(
         admin_config_service,
@@ -168,7 +168,7 @@ def _no_other_sentinels(text, topic):
 # =====================================================================
 # 1–3. Safety / supervision
 # =====================================================================
-def test_1_safety_question(engine_on):
+def test_1_safety_question(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("s1"), "ბანაკში უსაფრთხოება როგორ არის?")
     assert "ევროპული საბანაკე სტანდარტ" in out
     assert "სტაფი" in out                                   # experienced staff
@@ -182,14 +182,14 @@ def test_1_safety_question(engine_on):
     assert _no_engine(out)
 
 
-def test_2_doctor_question(engine_on):
+def test_2_doctor_question(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("s2"), "ექიმი იქნება?")
     assert "სამედიცინო პერსონალი 24/7" in out
     assert _SENTINELS["general_overview"] not in out        # no full overview
     assert "2150" not in out
 
 
-def test_3_camera_question(engine_on):
+def test_3_camera_question(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("s3"), "კამერები არის?")
     assert "24-საათიანი ვიდეომონიტორინგი" in out
     assert _SENTINELS["general_overview"] not in out
@@ -199,7 +199,7 @@ def test_3_camera_question(engine_on):
 # =====================================================================
 # 4–5. Parent communication
 # =====================================================================
-def test_4_parent_communication(engine_on):
+def test_4_parent_communication(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("p4"), "ფოტოებს და ვიდეოებს გამოგვიგზავნით?")
     assert "დღის პროგრამა" in out
     assert "ფოტო-ვიდეო მასალა" in out
@@ -208,7 +208,7 @@ def test_4_parent_communication(engine_on):
     assert "მოტივაციის ამაღლებაში" not in out
 
 
-def test_5_direct_child_contact(engine_on):
+def test_5_direct_child_contact(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("p5"), "ბავშვთან კონტაქტი მექნება?")
     assert "დღის პროგრამა" in out
     # Client wording fix (2026-07-01): the direct-contact caveat now uses the
@@ -222,7 +222,7 @@ def test_5_direct_child_contact(engine_on):
 # =====================================================================
 # 6. Food
 # =====================================================================
-def test_6_food(engine_on):
+def test_6_food(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("f6"), "კვება შედის?")
     assert "კვება შედის ბანაკის ღირებულებაში" in out
     assert "ალერგია" in out
@@ -233,7 +233,7 @@ def test_6_food(engine_on):
 # =====================================================================
 # 7. Gadgets
 # =====================================================================
-def test_7_gadgets(engine_on):
+def test_7_gadgets(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("g7"), "ბავშვი სულ ტელეფონშია, ამაზე მუშაობთ?")
     assert "გაჯეტებისგან განტვირთვა" in out
     assert "ეკრანისგან დისტანცია" not in out
@@ -242,7 +242,7 @@ def test_7_gadgets(engine_on):
 # =====================================================================
 # 8. Confidence / motivation
 # =====================================================================
-def test_8_confidence(engine_on):
+def test_8_confidence(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("cf8"), "თავდაჯერებულობა აკლია")
     assert "მოტივაციის ამაღლებაში" in out
     assert "თავდაჯერებულობის გაძლიერებაში" in out
@@ -252,7 +252,7 @@ def test_8_confidence(engine_on):
 # =====================================================================
 # 9. Communication / socialization
 # =====================================================================
-def test_9_communication(engine_on):
+def test_9_communication(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("cm9"), "კომუნიკაცია უჭირს")
     assert "სოციალიზაცი" in out
     assert _SENTINELS["food"] not in out and _SENTINELS["safety"] not in out
@@ -261,7 +261,7 @@ def test_9_communication(engine_on):
 # =====================================================================
 # 10. Bullying
 # =====================================================================
-def test_10_bullying(engine_on):
+def test_10_bullying(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("b10"), "ბულინგის თემაზე მუშაობთ?")
     assert "ბულინგის პრევენცია" in out
     assert "ემპათია" in out and "ურთიერთპატივისცემა" in out
@@ -271,7 +271,7 @@ def test_10_bullying(engine_on):
 # =====================================================================
 # 11. Emotional intelligence
 # =====================================================================
-def test_11_emotional_intelligence(engine_on):
+def test_11_emotional_intelligence(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("e11"), "ემოციებს ვერ მართავს")
     assert "ემოციური ინტელექტ" in out
     assert _SENTINELS["general_overview"] not in out
@@ -280,7 +280,7 @@ def test_11_emotional_intelligence(engine_on):
 # =====================================================================
 # 12. Thinking / expression
 # =====================================================================
-def test_12_thinking_expression(engine_on):
+def test_12_thinking_expression(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("t12"), "თავისი აზრის გამოხატვა უჭირს")
     assert "ანალიტიკურ აზროვნება" in out
     assert "არგუმენტირებულად" in out
@@ -290,7 +290,7 @@ def test_12_thinking_expression(engine_on):
 # =====================================================================
 # 13. Activities
 # =====================================================================
-def test_13_activities(engine_on):
+def test_13_activities(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("a13"), "რა აქტივობებია?")
     assert "შემოქმედებ" in out and "გუნდურ" in out
     assert "პერფორმანსები" in out and "მუსიკალური" in out
@@ -300,7 +300,7 @@ def test_13_activities(engine_on):
 # =====================================================================
 # 14. Sports
 # =====================================================================
-def test_14_sports(engine_on):
+def test_14_sports(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("sp14"), "სპორტული აქტივობები იქნება?")
     assert "სპორტული აქტივობები და ჯანსაღი" in out
     assert _SENTINELS["general_overview"] not in out
@@ -309,7 +309,7 @@ def test_14_sports(engine_on):
 # =====================================================================
 # 15. General overview
 # =====================================================================
-def test_15_general_overview(engine_on):
+def test_15_general_overview(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("o15"), "ბანაკზე დეტალური ინფორმაცია მინდა")
     assert "7-დღიანი პროგრამა" in out                       # 7 days
     assert "9-დან 17 წლამდე" in out                          # age 9–17
@@ -324,7 +324,7 @@ def test_15_general_overview(engine_on):
 # =====================================================================
 # 16. Sunday School exclusion
 # =====================================================================
-def test_16_sunday_school_excluded(engine_on, monkeypatch):
+def test_16_sunday_school_excluded(engine_on, monkeypatch, camp_registration_open):
     _coming_soon(monkeypatch)
     msg = "საკვირაო სკოლაზე ინფორმაცია მინდა"
     assert ctf.detect_camp_topic(msg) is None                # not a camp topic
@@ -337,7 +337,7 @@ def test_16_sunday_school_excluded(engine_on, monkeypatch):
 # =====================================================================
 # 17. Adult event exclusion
 # =====================================================================
-def test_17_adult_event_excluded(engine_on):
+def test_17_adult_event_excluded(engine_on, camp_registration_open):
     msg = "ზრდასრულთა ღონისძიებები რა გაქვთ?"
     assert ctf.detect_camp_topic(msg) is None
     out = parent_flow.handle(_conv("ad17", state="START"), msg)
@@ -349,7 +349,7 @@ def test_17_adult_event_excluded(engine_on):
 # =====================================================================
 # 18. Price exclusion (canonical price flow with 2150₾)
 # =====================================================================
-def test_18_price_excluded(engine_on):
+def test_18_price_excluded(engine_on, camp_registration_open):
     msg = "ბანაკის ფასი რა არის?"
     assert ctf.detect_camp_topic(msg) is None
     out = parent_flow.handle(_conv("pr18"), msg)
@@ -361,7 +361,7 @@ def test_18_price_excluded(engine_on):
 # =====================================================================
 # 19. Registration link exclusion
 # =====================================================================
-def test_19_registration_excluded(engine_on):
+def test_19_registration_excluded(engine_on, camp_registration_open):
     msg = "ბანაკის რეგისტრაციის ლინკი მომწერე"
     assert ctf.detect_camp_topic(msg) is None
     out = parent_flow.handle(_conv("rg19"), msg)
@@ -371,7 +371,7 @@ def test_19_registration_excluded(engine_on):
 # =====================================================================
 # 20. Date exclusion
 # =====================================================================
-def test_20_dates_excluded(engine_on):
+def test_20_dates_excluded(engine_on, camp_registration_open):
     msg = "როდის არის ბანაკი?"
     assert ctf.detect_camp_topic(msg) is None
     out = parent_flow.handle(_conv("dt20"), msg)
@@ -383,14 +383,14 @@ def test_20_dates_excluded(engine_on):
 # =====================================================================
 # 21. Booking context guard
 # =====================================================================
-def test_21a_explicit_topic_in_booking_answers_topic(engine_on):
+def test_21a_explicit_topic_in_booking_answers_topic(engine_on, camp_registration_open):
     conv = _booking_conv("bk21a")
     out = parent_flow.handle(conv, "უსაფრთხოება მაინტერესებს")
     assert "24-საათიანი ვიდეომონიტორინგი" in out             # safety topic answered
     assert _SENTINELS["safety"] in out
 
 
-def test_21b_daypart_reply_stays_in_booking(engine_on):
+def test_21b_daypart_reply_stays_in_booking(engine_on, camp_registration_open):
     conv = _booking_conv("bk21b")
     out = parent_flow.handle(conv, "ორშაბათს საღამოს")
     # BUG 6 (2026-07-06) — stays in booking, now OFFERING real calendar slots
@@ -405,7 +405,7 @@ def test_21b_daypart_reply_stays_in_booking(engine_on):
 # =====================================================================
 # 22. No full dump — every specific topic answer carries ZERO other sentinels
 # =====================================================================
-def test_22_no_full_dump_per_topic():
+def test_22_no_full_dump_per_topic(camp_registration_open):
     for topic in ctf.TOPIC_PRIORITY:
         if topic == "general_overview":
             continue  # overview legitimately spans several themes
@@ -414,7 +414,7 @@ def test_22_no_full_dump_per_topic():
         assert not leaks, f"{topic} answer leaked other categories: {leaks}"
 
 
-def test_22b_handler_returns_single_block(engine_on):
+def test_22b_handler_returns_single_block(engine_on, camp_registration_open):
     # Each specific question's reply equals exactly the one expected block.
     cases = [
         ("კამერები არის?", "safety"),
@@ -430,14 +430,14 @@ def test_22b_handler_returns_single_block(engine_on):
 # =====================================================================
 # Convention / safety guards
 # =====================================================================
-def test_no_cyrillic_or_latin_in_any_block():
+def test_no_cyrillic_or_latin_in_any_block(camp_registration_open):
     for topic in ctf.TOPIC_PRIORITY:
         ans = ctf.answer_for_topic(topic)
         assert not re.search("[Ѐ-ӿ]", ans), f"Cyrillic in {topic}"
         assert not re.search("[A-Za-z]", ans), f"Latin letters in {topic}"
 
 
-def test_no_crm_wording_in_any_block():
+def test_no_crm_wording_in_any_block(camp_registration_open):
     banned = ("დაგიტოვებთ ინტერესს", "ინტერესი დაფიქსირდა", "lead", "ლიდი")
     for topic in ctf.TOPIC_PRIORITY:
         low = ctf.answer_for_topic(topic).lower()
@@ -445,13 +445,13 @@ def test_no_crm_wording_in_any_block():
             assert b.lower() not in low, f"CRM word {b!r} in {topic}"
 
 
-def test_gadgets_uses_new_wording_not_old():
+def test_gadgets_uses_new_wording_not_old(camp_registration_open):
     ans = ctf.answer_for_topic("gadgets")
     assert "გაჯეტებისგან განტვირთვა" in ans
     assert "ეკრანისგან დისტანცია" not in ans
 
 
-def test_overview_price_is_canonical_not_hardcoded(monkeypatch):
+def test_overview_price_is_canonical_not_hardcoded(monkeypatch, camp_registration_open):
     # The overview price comes from get_camp_facts(), not a literal in the YAML.
     monkeypatch.setattr(
         admin_config_service, "get_camp_facts",
@@ -461,14 +461,14 @@ def test_overview_price_is_canonical_not_hardcoded(monkeypatch):
     assert "1999₾" in out and "2150" not in out
 
 
-def test_adult_segment_never_gets_camp_topic(engine_on):
+def test_adult_segment_never_gets_camp_topic(engine_on, camp_registration_open):
     conv = _conv("adseg", segment="ADULT")
     # Even a clear safety question is not answered with a camp topic in ADULT.
     out = parent_flow._maybe_handle_camp_topic_facts(conv, "უსაფრთხოება როგორ არის?")
     assert out is None
 
 
-def test_detect_is_self_contained_unit():
+def test_detect_is_self_contained_unit(camp_registration_open):
     assert ctf.detect_camp_topic("") is None
     assert ctf.detect_camp_topic("გამარჯობა") is None        # no topic
     assert ctf.detect_camp_topic("კამერები არის?") == "safety"
@@ -492,7 +492,7 @@ _BAD_ROOM_CLAIMS = ("რამდენიმე ბავშვი", "2–3 ბ
 _DISCOVERY_Q = "რა არის მთავარი, რის მიღებაც გსურთ"
 
 
-def test_f1_unknown_room_occupancy_defers(engine_on):
+def test_f1_unknown_room_occupancy_defers(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u1"), "ოთახში რამდენი ბავშვი იქნება?")
     assert _ROOM_FALLBACK in out                             # topic-specific defer
     assert _UNKNOWN_DEFER not in out                         # old generic phrase gone
@@ -504,7 +504,7 @@ def test_f1_unknown_room_occupancy_defers(engine_on):
     assert _no_engine(out)
 
 
-def test_f2_unknown_room_distribution_defers(engine_on):
+def test_f2_unknown_room_distribution_defers(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u2"), "ოთახებში როგორ ანაწილებთ ბავშვებს?")
     assert _ROOM_FALLBACK in out
     assert "558 67 47 33" in out                             # manager phone included
@@ -512,7 +512,7 @@ def test_f2_unknown_room_distribution_defers(engine_on):
         assert bad not in out
 
 
-def test_f3_exact_menu_food_plus_manager_clarification(engine_on):
+def test_f3_exact_menu_food_plus_manager_clarification(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u3"), "ზუსტად რა მენიუ ექნებათ?")
     assert "კვება შედის ბანაკის ღირებულებაში" in out         # food included
     assert _MENU_FALLBACK in out                             # exact menu deferred (new ending)
@@ -520,13 +520,13 @@ def test_f3_exact_menu_food_plus_manager_clarification(engine_on):
     assert _UNKNOWN_DEFER not in out
 
 
-def test_f3b_general_menu_question_no_exact_clarification(engine_on):
+def test_f3b_general_menu_question_no_exact_clarification(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u3b"), "მენიუ როგორი იქნება?")
     assert "კვება შედის ბანაკის ღირებულებაში" in out
     assert "ზუსტი მენიუ მენეჯერთან დაზუსტდება" not in out    # not an exact-menu ask
 
 
-def test_f4_activities_with_camp_context(engine_on):
+def test_f4_activities_with_camp_context(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("u4"), "რას აკეთებენ ბავშვები ბანაკში?")
     assert "შემოქმედებით" in out and "გუნდურ" in out
     assert "პერფორმანსები" in out
@@ -535,20 +535,20 @@ def test_f4_activities_with_camp_context(engine_on):
     assert _no_engine(out)
 
 
-def test_f5_generic_activities_no_camp_context_defers_to_engine(engine_on):
+def test_f5_generic_activities_no_camp_context_defers_to_engine(engine_on, camp_registration_open):
     # No camp keyword → NOT forced into the deterministic activities block
     # (protects the CTA-preservation flow). resolve returns None → engine.
     assert ctf.resolve_camp_answer("რას აკეთებენ ბავშვები?") is None
     assert ctf.resolve_camp_answer("კიდევ რას აკეთებენ ბავშვები?") is None
 
 
-def test_f5b_child_behaviour_room_statement_not_unknown_fallback(engine_on):
+def test_f5b_child_behaviour_room_statement_not_unknown_fallback(engine_on, camp_registration_open):
     # „ერთ ოთახში გამოიკეტება" is a parent DESCRIBING the child, not a question
     # about the camp's rooms — must NOT trigger the unknown-detail defer.
     assert ctf.resolve_camp_answer("ერთ ოთახში გამოიკეტება") is None
 
 
-def test_f6_paragraph_breaks_in_multi_idea_answers():
+def test_f6_paragraph_breaks_in_multi_idea_answers(camp_registration_open):
     for topic in ("safety", "parent_communication", "food", "gadgets",
                   "activities_creativity", "general_overview"):
         ans = ctf.answer_for_topic(topic)
@@ -557,7 +557,7 @@ def test_f6_paragraph_breaks_in_multi_idea_answers():
         assert "\n\n\n" not in ans, f"{topic} has excess blank lines"
 
 
-def test_f7_known_topic_wins_over_unknown_fallback(engine_on):
+def test_f7_known_topic_wins_over_unknown_fallback(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("k1"), "ბანაკში უსაფრთხოება როგორ არის?")
     assert "24-საათიანი ვიდეომონიტორინგი" in out
     assert _UNKNOWN_DEFER not in out
@@ -567,7 +567,7 @@ def test_f7_known_topic_wins_over_unknown_fallback(engine_on):
     assert _UNKNOWN_DEFER not in out2
 
 
-def test_f8_canonical_flows_not_unknown_fallback(engine_on, monkeypatch):
+def test_f8_canonical_flows_not_unknown_fallback(engine_on, monkeypatch, camp_registration_open):
     out_price = parent_flow.handle(_conv("c1"), "ბანაკის ფასი რა არის?")
     assert "2150" in out_price and _UNKNOWN_DEFER not in out_price
 

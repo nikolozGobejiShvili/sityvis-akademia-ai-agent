@@ -165,7 +165,7 @@ def test_engine_suppressor_noop_when_age_unknown():
 # ── end-to-end legacy conversation (engine ON, planner OFF) ───────────────────
 
 # Test 8 — „ბანაკში მოწვეული სტუმრები არიან?" after age is known.
-def test_legacy_guests_question_no_age_reask(legacy_engine, monkeypatch):
+def test_legacy_guests_question_no_age_reask(legacy_engine, monkeypatch, camp_registration_open):
     conv = _conv(child_age="13", midflow=True)
     monkeypatch.setattr(
         parent_flow, "_run_llm_engine_safely",
@@ -181,7 +181,7 @@ def test_legacy_guests_question_no_age_reask(legacy_engine, monkeypatch):
 
 
 # Test 9 — „უსაფრთხოება დაცულია?" after age is known.
-def test_legacy_safety_question_no_age_reask(legacy_engine, monkeypatch):
+def test_legacy_safety_question_no_age_reask(legacy_engine, monkeypatch, camp_registration_open):
     conv = _conv(child_age="13", midflow=True)
     monkeypatch.setattr(
         parent_flow, "_run_llm_engine_safely",

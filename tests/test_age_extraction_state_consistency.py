@@ -280,7 +280,7 @@ def test_camp_guard_noop_on_manager_handoff():
     assert out == reply
 
 
-def test_11_e2e_new_user_range_message_asks_age(monkeypatch):
+def test_11_e2e_new_user_range_message_asks_age(monkeypatch, camp_registration_open):
     """Full path: „ბავშვების საზაფხულო ბანაკი 9-17" → real engine runs,
     the fallback does NOT capture „9" from the range, and the camp guard
     asks the child's age."""
@@ -300,7 +300,7 @@ def test_11_e2e_new_user_range_message_asks_age(monkeypatch):
     assert "რამდენი წლისაა" in out    # FIX 2 — age asked
 
 
-def test_12_new_user_camp_interest_asks_age(monkeypatch):
+def test_12_new_user_camp_interest_asks_age(monkeypatch, camp_registration_open):
     conv = _parent_conv(child_age="", segment="PARENT")
     out = _handle_mocked_engine(
         monkeypatch, conv, "საზაფხულო ბანაკი მაინტერესებს",
@@ -330,7 +330,7 @@ def test_14_known_age_same_camp_message_does_not_reask(monkeypatch):
     assert "რამდენი წლისაა" not in out
 
 
-def test_15_adult_age_only_still_asks_child_age(monkeypatch):
+def test_15_adult_age_only_still_asks_child_age(monkeypatch, camp_registration_open):
     conv = _parent_conv(child_age="", adult_age="30", segment="PARENT")
     out = _handle_mocked_engine(
         monkeypatch, conv, "საზაფხულო ბანაკი მაინტერესებს",

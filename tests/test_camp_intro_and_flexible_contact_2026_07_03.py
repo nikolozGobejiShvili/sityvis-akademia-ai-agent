@@ -74,7 +74,7 @@ def _turn(c, msg):
 
 
 # ── Change 1 — Camp intro ────────────────────────────────────────────────────
-def test_camp_intro_plain_exact():
+def test_camp_intro_plain_exact(camp_registration_open):
     out = _turn(_conv("i1"), "ბანაკზე ინფორმაცია მინდა")
     assert _NEW_INTRO_FULL in out
     assert _AGE_Q in out
@@ -82,7 +82,7 @@ def test_camp_intro_plain_exact():
     assert _SENTINEL not in out  # deterministic — LLM never consulted
 
 
-def test_camp_intro_greeting_variant():
+def test_camp_intro_greeting_variant(camp_registration_open):
     out = _turn(_conv("i2"), "გამარჯობა, ბანაკზე ინფორმაცია მაინტერესებს")
     assert out.startswith("გამარჯობა 💙")
     assert _NEW_INTRO_FULL in out
@@ -92,7 +92,7 @@ def test_camp_intro_greeting_variant():
     assert "❤️" not in out
 
 
-def test_camp_intro_interest_only():
+def test_camp_intro_interest_only(camp_registration_open):
     out = _turn(_conv("i3"), "ბანაკით ვარ დაინტერესებული")
     assert "ციფრულ ხმაურს" in out
     assert _OLD_INTRO_PHRASE not in out
@@ -184,14 +184,14 @@ def test_wording_sanitizer_no_false_rewrite():
     assert parent_flow._normalise_contact_number_wording("რას ნიშნავს ეს?") == "რას ნიშნავს ეს?"
 
 
-def test_full_contact_request_via_handle_no_9nishna():
+def test_full_contact_request_via_handle_no_9nishna(camp_registration_open):
     c = _conv("w1", prior_bot=True, child_age="14")  # eligible, no contact
     out = _turn(c, "კი მინდა კონსულტაცია")
     assert "9-ნიშნა" not in out
     assert "საკონტაქტო ნომერი" in out
 
 
-def test_intl_phone_captured_in_live_contact_flow():
+def test_intl_phone_captured_in_live_contact_flow(camp_registration_open):
     c = _conv("p1", prior_bot=True, child_age="14")
     c.history.append({
         "role": "assistant",

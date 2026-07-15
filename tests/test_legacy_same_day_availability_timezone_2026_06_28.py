@@ -136,7 +136,7 @@ def _says_hours_over(text: str) -> bool:
 # =====================================================================
 # Required test 1 — same-day future slots are offered (not tomorrow)
 # =====================================================================
-def test_1_same_day_future_slots_offered(engine_on, monkeypatch):
+def test_1_same_day_future_slots_offered(engine_on, monkeypatch, camp_registration_open):
     _pin_now(monkeypatch, datetime(2026, 6, 29, 15, 0, tzinfo=TBILISI))
     _stub_freebusy(monkeypatch, {_MON_JUN29: _busy_except(_MON_JUN29, {16, 17, 18})})
 
@@ -355,7 +355,7 @@ def test_eligible_and_unknown_age_still_offer_today(engine_on, monkeypatch):
 # =====================================================================
 # Non-availability message must still reach the engine (no hijack)
 # =====================================================================
-def test_non_availability_message_reaches_engine(engine_on, monkeypatch):
+def test_non_availability_message_reaches_engine(engine_on, monkeypatch, camp_registration_open):
     _pin_now(monkeypatch, datetime(2026, 6, 29, 15, 0, tzinfo=TBILISI))
     _stub_freebusy(monkeypatch, {})
 

@@ -128,13 +128,13 @@ def test_2_child_contact_in_camp(engine_on):
     assert _CONSULT_PHRASE not in out
 
 
-def test_3_daily_communication_not_socialization(engine_on):
+def test_3_daily_communication_not_socialization(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("p3"), "დღის განმავლობაში ბავშვთან კომუნიკაციას შევძლებ?")
     assert out == _PC
     assert ctf.answer_for_topic("communication_socialization") != out
 
 
-def test_4_typo_konataqti(engine_on):
+def test_4_typo_konataqti(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("p4"), "ბავშვთან კონატაქტი როგორ მექნება ბანაკში?")
     assert out == _PC
 
@@ -144,7 +144,7 @@ def test_5_typo_bavsshv(engine_on):
     assert out == _PC
 
 
-def test_6_communication_difficulty_still_socialization(engine_on):
+def test_6_communication_difficulty_still_socialization(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("p6"), "კომუნიკაცია უჭირს")
     assert out == ctf.answer_for_topic("communication_socialization")
     assert out != _PC
@@ -187,7 +187,7 @@ def test_11_thank_you_one_heart(engine_on):
     assert out.count(_HEART) == 1
 
 
-def test_12_non_greeting_topic_no_heart(engine_on):
+def test_12_non_greeting_topic_no_heart(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("e12"), "ბანაკში უსაფრთხოება როგორ არის?")
     assert _HEART not in out
     assert "ვიდეომონიტორინგი" in out                  # safety answer intact
@@ -196,7 +196,7 @@ def test_12_non_greeting_topic_no_heart(engine_on):
 # =====================================================================
 # P3 — Mid-conversation greeting leak
 # =====================================================================
-def test_13_doctor_no_greeting_leak(engine_on):
+def test_13_doctor_no_greeting_leak(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("g13"), "ექიმი გეყოლებათ?")
     assert "სამედიცინო პერსონალი 24/7" in out
     assert not out.startswith("მადლობა, რომ დაგვიკავშირდით")
@@ -217,7 +217,7 @@ def test_14_price_no_greeting_leak(engine_on):
     assert "2150" in out
 
 
-def test_15_safety_no_greeting_leak(engine_on):
+def test_15_safety_no_greeting_leak(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("g15"), "უსაფრთხოება როგორ არის?")
     assert "მადლობა, რომ დაგვიკავშირდით" not in out
     assert "ვიდეომონიტორინგი" in out
@@ -242,7 +242,7 @@ def test_15c_user_thanks_response_not_stripped(engine_on):
 # =====================================================================
 # P4/P5 — Medication safety
 # =====================================================================
-def test_16_medication_supervision_no_overpromise(engine_on):
+def test_16_medication_supervision_no_overpromise(engine_on, camp_registration_open):
     msg = ("ჩემს შვილს ყოველდღე სჭირდება კონკრეტული მედიკამენტის მიღება და ხომ "
            "გააკონტროლებთ რომ თავის დროზე დალიოს?")
     out = parent_flow.handle(_conv("m16"), msg)
@@ -256,14 +256,14 @@ def test_16_medication_supervision_no_overpromise(engine_on):
     assert _HEART not in out                          # manager offer alone → no heart
 
 
-def test_17_doctor_gives_medicine_no_guarantee(engine_on):
+def test_17_doctor_gives_medicine_no_guarantee(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("m17"), "წამალს ექიმი მისცემს?")
     assert "მენეჯერთან უნდა დაზუსტდეს" in out
     assert "აუცილებლად" not in out
     assert _HEART not in out
 
 
-def test_18_medication_schedule(engine_on):
+def test_18_medication_schedule(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("m18"), "წამლის გრაფიკი აქვს ბავშვს")
     assert "სამედიცინო პერსონალი 24/7" in out
     assert "მენეჯერთან უნდა დაზუსტდეს" in out
@@ -279,7 +279,7 @@ def test_19_parent_communication_still_works(engine_on):
     assert out == _PC
 
 
-def test_20_gadgets_still_works(engine_on):
+def test_20_gadgets_still_works(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("r20"), "ბავშვი სულ ტელეფონშია")
     assert "გაჯეტებისგან განტვირთვა" in out
     assert _HEART not in out
@@ -297,7 +297,7 @@ def test_22_canonical_price(engine_on):
     assert "2150" in out
 
 
-def test_23_canonical_dates(engine_on):
+def test_23_canonical_dates(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("r23"), "როდის არის ბანაკი?")
     assert "23–29 ივნისი" in out
     assert "მადლობა, რომ დაგვიკავშირდით" not in out

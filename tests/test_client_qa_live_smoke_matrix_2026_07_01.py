@@ -881,7 +881,7 @@ def test_engine_is_on_and_mocked():
 
 
 @pytest.mark.parametrize("case", MATRIX, ids=[c["id"] for c in MATRIX])
-def test_client_qa_smoke(case, monkeypatch):
+def test_client_qa_smoke(case, monkeypatch, camp_registration_open):
     if case.get("sunday_school"):
         _apply_coming_soon(monkeypatch)
 
@@ -923,7 +923,7 @@ _DIRECT_CALL_VARIANTS = [
     _DIRECT_CALL_VARIANTS,
     ids=[f"v{i}" for i in range(len(_DIRECT_CALL_VARIANTS))],
 )
-def test_direct_call_marker_regression(msg):
+def test_direct_call_marker_regression(msg, camp_registration_open):
     conv = _build_conv({"id": "direct_call_variant", "turns": [msg]})
     out = parent_flow.handle(conv, msg)
     assert _DIRECT_CALL_FB in out, f"{msg!r} did not defer to manager: {out!r}"
@@ -955,7 +955,7 @@ _AGIXSNIT_ENGINE_LEAKS = [
     _AGIXSNIT_ENGINE_LEAKS,
     ids=[f"leak{i}" for i in range(len(_AGIXSNIT_ENGINE_LEAKS))],
 )
-def test_agixsnit_never_reaches_live_output(engine_reply, monkeypatch):
+def test_agixsnit_never_reaches_live_output(engine_reply, monkeypatch, camp_registration_open):
     # Force the (mocked) engine to leak „აგიხსნით"; handle() must scrub it.
     monkeypatch.setattr(parent_flow, "_run_llm_engine_safely", lambda c, m: engine_reply)
     conv = _build_conv({"id": "agixsnit_leak", "turns": ["ბანაკის შესახებ მაინტერესებს"]})
