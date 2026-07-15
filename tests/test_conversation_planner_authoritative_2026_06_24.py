@@ -101,7 +101,7 @@ def test_name_update_does_not_continue_underage(authoritative):
 
 # ─────────────────── camp safety must not use consultation format ─────────────
 
-def test_camp_safety_strips_consultation_format(monkeypatch):
+def test_camp_safety_strips_consultation_format(monkeypatch, camp_registration_open):
     """Engine ON + mocked: the LLM leaks the consultation phone/video format on a
     camp-safety turn; the authoritative validator strips it from the final
     response."""

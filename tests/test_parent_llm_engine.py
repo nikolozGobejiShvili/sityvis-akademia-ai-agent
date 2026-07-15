@@ -286,7 +286,7 @@ def test_greeting_returns_natural_welcome(enable_engine, monkeypatch, fresh_conv
 # =========================================================================
 
 
-def test_price_question_invokes_camp_info(enable_engine, monkeypatch, fresh_conversation):
+def test_price_question_invokes_camp_info(enable_engine, monkeypatch, fresh_conversation, camp_registration_open):
     from app.services import messenger_service, openai_service
 
     monkeypatch.setattr(

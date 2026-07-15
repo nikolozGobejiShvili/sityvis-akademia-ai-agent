@@ -101,12 +101,31 @@ def _is_camp_registration_open() -> bool:
         return False
 
 
+_CAMP_REGISTRATION_CLOSED_FALLBACK = "ბანაკის ბოლო ნაკადი უკვე დაიწყო და რეგისტრაცია დასრულებულია."
+_CAMP_FUTURE_INFO_PENDING_FALLBACK = "შემდეგი ბანაკის თარიღები და რეგისტრაციის ინფორმაცია ჯერ არ არის გამოცხადებული."
+
+
+def _camp_public_policy_copy(key_path: str, fallback: str) -> str:
+    rendered = _approved_camp_copy(key_path)
+    return rendered.strip() if rendered else fallback
+
+
 def _camp_registration_closed_answer() -> str:
-    return _camp_status_message("full")
+    return _camp_public_policy_copy(
+        "public_policy.current_final_stream_started",
+        _CAMP_REGISTRATION_CLOSED_FALLBACK,
+    )
 
 
 def _camp_registration_closed_short_answer() -> str:
-    return _camp_status_short("full")
+    return _camp_registration_closed_answer()
+
+
+def _camp_future_information_not_announced_answer() -> str:
+    return _camp_public_policy_copy(
+        "public_policy.future_information_not_announced",
+        _CAMP_FUTURE_INFO_PENDING_FALLBACK,
+    )
 
 
 _FINAL_CAMP_POLICY_PRICE_ALLOWED = "price_allowed"
@@ -128,24 +147,24 @@ _FINAL_CAMP_CURRENT_DETAIL_MARKERS: tuple[str, ...] = (
     "ნაკად", "როდის", "თარიღ", "რიცხვ", "დაიწყ", "დაწყებ",
     "მიმდინარე", "ახლა", "სად", "ლოკაცი", "კაჭრეთ", "მისამართ",
     "ხანგრძლივ", "რამდენი დღე", "დღიან", "განრიგ", "გრაფიკ",
-    "პროგრამ", "რა ხდება", "რას აკეთ", "აქტივობ", "ტრანსპორტ",
+    "პროგრამ", "რა ხდება", "როგორ ხდება", "როგორ არის", "რას აკეთ", "აქტივობ", "ტრანსპორტ",
     "წაყვან", "წამოყვან", "მარშრუტ", "კვება", "მენიუ", "ოთახ",
     "აუზ", "სტადიონ", "სასტუმრო", "გართობა", "conditions",
     "condition", "date", "stream", "started", "start", "location",
     "duration", "schedule", "transport", "program", "details",
 )
 _FINAL_CAMP_FUTURE_MARKERS: tuple[str, ...] = (
-    "შემდეგ", "მომავალ", "ახალ", "კიდევ", "იქნება", "გაიხსნ",
+    "შემდეგ", "მომავალ", "ახალ ბანაკ", "ახალი ბანაკ", "კიდევ როდის", "ისევ როდის", "გაიხსნ",
     "როდის იქნება", "მომავალ წელს", "next", "future", "another",
     "again",
 )
 _FINAL_CAMP_SUNDAY_SCHOOL_DIRECTION_MARKERS: tuple[str, ...] = (
     "ახლა რა გაქვთ", "ამ ეტაპზე რა გაქვთ", "რა გაქვთ ახლა",
-    "ალტერნატივ", "სხვა რა", "რისი შეთავაზება", "შეუძლია ჩაერთოს",
-    "რა შეუძლია", "what is available", "alternative", "instead",
+    "ალტერნატივ", "ბანაკის ნაცვლად", "სხვა რა", "სხვა საბავშვო", "რისი შეთავაზება", "რას მთავაზობთ", "შეუძლია ჩაერთოს",
+    "რა შეუძლია", "რომელ პროგრამაზე", "ბავშვის ჩართვა", "what is available", "alternative", "instead",
 )
 _FINAL_CAMP_PARENT_SUPPORT_MARKERS: tuple[str, ...] = (
-    "დავურეკ", "დაურეკ", "დარეკ", "დავუკავშირდ", "კონტაქტ",
+    "დავურეკ", "დაურეკ", "დარეკ", "დავუკავშირდ", "დამაკავშირ", "დაგაკავშირ", "დაგვაკავშირ", "კონტაქტ", "მენეჯერ",
     "ვნახ", "ნახვა", "ჩამოსვლ", "მოვინახულ", "მშობელ",
 )
 
@@ -266,14 +285,14 @@ def _final_camp_public_policy_category(
     if not camp_context and not fallback_category:
         return None
 
+    if _final_camp_policy_price_allowed(message):
+        return _FINAL_CAMP_POLICY_PRICE_ALLOWED
     if _final_camp_policy_has_future_intent(message):
         return _FINAL_CAMP_POLICY_FUTURE_INFO_PENDING
     if _final_camp_policy_has_current_parent_support(message):
         return _FINAL_CAMP_POLICY_CURRENT_PARENT_HANDOFF
     if _final_camp_policy_has_registration_action(message):
         return _FINAL_CAMP_POLICY_REGISTRATION_CLOSED
-    if _final_camp_policy_price_allowed(message):
-        return _FINAL_CAMP_POLICY_PRICE_ALLOWED
     if _final_camp_policy_has_sunday_school_direction(message):
         return _FINAL_CAMP_POLICY_SUNDAY_SCHOOL_PENDING
     if _final_camp_policy_has_current_detail(message):
@@ -295,17 +314,18 @@ def _maybe_handle_final_camp_public_policy(
     if category is None:
         return None
     if category == _FINAL_CAMP_POLICY_PRICE_ALLOWED:
-        if _final_camp_policy_has_current_detail(message):
-            price_response = _maybe_handle_repeat_camp_price(conversation, message)
-            if price_response is not None:
-                return price_response
+        price_response = _maybe_handle_repeat_camp_price(conversation, message)
+        if price_response is not None:
+            return price_response
+        if _has_camp_price_discount_question(message):
+            return _camp_price_direct_answer()
         return None
     if category == _FINAL_CAMP_POLICY_CURRENT_PARENT_HANDOFF:
         return None
     if category == _FINAL_CAMP_POLICY_SUNDAY_SCHOOL_PENDING:
         return _render_sunday_school_answer()
     if category == _FINAL_CAMP_POLICY_FUTURE_INFO_PENDING:
-        return _camp_status_message("coming_soon")
+        return _camp_future_information_not_announced_answer()
     if category == _FINAL_CAMP_POLICY_REGISTRATION_CLOSED:
         conversation.pending_booking = None
     return _camp_registration_closed_answer()
@@ -3603,7 +3623,7 @@ def _maybe_handle_out_of_range_age(
 # combined price + payment stays in price_amount, so the full block is allowed.
 # Sunday-School and adult-event price questions remain excluded.
 _CAMP_PRICE_MARKERS: tuple[str, ...] = (
-    "ფასი", "ღირებულება", "ღირს", "გადასახად",
+    "ფასი", "ღირებულება", "ღირს", "გადასახად", "თანხ",
 )
 # Words that make a price question belong to Sunday-School or adult events,
 # NOT the camp — so those price questions are never treated as camp_price.
@@ -3707,7 +3727,7 @@ def _is_camp_price_amount_question(message: str) -> bool:
         return False
     if _is_reservation_fee_amount_question(message):
         return False
-    return any(m in low for m in ("ფასი", "ღირებულება", "რა ღირს", "ღირს"))
+    return any(m in low for m in ("ფასი", "ღირებულება", "რა ღირს", "ღირს", "თანხ"))
 
 
 def _is_camp_payment_process_question(message: str) -> bool:

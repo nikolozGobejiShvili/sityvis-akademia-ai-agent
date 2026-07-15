@@ -172,7 +172,7 @@ def test_final_policy_current_parent_support_uses_manager_handoff_source(
 def test_final_policy_future_camp_is_pending_information(closed_registration, message):
     out, _conv = _reply(message, sender_id=f"future-{abs(hash(message))}")
 
-    assert out == parent_flow._camp_status_message("coming_soon")
+    assert out == parent_flow._camp_future_information_not_announced_answer()
     _assert_no_sales_entry(out)
     assert "14-20" not in out
     assert "14–20" not in out

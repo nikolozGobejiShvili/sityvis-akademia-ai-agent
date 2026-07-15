@@ -1,5 +1,10 @@
 programs:
   camp:
+    public_policy:
+      current_final_stream_started: |-
+        ბანაკის ბოლო ნაკადი უკვე დაიწყო და რეგისტრაცია დასრულებულია.
+      future_information_not_announced: |-
+        შემდეგი ბანაკის თარიღები და რეგისტრაციის ინფორმაცია ჯერ არ არის გამოცხადებული.
     price:
       full_block: |-
         ბანაკის ფასი არის {price} ლარი.
