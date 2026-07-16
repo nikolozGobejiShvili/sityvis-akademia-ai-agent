@@ -133,6 +133,10 @@ class PendingWorkflowError(ValueError):
     """Raised when a pending-workflow contract is invalid."""
 
 
+class ProgramResolutionError(ValueError):
+    """Raised when a program-resolution contract is invalid."""
+
+
 class PendingWorkflowKind(str, Enum):
     """Generic kinds of pending inbound-reply workflows."""
 
@@ -195,6 +199,47 @@ class PendingWorkflowReason(str, Enum):
     CURRENT_REQUEST_OVERRIDES_PENDING = "current_request_overrides_pending"
     NON_ANSWER_ACT_SUSPENDS_PENDING = "non_answer_act_suspends_pending"
     EXPECTED_REPLY_NOT_MATCHED = "expected_reply_not_matched"
+
+
+class ProgramMentionRole(str, Enum):
+    """Closed semantic roles for a current-message program mention."""
+
+    REQUESTED = "requested"
+    REFERENCED = "referenced"
+    EXCLUDED = "excluded"
+
+
+class ProgramResolutionOutcome(str, Enum):
+    """Closed outcomes from deterministic program resolution."""
+
+    RESOLVED = "resolved"
+    AMBIGUOUS = "ambiguous"
+    ABSENT = "absent"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class ProgramResolutionSource(str, Enum):
+    """Authoritative source used for a program-resolution outcome."""
+
+    CURRENT_MESSAGE = "current_message"
+    PRIOR_CONTEXT = "prior_context"
+    NONE = "none"
+
+
+class ProgramResolutionReason(str, Enum):
+    """Closed explanation codes for program-resolution decisions."""
+
+    PENDING_REPLY_CONSUMED = "pending_reply_consumed"
+    ACT_NOT_ELIGIBLE = "act_not_eligible"
+    CURRENT_SINGLE_REQUESTED = "current_single_requested"
+    CURRENT_MULTIPLE_REQUESTED = "current_multiple_requested"
+    CURRENT_CONTRADICTORY_ROLES = "current_contradictory_roles"
+    CURRENT_EXCLUDED_ONLY = "current_excluded_only"
+    CURRENT_REFERENCED_ONLY = "current_referenced_only"
+    PRIOR_CONTEXT_SELECTED = "prior_context_selected"
+    PRIOR_CONTEXT_AMBIGUOUS = "prior_context_ambiguous"
+    PRIOR_CONTEXT_FALLBACK_ONLY = "prior_context_fallback_only"
+    NO_PROGRAM_EVIDENCE = "no_program_evidence"
 
 
 def _validate_exact_text(value: object, field_name: str) -> None:
@@ -908,4 +953,461 @@ class PendingWorkflowDecision:
         elif self.matched_reply_kinds:
             raise PendingWorkflowError(
                 "non-selection actions cannot contain matched replies"
+            )
+
+
+def _validate_program_text(value: object, field_name: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ProgramResolutionError(
+            f"{field_name} must be a non-empty string"
+        )
+    if value != value.strip():
+        raise ProgramResolutionError(
+            f"{field_name} must not contain outer whitespace"
+        )
+
+
+def _validate_program_string_tuple(
+    value: object,
+    field_name: str,
+) -> None:
+    if not isinstance(value, tuple) or not value:
+        raise ProgramResolutionError(
+            f"{field_name} must be a non-empty immutable tuple"
+        )
+    for item in value:
+        _validate_program_text(item, field_name)
+        if any(character.isspace() for character in item):
+            raise ProgramResolutionError(
+                f"{field_name} entries must be single tokens"
+            )
+    if len(set(value)) != len(value):
+        raise ProgramResolutionError(
+            f"{field_name} must contain unique values"
+        )
+
+
+def _validate_program_phrase_tuple(
+    value: object,
+    field_name: str,
+) -> None:
+    if not isinstance(value, tuple) or not value:
+        raise ProgramResolutionError(
+            f"{field_name} must be a non-empty immutable tuple"
+        )
+    if not all(isinstance(phrase, tuple) and phrase for phrase in value):
+        raise ProgramResolutionError(
+            f"{field_name} must contain non-empty immutable phrases"
+        )
+    for phrase in value:
+        for token in phrase:
+            _validate_program_text(token, field_name)
+            if any(character.isspace() for character in token):
+                raise ProgramResolutionError(
+                    f"{field_name} phrase entries must be single tokens"
+                )
+    if len(set(value)) != len(value):
+        raise ProgramResolutionError(
+            f"{field_name} must contain unique phrases"
+        )
+
+
+def _program_mention_sort_key(
+    mention: "ProgramMention",
+) -> tuple[int, int, str, str, str]:
+    return (
+        mention.token_start,
+        mention.token_end,
+        mention.program_id.value,
+        mention.role.value,
+        mention.evidence_id,
+    )
+
+
+def _validate_sorted_program_ids(
+    value: object,
+    field_name: str,
+) -> None:
+    if not isinstance(value, tuple) or not all(
+        isinstance(item, ProgramId) for item in value
+    ):
+        raise ProgramResolutionError(
+            f"{field_name} must be an immutable ProgramId tuple"
+        )
+    if len(set(value)) != len(value):
+        raise ProgramResolutionError(
+            f"{field_name} must contain unique program IDs"
+        )
+    if tuple(sorted(value, key=lambda item: item.value)) != value:
+        raise ProgramResolutionError(
+            f"{field_name} must be deterministically ordered"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramMention:
+    """One bounded current-message mention of a canonical program."""
+
+    program_id: ProgramId
+    role: ProgramMentionRole
+    token_start: int
+    token_end: int
+    evidence_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.program_id, ProgramId):
+            raise ProgramResolutionError("program_id is unsupported")
+        if not isinstance(self.role, ProgramMentionRole):
+            raise ProgramResolutionError("mention role is unsupported")
+        for field_name in ("token_start", "token_end"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ProgramResolutionError(
+                    f"{field_name} must be an integer"
+                )
+        if self.token_start < 0:
+            raise ProgramResolutionError(
+                "token_start must not be negative"
+            )
+        if self.token_end <= self.token_start:
+            raise ProgramResolutionError(
+                "token_end must be greater than token_start"
+            )
+        _validate_program_text(self.evidence_id, "evidence_id")
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramResolutionPolicy:
+    """Single immutable owner of bounded human-language program rules."""
+
+    georgian_stem_suffixes: tuple[str, ...]
+    summer_camp_stems: tuple[str, ...]
+    summer_camp_exact_tokens: tuple[str, ...]
+    summer_camp_modifier_tokens: tuple[str, ...]
+    summer_camp_phrases: tuple[tuple[str, ...], ...]
+    sunday_school_lead_tokens: tuple[str, ...]
+    sunday_school_school_stems: tuple[str, ...]
+    sunday_school_compound_tokens: tuple[str, ...]
+    sunday_school_phrases: tuple[tuple[str, ...], ...]
+    adult_audience_stems: tuple[str, ...]
+    adult_event_identity_stems: tuple[str, ...]
+    adult_cultural_stems: tuple[str, ...]
+    adult_evening_stems: tuple[str, ...]
+    adult_event_phrases: tuple[tuple[str, ...], ...]
+    exclusion_following_phrases: tuple[tuple[str, ...], ...]
+    exclusion_leading_phrases: tuple[tuple[str, ...], ...]
+    reference_phrases: tuple[tuple[str, ...], ...]
+    pivot_tokens: tuple[str, ...]
+    clause_boundary_tokens: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "georgian_stem_suffixes",
+            "summer_camp_stems",
+            "summer_camp_exact_tokens",
+            "summer_camp_modifier_tokens",
+            "sunday_school_lead_tokens",
+            "sunday_school_school_stems",
+            "sunday_school_compound_tokens",
+            "adult_audience_stems",
+            "adult_event_identity_stems",
+            "adult_cultural_stems",
+            "adult_evening_stems",
+            "pivot_tokens",
+            "clause_boundary_tokens",
+        ):
+            _validate_program_string_tuple(
+                getattr(self, field_name),
+                field_name,
+            )
+        for field_name in (
+            "summer_camp_phrases",
+            "sunday_school_phrases",
+            "adult_event_phrases",
+            "exclusion_following_phrases",
+            "exclusion_leading_phrases",
+            "reference_phrases",
+        ):
+            _validate_program_phrase_tuple(
+                getattr(self, field_name),
+                field_name,
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramResolutionDecision:
+    """Immutable result of current-message and eligible-context arbitration."""
+
+    outcome: ProgramResolutionOutcome
+    source: ProgramResolutionSource
+    selected_program_id: ProgramId | None
+    requested_program_ids: tuple[ProgramId, ...]
+    referenced_program_ids: tuple[ProgramId, ...]
+    excluded_program_ids: tuple[ProgramId, ...]
+    prior_context_program_ids: tuple[ProgramId, ...]
+    mentions: tuple[ProgramMention, ...]
+    confidence: float
+    primary_reason: ProgramResolutionReason
+    evidence: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.outcome, ProgramResolutionOutcome):
+            raise ProgramResolutionError("outcome is unsupported")
+        if not isinstance(self.source, ProgramResolutionSource):
+            raise ProgramResolutionError("source is unsupported")
+        if self.selected_program_id is not None and not isinstance(
+            self.selected_program_id, ProgramId
+        ):
+            raise ProgramResolutionError(
+                "selected_program_id is unsupported"
+            )
+        for field_name in (
+            "requested_program_ids",
+            "referenced_program_ids",
+            "excluded_program_ids",
+            "prior_context_program_ids",
+        ):
+            _validate_sorted_program_ids(
+                getattr(self, field_name),
+                field_name,
+            )
+        if not isinstance(self.mentions, tuple) or not all(
+            isinstance(item, ProgramMention) for item in self.mentions
+        ):
+            raise ProgramResolutionError(
+                "mentions must be an immutable ProgramMention tuple"
+            )
+        if len(set(self.mentions)) != len(self.mentions):
+            raise ProgramResolutionError(
+                "mentions must not contain exact duplicates"
+            )
+        if tuple(sorted(self.mentions, key=_program_mention_sort_key)) != (
+            self.mentions
+        ):
+            raise ProgramResolutionError(
+                "mentions must be deterministically ordered"
+            )
+
+        role_summaries = {
+            ProgramMentionRole.REQUESTED: self.requested_program_ids,
+            ProgramMentionRole.REFERENCED: self.referenced_program_ids,
+            ProgramMentionRole.EXCLUDED: self.excluded_program_ids,
+        }
+        for role, supplied in role_summaries.items():
+            expected = tuple(
+                sorted(
+                    {
+                        mention.program_id
+                        for mention in self.mentions
+                        if mention.role is role
+                    },
+                    key=lambda item: item.value,
+                )
+            )
+            if supplied != expected:
+                raise ProgramResolutionError(
+                    f"{role.value} program IDs must match mention roles"
+                )
+
+        if isinstance(self.confidence, bool) or not isinstance(
+            self.confidence, (int, float)
+        ):
+            raise ProgramResolutionError("confidence must be numeric")
+        if not 0.0 <= float(self.confidence) <= 1.0:
+            raise ProgramResolutionError(
+                "confidence must be between zero and one"
+            )
+        if not isinstance(self.primary_reason, ProgramResolutionReason):
+            raise ProgramResolutionError("primary_reason is unsupported")
+        if not isinstance(self.evidence, tuple) or not self.evidence:
+            raise ProgramResolutionError(
+                "evidence must be a non-empty immutable tuple"
+            )
+        for item in self.evidence:
+            _validate_program_text(item, "evidence")
+        if len(set(self.evidence)) != len(self.evidence):
+            raise ProgramResolutionError(
+                "evidence rule IDs must be unique"
+            )
+
+        self._validate_outcome_contract()
+        self._validate_reason_contract()
+
+    def _validate_outcome_contract(self) -> None:
+        has_current_mentions = bool(self.mentions)
+        if self.outcome is ProgramResolutionOutcome.RESOLVED:
+            if self.selected_program_id is None:
+                raise ProgramResolutionError(
+                    "resolved outcome requires a selected program"
+                )
+            if self.source is ProgramResolutionSource.CURRENT_MESSAGE:
+                if len(self.requested_program_ids) != 1:
+                    raise ProgramResolutionError(
+                        "current-message resolution requires one requested program"
+                    )
+                if self.selected_program_id not in self.requested_program_ids:
+                    raise ProgramResolutionError(
+                        "selected program must be currently requested"
+                    )
+                if self.selected_program_id in self.excluded_program_ids:
+                    raise ProgramResolutionError(
+                        "selected program cannot also be excluded"
+                    )
+            elif self.source is ProgramResolutionSource.PRIOR_CONTEXT:
+                if has_current_mentions:
+                    raise ProgramResolutionError(
+                        "prior-context resolution cannot contain current mentions"
+                    )
+                if len(self.prior_context_program_ids) != 1:
+                    raise ProgramResolutionError(
+                        "prior-context resolution requires one prior program"
+                    )
+                if (
+                    self.selected_program_id
+                    not in self.prior_context_program_ids
+                ):
+                    raise ProgramResolutionError(
+                        "selected program must belong to prior context"
+                    )
+            else:
+                raise ProgramResolutionError(
+                    "resolved outcome requires an authoritative source"
+                )
+            return
+
+        if self.selected_program_id is not None:
+            raise ProgramResolutionError(
+                "non-resolved outcomes cannot select a program"
+            )
+        if self.outcome is ProgramResolutionOutcome.AMBIGUOUS:
+            if self.source not in (
+                ProgramResolutionSource.CURRENT_MESSAGE,
+                ProgramResolutionSource.PRIOR_CONTEXT,
+            ):
+                raise ProgramResolutionError(
+                    "ambiguous outcome requires current or prior source"
+                )
+            if (
+                self.source is ProgramResolutionSource.PRIOR_CONTEXT
+                and has_current_mentions
+            ):
+                raise ProgramResolutionError(
+                    "prior-context ambiguity cannot contain current mentions"
+                )
+            return
+        if self.source is not ProgramResolutionSource.NONE:
+            raise ProgramResolutionError(
+                "absent and not-applicable outcomes require source none"
+            )
+
+    def _validate_reason_contract(self) -> None:
+        expected_shape = {
+            ProgramResolutionReason.PENDING_REPLY_CONSUMED: (
+                ProgramResolutionOutcome.NOT_APPLICABLE,
+                ProgramResolutionSource.NONE,
+            ),
+            ProgramResolutionReason.ACT_NOT_ELIGIBLE: (
+                ProgramResolutionOutcome.NOT_APPLICABLE,
+                ProgramResolutionSource.NONE,
+            ),
+            ProgramResolutionReason.CURRENT_SINGLE_REQUESTED: (
+                ProgramResolutionOutcome.RESOLVED,
+                ProgramResolutionSource.CURRENT_MESSAGE,
+            ),
+            ProgramResolutionReason.CURRENT_MULTIPLE_REQUESTED: (
+                ProgramResolutionOutcome.AMBIGUOUS,
+                ProgramResolutionSource.CURRENT_MESSAGE,
+            ),
+            ProgramResolutionReason.CURRENT_CONTRADICTORY_ROLES: (
+                ProgramResolutionOutcome.AMBIGUOUS,
+                ProgramResolutionSource.CURRENT_MESSAGE,
+            ),
+            ProgramResolutionReason.CURRENT_EXCLUDED_ONLY: (
+                ProgramResolutionOutcome.ABSENT,
+                ProgramResolutionSource.NONE,
+            ),
+            ProgramResolutionReason.CURRENT_REFERENCED_ONLY: (
+                ProgramResolutionOutcome.ABSENT,
+                ProgramResolutionSource.NONE,
+            ),
+            ProgramResolutionReason.PRIOR_CONTEXT_SELECTED: (
+                ProgramResolutionOutcome.RESOLVED,
+                ProgramResolutionSource.PRIOR_CONTEXT,
+            ),
+            ProgramResolutionReason.PRIOR_CONTEXT_AMBIGUOUS: (
+                ProgramResolutionOutcome.AMBIGUOUS,
+                ProgramResolutionSource.PRIOR_CONTEXT,
+            ),
+            ProgramResolutionReason.PRIOR_CONTEXT_FALLBACK_ONLY: (
+                ProgramResolutionOutcome.ABSENT,
+                ProgramResolutionSource.NONE,
+            ),
+            ProgramResolutionReason.NO_PROGRAM_EVIDENCE: (
+                ProgramResolutionOutcome.ABSENT,
+                ProgramResolutionSource.NONE,
+            ),
+        }[self.primary_reason]
+        if (self.outcome, self.source) != expected_shape:
+            raise ProgramResolutionError(
+                "primary_reason does not match outcome and source"
+            )
+
+        requested = set(self.requested_program_ids)
+        excluded = set(self.excluded_program_ids)
+        if self.primary_reason in (
+            ProgramResolutionReason.PENDING_REPLY_CONSUMED,
+            ProgramResolutionReason.ACT_NOT_ELIGIBLE,
+        ) and self.mentions:
+            raise ProgramResolutionError(
+                "not-applicable decisions cannot contain current mentions"
+            )
+        if (
+            self.primary_reason
+            is ProgramResolutionReason.CURRENT_MULTIPLE_REQUESTED
+        ) and (len(requested) < 2 or requested & excluded):
+            raise ProgramResolutionError(
+                "multiple-requested reason requires distinct non-contradictory requests"
+            )
+        if (
+            self.primary_reason
+            is ProgramResolutionReason.CURRENT_CONTRADICTORY_ROLES
+        ) and not requested & excluded:
+            raise ProgramResolutionError(
+                "contradictory reason requires requested/excluded overlap"
+            )
+        if self.primary_reason is ProgramResolutionReason.CURRENT_EXCLUDED_ONLY:
+            if requested or self.referenced_program_ids or not excluded:
+                raise ProgramResolutionError(
+                    "excluded-only reason requires only exclusion mentions"
+                )
+        if (
+            self.primary_reason
+            is ProgramResolutionReason.CURRENT_REFERENCED_ONLY
+        ):
+            if requested or excluded or not self.referenced_program_ids:
+                raise ProgramResolutionError(
+                    "referenced-only reason requires only reference mentions"
+                )
+        if (
+            self.primary_reason
+            is ProgramResolutionReason.PRIOR_CONTEXT_AMBIGUOUS
+        ):
+            if self.mentions or len(self.prior_context_program_ids) < 2:
+                raise ProgramResolutionError(
+                    "prior-context ambiguity requires only multiple prior programs"
+                )
+        if (
+            self.primary_reason
+            is ProgramResolutionReason.PRIOR_CONTEXT_FALLBACK_ONLY
+        ):
+            if self.mentions or not self.prior_context_program_ids:
+                raise ProgramResolutionError(
+                    "fallback-only reason requires only prior-context programs"
+                )
+        if (
+            self.primary_reason is ProgramResolutionReason.NO_PROGRAM_EVIDENCE
+            and self.mentions
+        ):
+            raise ProgramResolutionError(
+                "no-program-evidence reason cannot contain current mentions"
             )
