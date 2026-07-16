@@ -2,6 +2,7 @@ import logging
 import re
 import smtplib
 from email.message import EmailMessage
+from typing import Callable
 
 import httpx
 
@@ -27,6 +28,35 @@ from data.prompts import (
 logger = logging.getLogger(__name__)
 
 GRAPH_API_BASE_URL = "https://graph.facebook.com/v18.0"
+
+
+class ExternalEmailDeliveryBlocked(BaseException):
+    """Raised by test-side guards when real SMTP delivery is attempted.
+
+    This intentionally derives from ``BaseException`` so broad production
+    ``except Exception`` blocks used around notification side effects cannot
+    turn a forbidden test delivery into a silent false success.
+    """
+
+
+EmailTransport = Callable[[EmailMessage, str, int, str, str], None]
+
+
+def _smtp_email_transport(
+    email: EmailMessage,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_user: str,
+    smtp_password: str,
+) -> None:
+    """Production SMTP transport. Tests replace ``_email_transport``."""
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
+        smtp.starttls()
+        smtp.login(smtp_user, smtp_password)
+        smtp.send_message(email)
+
+
+_email_transport: EmailTransport = _smtp_email_transport
 
 
 def _dispatch_manager_channels(lead: Lead, event_type: str) -> tuple[bool, bool]:
@@ -825,13 +855,18 @@ def _send_email(subject: str, body: str) -> bool:
             settings.MANAGER_EMAIL,
         )
 
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as smtp:
-            smtp.starttls()
-            smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            smtp.send_message(email)
+        _email_transport(
+            email,
+            settings.SMTP_HOST,
+            settings.SMTP_PORT,
+            settings.SMTP_USER,
+            settings.SMTP_PASSWORD,
+        )
 
         logger.info("[NOTIFICATION][EMAIL] Manager notified to=%s", settings.MANAGER_EMAIL)
         return True
+    except ExternalEmailDeliveryBlocked:
+        raise
     except smtplib.SMTPAuthenticationError as exc:
         logger.error(
             "[NOTIFICATION][EMAIL] SMTP authentication failed — "

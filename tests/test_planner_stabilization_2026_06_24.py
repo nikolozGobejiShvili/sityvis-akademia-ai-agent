@@ -75,6 +75,9 @@ def live(monkeypatch, camp_registration_open):
     monkeypatch.setattr(
         notification_service, "notify_sunday_school_handoff", lambda lead: True,
     )
+    monkeypatch.setattr(
+        notification_service, "notify_manager_handoff", lambda lead, reason: True,
+    )
     monkeypatch.setattr(sheets_service, "log_sunday_school_lead", lambda *a, **k: True)
     parent_flow._sunday_school_notified_senders.clear()
     conversation_service.conversations.clear()

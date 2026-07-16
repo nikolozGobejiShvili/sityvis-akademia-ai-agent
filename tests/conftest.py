@@ -205,39 +205,31 @@ def _force_redis_disabled(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _block_real_smtp(monkeypatch):
-    """Hard safety net: no test may ever open a REAL SMTP connection.
+def _block_real_email_delivery(monkeypatch):
+    """Fail-loud safety net: tests must never use production SMTP delivery.
 
-    `.env` carries live SMTP credentials, so any code path that reaches
-    `notification_service._send_email` (e.g. the under-age manager-handoff
-    dispatch, Live P0/P1 Hotfix 2026-06-15) would otherwise send a real
-    email. This stubs `smtplib.SMTP` with an inert no-op context manager so
-    the gate logic still runs but the network send never happens. Tests that
-    install their own `smtplib.SMTP` fake (test_notification_service.py) win
-    via pytest's LIFO monkeypatch ordering.
+    Notification tests that expect delivery must inject a fake transport by
+    monkeypatching ``notification_service._email_transport``. If application
+    code reaches the production email transport during pytest, this raises a
+    dedicated exception instead of silently reporting success.
     """
     import smtplib
 
-    class _InertSMTP:
-        def __init__(self, *a, **k):
-            pass
+    from app.services import notification_service
 
-        def __enter__(self):
-            return self
+    def _blocked_email_transport(*args, **kwargs):
+        raise notification_service.ExternalEmailDeliveryBlocked(
+            "[test] real SMTP email transport blocked; inject a fake "
+            "notification_service._email_transport instead",
+        )
 
-        def __exit__(self, *a):
-            return False
+    def _blocked_smtp(*args, **kwargs):
+        raise notification_service.ExternalEmailDeliveryBlocked(
+            "[test] direct smtplib.SMTP use blocked by email safety guard",
+        )
 
-        def starttls(self, *a, **k):
-            return None
-
-        def login(self, *a, **k):
-            return None
-
-        def send_message(self, *a, **k):
-            return None
-
-    monkeypatch.setattr(smtplib, "SMTP", _InertSMTP)
+    monkeypatch.setattr(notification_service, "_email_transport", _blocked_email_transport)
+    monkeypatch.setattr(smtplib, "SMTP", _blocked_smtp)
     yield
 
 

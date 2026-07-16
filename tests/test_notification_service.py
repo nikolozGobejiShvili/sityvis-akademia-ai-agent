@@ -104,23 +104,32 @@ def test_send_email_attempts_when_fully_configured(monkeypatch, caplog):
         ),
     )
 
-    smtp_instance = MagicMock()
-    smtp_cls = MagicMock(return_value=MagicMock(
-        __enter__=MagicMock(return_value=smtp_instance),
-        __exit__=MagicMock(return_value=False),
-    ))
-    monkeypatch.setattr(smtplib, "SMTP", smtp_cls)
+    transport_calls = []
+
+    def fake_transport(email, smtp_host, smtp_port, smtp_user, smtp_password):
+        transport_calls.append({
+            "email": email,
+            "smtp_host": smtp_host,
+            "smtp_port": smtp_port,
+            "smtp_user": smtp_user,
+            "smtp_password": smtp_password,
+        })
+
+    monkeypatch.setattr(notification_service, "_email_transport", fake_transport)
 
     with caplog.at_level(logging.INFO):
         ok = notification_service._send_email("Subject", "Body")
 
     assert ok is True
-    smtp_cls.assert_called_once_with("smtp.gmail.com", 587, timeout=15)
-    smtp_instance.starttls.assert_called_once()
-    smtp_instance.login.assert_called_once_with(
-        "sender@example.com", "app-password-here",
-    )
-    smtp_instance.send_message.assert_called_once()
+    assert len(transport_calls) == 1
+    call = transport_calls[0]
+    assert call["smtp_host"] == "smtp.gmail.com"
+    assert call["smtp_port"] == 587
+    assert call["smtp_user"] == "sender@example.com"
+    assert call["smtp_password"] == "app-password-here"
+    assert call["email"]["From"] == "sender@example.com"
+    assert call["email"]["To"] == "manager@example.com"
+    assert call["email"]["Subject"] == "Subject"
     # Password must never appear in the captured log records.
     for record in caplog.records:
         assert "app-password-here" not in record.getMessage()
@@ -235,15 +244,12 @@ def test_send_email_gmail_app_password_hint_on_auth_error(monkeypatch, caplog):
         ),
     )
 
-    fake_smtp = MagicMock()
-    fake_smtp.login.side_effect = smtplib.SMTPAuthenticationError(
-        535, b"5.7.8 Username and Password not accepted",
-    )
-    smtp_ctx = MagicMock(
-        __enter__=MagicMock(return_value=fake_smtp),
-        __exit__=MagicMock(return_value=False),
-    )
-    monkeypatch.setattr(smtplib, "SMTP", MagicMock(return_value=smtp_ctx))
+    def fake_transport(*args, **kwargs):
+        raise smtplib.SMTPAuthenticationError(
+            535, b"5.7.8 Username and Password not accepted",
+        )
+
+    monkeypatch.setattr(notification_service, "_email_transport", fake_transport)
 
     with caplog.at_level(logging.ERROR):
         ok = notification_service._send_email("Subject", "Body")
