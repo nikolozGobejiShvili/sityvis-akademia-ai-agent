@@ -730,42 +730,6 @@ class PendingWorkflowPolicy:
         "რა თქმა უნდა",
         "კი გთხოვთ",
     )
-    non_name_reply_tokens: tuple[str, ...] = (
-        # Question words.
-        "სად",
-        "როდის",
-        "როგორ",
-        "რამდენი",
-        "რატომ",
-        # Timing words.
-        "დღეს",
-        "ხვალ",
-        "მოგვიანებით",
-        "ჯერ",
-        # Program, business, and contact nouns.
-        "ფასი",
-        "ბანაკი",
-        "რეგისტრაცია",
-        "მისამართი",
-        "კონტაქტი",
-        "ნომერი",
-        # Discourse, acknowledgement, and refusal words.
-        "კარგი",
-        "კარგია",
-        "კი",
-        "დიახ",
-        "ჰო",
-        "ხო",
-        "მინდა",
-        "არა",
-        "მადლობა",
-        "გმადლობთ",
-        "გმადლობ",
-        "გამარჯობა",
-        "სალამი",
-        "დამირეკეთ",
-        "გადმომირეკეთ",
-    )
     manager_reference_terms: tuple[str, ...] = ("მენეჯერის",)
     manager_contact_stems: tuple[str, ...] = (
         "ნომერ",
@@ -806,7 +770,6 @@ class PendingWorkflowPolicy:
             )
         for field_name in (
             "affirmation_phrases",
-            "non_name_reply_tokens",
             "manager_reference_terms",
             "manager_contact_stems",
             "manager_request_stems",

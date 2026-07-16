@@ -42,7 +42,12 @@ _INTERNATIONAL_PHONE_RE = re.compile(
     r"\+995[ -]?5\d{2}[ -]?\d{3}[ -]?\d{3}"
 )
 _CHILD_AGE_RE = re.compile(r"(\d{1,2})(?: წლის(?:აა)?)?")
-_GEORGIAN_OR_LATIN_NAME_RE = re.compile(r"(?:[ა-ჰ]+|[A-Za-z]+)")
+_SELF_REFERENCE_TOKEN = "\u10db\u10d4"
+_TO_BE_TOKEN = "\u10d5\u10d0\u10e0"
+_POSSESSIVE_MY_TOKEN = "\u10e9\u10d4\u10db\u10d8"
+_NAME_IS_TOKEN = "\u10e1\u10d0\u10ee\u10d4\u10da\u10d8\u10d0"
+_CLAUSE_CONNECTOR_TOKENS = frozenset(("\u10d3\u10d0",))
+_TERMINAL_NAME_PUNCTUATION = frozenset((".",))
 
 
 def _snapshot_sort_key(
@@ -191,14 +196,89 @@ def _matches_child_age(
     return policy.child_age_minimum <= age <= policy.child_age_maximum
 
 
-def _matches_user_name(
+def _strip_allowed_terminal_name_punctuation(
+    tokens: tuple[str, ...],
+) -> tuple[str, ...] | None:
+    if not tokens:
+        return None
+    stripped = tokens
+    if stripped[-1] in _TERMINAL_NAME_PUNCTUATION:
+        stripped = stripped[:-1]
+    if not stripped or any(not token.isalpha() for token in stripped):
+        return None
+    return stripped
+
+
+def _extract_explicit_name_candidate(
     message: NormalizedMessage,
-    policy: PendingWorkflowPolicy,
-) -> bool:
-    text = message.normalized_text
-    if not _GEORGIAN_OR_LATIN_NAME_RE.fullmatch(text):
+) -> tuple[str, ...] | None:
+    if "?" in message.normalized_text:
+        return None
+    tokens = _strip_allowed_terminal_name_punctuation(message.tokens)
+    if tokens is None:
+        return None
+
+    folded = tuple(token.casefold() for token in tokens)
+    if folded[:2] == (_SELF_REFERENCE_TOKEN, _TO_BE_TOKEN):
+        return tokens[2:]
+    if (
+        len(folded) >= 3
+        and folded[0] == _SELF_REFERENCE_TOKEN
+        and folded[-1] == _TO_BE_TOKEN
+    ):
+        return tokens[1:-1]
+    if folded[-1:] == (_TO_BE_TOKEN,):
+        return tokens[:-1]
+    if folded[:2] == (_POSSESSIVE_MY_TOKEN, _NAME_IS_TOKEN):
+        return tokens[2:]
+    return None
+
+
+def _has_explicit_name_reply_signal(message: NormalizedMessage) -> bool:
+    words = _word_tokens(message)
+    if words[:2] == (_SELF_REFERENCE_TOKEN, _TO_BE_TOKEN):
+        return True
+    if (
+        len(words) >= 2
+        and words[0] == _SELF_REFERENCE_TOKEN
+        and _TO_BE_TOKEN in words[1:]
+    ):
+        return True
+    if words[:2] == (_POSSESSIVE_MY_TOKEN, _NAME_IS_TOKEN):
+        return True
+    if len(words) >= 2 and words[1] == _TO_BE_TOKEN:
+        return True
+    return False
+
+
+def _alphabetic_script(token: str) -> str | None:
+    if all("\u10a0" <= character <= "\u10ff" for character in token):
+        return "georgian"
+    if all(
+        "A" <= character <= "Z" or "a" <= character <= "z"
+        for character in token
+    ):
+        return "latin"
+    return None
+
+
+def _has_bounded_name_candidate_shape(candidate: tuple[str, ...]) -> bool:
+    if not 1 <= len(candidate) <= 2:
         return False
-    return text.casefold() not in policy.non_name_reply_tokens
+    if any(
+        token.casefold() in _CLAUSE_CONNECTOR_TOKENS
+        for token in candidate
+    ):
+        return False
+    scripts = tuple(_alphabetic_script(token) for token in candidate)
+    return None not in scripts and len(set(scripts)) == 1
+
+
+def _matches_user_name(message: NormalizedMessage) -> bool:
+    candidate = _extract_explicit_name_candidate(message)
+    if candidate is None:
+        return False
+    return _has_bounded_name_candidate_shape(candidate)
 
 
 def _matches_affirmation(
@@ -217,7 +297,7 @@ def _matched_reply_kinds(
     matched: list[ExpectedReplyKind] = []
     for reply_kind in workflow.expected_reply_kinds:
         if reply_kind is ExpectedReplyKind.USER_NAME:
-            is_match = _matches_user_name(message, policy)
+            is_match = _matches_user_name(message)
         elif reply_kind is ExpectedReplyKind.USER_PHONE:
             is_match = _matches_phone(message)
         elif reply_kind is ExpectedReplyKind.CHILD_AGE:
@@ -354,6 +434,20 @@ def arbitrate_pending_workflow(
             eligible_workflows=fresh,
             rejected_workflows=rejected,
             evidence=("request.manager_contact",),
+        )
+
+    if (
+        ExpectedReplyKind.USER_NAME in selected.expected_reply_kinds
+        and _has_explicit_name_reply_signal(message)
+        and not _matches_user_name(message)
+    ):
+        return _decision(
+            PendingWorkflowAction.SUSPEND_PENDING_WORKFLOW,
+            PendingWorkflowReason.EXPECTED_REPLY_NOT_MATCHED,
+            0.95,
+            eligible_workflows=fresh,
+            rejected_workflows=rejected,
+            evidence=("reply.expected_not_matched",),
         )
 
     if act is ConversationAct.PROGRAM_QUESTION:

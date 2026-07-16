@@ -181,6 +181,51 @@ def _run(
     )
 
 
+def _real_chain(
+    text: str,
+    workflow: PendingWorkflowSnapshot,
+) -> tuple[object, ConversationActDecision, PendingWorkflowDecision]:
+    message = normalize_message(text)
+    act = resolve_conversation_act(message)
+    decision = arbitrate_pending_workflow(
+        message,
+        act,
+        arbitrate_context(message, act, ()),
+        (workflow,),
+    )
+    return message, act, decision
+
+
+def _fresh_name_workflow() -> PendingWorkflowSnapshot:
+    return _snapshot(
+        PendingWorkflowKind.CONTACT_COLLECTION,
+        expected=(ExpectedReplyKind.USER_NAME,),
+    )
+
+
+def _assert_explicit_name_reply_continues(text: str) -> None:
+    workflow = _fresh_name_workflow()
+    message, act, decision = _real_chain(text, workflow)
+    assert message.normalized_text
+    assert act.act is ConversationAct.UNKNOWN
+    assert decision.action is PendingWorkflowAction.CONTINUE_PENDING_WORKFLOW
+    assert decision.primary_reason is PendingWorkflowReason.EXPECTED_REPLY_MATCHED
+    assert decision.matched_reply_kinds == (ExpectedReplyKind.USER_NAME,)
+    assert decision.selected_workflow == workflow
+
+
+def _assert_name_reply_not_matched(
+    text: str,
+    workflow: PendingWorkflowSnapshot | None = None,
+) -> None:
+    active = workflow or _fresh_name_workflow()
+    _, _, decision = _real_chain(text, active)
+    assert decision.action is PendingWorkflowAction.SUSPEND_PENDING_WORKFLOW
+    assert decision.primary_reason is PendingWorkflowReason.EXPECTED_REPLY_NOT_MATCHED
+    assert decision.matched_reply_kinds == ()
+    assert decision.selected_workflow is None
+
+
 def test_phase5_enums_are_exactly_closed():
     assert tuple(item.value for item in PendingWorkflowKind) == (
         "contact_collection",
@@ -302,11 +347,6 @@ def test_snapshot_rejects_basic_type_and_order_corruption(constructor):
         lambda: PendingWorkflowPolicy(affirmation_phrases=()),
         lambda: PendingWorkflowPolicy(
             affirmation_phrases=("კი", "კი")
-        ),
-        lambda: PendingWorkflowPolicy(non_name_reply_tokens=[]),
-        lambda: PendingWorkflowPolicy(non_name_reply_tokens=()),
-        lambda: PendingWorkflowPolicy(
-            non_name_reply_tokens=("ფასი", "ფასი")
         ),
         lambda: PendingWorkflowPolicy(manager_reference_terms=(" manager ",)),
     ],
@@ -788,29 +828,65 @@ def test_callback_request_with_digits_interrupts_instead_of_matching_phone():
     assert decision.matched_reply_kinds == ()
 
 
-@pytest.mark.parametrize("text", ["ნიკოლოზი", "Nika"])
-def test_name_workflow_accepts_one_conservative_georgian_or_latin_token(text):
-    workflow = _snapshot(
-        PendingWorkflowKind.CONTACT_COLLECTION,
-        expected=(ExpectedReplyKind.USER_NAME,),
-    )
-    decision = _run(text, (workflow,))
-    assert decision.action is PendingWorkflowAction.CONTINUE_PENDING_WORKFLOW
-    assert decision.matched_reply_kinds == (ExpectedReplyKind.USER_NAME,)
+@pytest.mark.parametrize(
+    "text",
+    (
+        "მე ვარ ნიკოლოზი",
+        "მე ნიკოლოზი ვარ",
+        "ნიკოლოზი ვარ",
+        "ჩემი სახელია ნიკოლოზი",
+        "მე ვარ Nika",
+        "Nika ვარ",
+        "ჩემი სახელია Nika",
+        "მე ვარ ნიკოლოზი.",
+        "ჩემი სახელია ნიკოლოზი.",
+        "ნიკოლოზი ვარ.",
+        "მე ვარ ნიკა ბერიძე",
+        "ნიკა ბერიძე ვარ",
+        "ჩემი სახელია ნიკა ბერიძე",
+    ),
+)
+def test_name_workflow_real_chain_accepts_only_explicit_self_identification(text):
+    _assert_explicit_name_reply_continues(text)
+
+
+@pytest.mark.parametrize("text", ("ნიკოლოზი", "Nika", "ნიკა ბერიძე"))
+def test_name_workflow_real_chain_rejects_bare_name_like_tokens(text):
+    message, act, decision = _real_chain(text, _fresh_name_workflow())
+    assert message.normalized_text == text
+    assert act.act is ConversationAct.UNKNOWN
+    assert decision.action is PendingWorkflowAction.SUSPEND_PENDING_WORKFLOW
+    assert decision.primary_reason is PendingWorkflowReason.EXPECTED_REPLY_NOT_MATCHED
+    assert decision.matched_reply_kinds == ()
+    assert decision.selected_workflow is None
 
 
 @pytest.mark.parametrize(
     "text",
     (
-        "ფასი",
-        "ბანაკი",
-        "სად",
-        "როდის",
-        "კარგი",
-        "კარგია",
-        "მოგვიანებით",
-        "კონტაქტი",
-        "ნომერი",
+        "ტრანსპორტი",
+        "ლოკაცია",
+        "ხანგრძლივობა",
+        "ხელმისაწვდომობა",
+        "სკოლა",
+        "მასწავლებელი",
+        "მონაწილეობა",
+        "დეტალები",
+        "ფასები",
+        "რეგისტრაციაზე",
+        "მისამართზე",
+        "კონტაქტზე",
+        "ნომერს",
+        "ექსკურსია",
+        "კვება",
+        "საცხოვრებელი",
+        "გადახდა",
+        "განვადება",
+        "შეხვედრა",
+        "პროგრამები",
+        "ასაკები",
+        "ბავშვები",
+        "თარიღები",
     ),
 )
 def test_name_workflow_real_chain_rejects_high_risk_unknown_tokens(text):
@@ -849,7 +925,7 @@ def test_name_workflow_real_chain_rejects_high_risk_unknown_tokens(text):
         "მინდა",
     ),
 )
-def test_name_workflow_direct_matcher_rejects_bounded_non_name_categories(text):
+def test_name_workflow_direct_matcher_rejects_bare_alphabetic_shape(text):
     workflow = _snapshot(
         PendingWorkflowKind.CONTACT_COLLECTION,
         expected=(ExpectedReplyKind.USER_NAME,),
@@ -859,6 +935,50 @@ def test_name_workflow_direct_matcher_rejects_bounded_non_name_categories(text):
     assert decision.primary_reason is PendingWorkflowReason.EXPECTED_REPLY_NOT_MATCHED
     assert decision.matched_reply_kinds == ()
     assert decision.selected_workflow is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "მე ვარ",
+        "ჩემი სახელია",
+        "ვარ",
+        "მე ვარ 14",
+        "მე ვარ 14 წლის",
+        "მე ვარ 595999733",
+        "მე ვარ +995 595 999 733",
+        "ჩემი სახელია 2026",
+        "მე ვარ ???",
+        "მე ვარ ნიკა?",
+        "მე ვარ ნიკა და ფასი მაინტერესებს",
+        "ჩემი სახელია ნიკა. ფასი რა არის?",
+        "ნიკა ვარ და ბანაკი მაინტერესებს",
+        "მე ვარ https://example.com",
+        "მე ვარ @nika",
+    ),
+)
+def test_name_workflow_real_chain_rejects_malformed_explicit_replies(text):
+    _assert_name_reply_not_matched(text)
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    (
+        _snapshot(PendingWorkflowKind.CONTACT_COLLECTION),
+        _snapshot(PendingWorkflowKind.CHILD_AGE_COLLECTION),
+        _snapshot(PendingWorkflowKind.AFFIRMATION_CONFIRMATION),
+    ),
+)
+def test_explicit_self_identification_only_matches_user_name_workflow(workflow):
+    _assert_name_reply_not_matched("მე ვარ ნიკოლოზი", workflow)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ("595999733", "14", "14 წლის", "კი მინდა"),
+)
+def test_name_workflow_rejects_other_expected_reply_shapes(text):
+    _assert_name_reply_not_matched(text)
 
 
 @pytest.mark.parametrize(
@@ -1281,33 +1401,12 @@ def test_default_policy_owns_the_exact_bounded_affirmation_lexicon():
     )
 
 
-def test_default_policy_owns_bounded_non_name_and_manager_contact_terms():
-    required_non_names = frozenset(
-        (
-            "ფასი",
-            "ბანაკი",
-            "სად",
-            "როდის",
-            "როგორ",
-            "რამდენი",
-            "რატომ",
-            "რეგისტრაცია",
-            "მისამართი",
-            "კონტაქტი",
-            "ნომერი",
-            "დღეს",
-            "ხვალ",
-            "მოგვიანებით",
-            "ჯერ",
-            "არა",
-            "მინდა",
-            "კარგი",
-            "კარგია",
-        )
-    )
-    assert required_non_names <= frozenset(
-        DEFAULT_PENDING_WORKFLOW_POLICY.non_name_reply_tokens
-    )
+def test_default_policy_no_longer_exposes_non_name_reply_blacklist():
+    assert "non_name_reply_tokens" not in PendingWorkflowPolicy.__dataclass_fields__
+    assert not hasattr(DEFAULT_PENDING_WORKFLOW_POLICY, "non_name_reply_tokens")
+
+
+def test_default_policy_owns_manager_contact_terms():
     assert "კონტაქტ" in DEFAULT_PENDING_WORKFLOW_POLICY.manager_contact_stems
 
 
@@ -1321,6 +1420,19 @@ def test_phase5_module_imports_only_standard_library_and_local_models():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.append(node.module)
     assert set(imported) <= {"__future__", "re", "models"}
+
+
+def test_phase5_source_has_no_bare_alphabetic_name_fallback_or_blacklist():
+    import app.domain.decision.pending_workflow as pending_workflow
+
+    source = (DOMAIN_DIR / "pending_workflow.py").read_text(encoding="utf-8")
+    matcher_source = inspect.getsource(pending_workflow._matches_user_name)
+    assert "non_name_reply_tokens" not in source
+    assert "_GEORGIAN_OR_LATIN_NAME_RE" not in source
+    assert "not in policy" not in matcher_source
+    assert "fullmatch" not in matcher_source
+    assert "_extract_explicit_name_candidate" in matcher_source
+    assert "_has_bounded_name_candidate_shape" in matcher_source
 
 
 def test_phase5_source_has_no_runtime_state_service_or_external_io_dependency():
