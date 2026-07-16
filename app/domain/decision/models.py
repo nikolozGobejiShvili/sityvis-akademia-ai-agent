@@ -730,11 +730,48 @@ class PendingWorkflowPolicy:
         "რა თქმა უნდა",
         "კი გთხოვთ",
     )
+    non_name_reply_tokens: tuple[str, ...] = (
+        # Question words.
+        "სად",
+        "როდის",
+        "როგორ",
+        "რამდენი",
+        "რატომ",
+        # Timing words.
+        "დღეს",
+        "ხვალ",
+        "მოგვიანებით",
+        "ჯერ",
+        # Program, business, and contact nouns.
+        "ფასი",
+        "ბანაკი",
+        "რეგისტრაცია",
+        "მისამართი",
+        "კონტაქტი",
+        "ნომერი",
+        # Discourse, acknowledgement, and refusal words.
+        "კარგი",
+        "კარგია",
+        "კი",
+        "დიახ",
+        "ჰო",
+        "ხო",
+        "მინდა",
+        "არა",
+        "მადლობა",
+        "გმადლობთ",
+        "გმადლობ",
+        "გამარჯობა",
+        "სალამი",
+        "დამირეკეთ",
+        "გადმომირეკეთ",
+    )
     manager_reference_terms: tuple[str, ...] = ("მენეჯერის",)
     manager_contact_stems: tuple[str, ...] = (
         "ნომერ",
         "საკონტაქტო",
         "ტელეფონ",
+        "კონტაქტ",
     )
     manager_request_stems: tuple[str, ...] = (
         "მომწერ",
@@ -769,6 +806,7 @@ class PendingWorkflowPolicy:
             )
         for field_name in (
             "affirmation_phrases",
+            "non_name_reply_tokens",
             "manager_reference_terms",
             "manager_contact_stems",
             "manager_request_stems",
@@ -854,12 +892,6 @@ class PendingWorkflowDecision:
             raise PendingWorkflowError(
                 "matched_reply_kinds must be deterministically ordered"
             )
-        if (
-            self.action is PendingWorkflowAction.CONTINUE_PENDING_WORKFLOW
-        ) != bool(self.matched_reply_kinds):
-            raise PendingWorkflowError(
-                "matched replies require continue_pending_workflow"
-            )
         if isinstance(self.confidence, bool) or not isinstance(
             self.confidence, (int, float)
         ):
@@ -871,3 +903,46 @@ class PendingWorkflowDecision:
         if not isinstance(self.primary_reason, PendingWorkflowReason):
             raise PendingWorkflowError("primary_reason is unsupported")
         _validate_pending_string_tuple(self.evidence, "evidence")
+
+        if self.action is PendingWorkflowAction.CONTINUE_PENDING_WORKFLOW:
+            if not self.matched_reply_kinds:
+                raise PendingWorkflowError(
+                    "continue_pending_workflow requires a matched reply"
+                )
+            if len(self.eligible_workflows) != 1:
+                raise PendingWorkflowError(
+                    "continue_pending_workflow requires exactly one eligible workflow"
+                )
+            if not set(self.matched_reply_kinds) <= set(
+                self.selected_workflow.expected_reply_kinds
+            ):
+                raise PendingWorkflowError(
+                    "matched reply kinds must be expected by selected_workflow"
+                )
+            if (
+                self.primary_reason
+                is not PendingWorkflowReason.EXPECTED_REPLY_MATCHED
+            ):
+                raise PendingWorkflowError(
+                    "continue_pending_workflow requires expected_reply_matched"
+                )
+        elif self.action is PendingWorkflowAction.RESUME_PENDING_AFTER_ANSWER:
+            if self.matched_reply_kinds:
+                raise PendingWorkflowError(
+                    "resume_pending_after_answer cannot contain matched replies"
+                )
+            if len(self.eligible_workflows) != 1:
+                raise PendingWorkflowError(
+                    "resume_pending_after_answer requires exactly one eligible workflow"
+                )
+            if (
+                self.primary_reason
+                is not PendingWorkflowReason.RESUMABLE_PROGRAM_QUESTION
+            ):
+                raise PendingWorkflowError(
+                    "resume_pending_after_answer requires resumable_program_question"
+                )
+        elif self.matched_reply_kinds:
+            raise PendingWorkflowError(
+                "non-selection actions cannot contain matched replies"
+            )

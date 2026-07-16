@@ -43,23 +43,6 @@ _INTERNATIONAL_PHONE_RE = re.compile(
 )
 _CHILD_AGE_RE = re.compile(r"(\d{1,2})(?: წლის(?:აა)?)?")
 _GEORGIAN_OR_LATIN_NAME_RE = re.compile(r"(?:[ა-ჰ]+|[A-Za-z]+)")
-_NON_NAME_WORDS = frozenset(
-    (
-        "კი",
-        "დიახ",
-        "ჰო",
-        "ხო",
-        "მინდა",
-        "არა",
-        "მადლობა",
-        "გმადლობთ",
-        "გმადლობ",
-        "გამარჯობა",
-        "სალამი",
-        "დამირეკეთ",
-        "გადმომირეკეთ",
-    )
-)
 
 
 def _snapshot_sort_key(
@@ -208,11 +191,14 @@ def _matches_child_age(
     return policy.child_age_minimum <= age <= policy.child_age_maximum
 
 
-def _matches_user_name(message: NormalizedMessage) -> bool:
+def _matches_user_name(
+    message: NormalizedMessage,
+    policy: PendingWorkflowPolicy,
+) -> bool:
     text = message.normalized_text
     if not _GEORGIAN_OR_LATIN_NAME_RE.fullmatch(text):
         return False
-    return text.casefold() not in _NON_NAME_WORDS
+    return text.casefold() not in policy.non_name_reply_tokens
 
 
 def _matches_affirmation(
@@ -231,7 +217,7 @@ def _matched_reply_kinds(
     matched: list[ExpectedReplyKind] = []
     for reply_kind in workflow.expected_reply_kinds:
         if reply_kind is ExpectedReplyKind.USER_NAME:
-            is_match = _matches_user_name(message)
+            is_match = _matches_user_name(message, policy)
         elif reply_kind is ExpectedReplyKind.USER_PHONE:
             is_match = _matches_phone(message)
         elif reply_kind is ExpectedReplyKind.CHILD_AGE:

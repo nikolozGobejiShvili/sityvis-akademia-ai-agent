@@ -303,6 +303,11 @@ def test_snapshot_rejects_basic_type_and_order_corruption(constructor):
         lambda: PendingWorkflowPolicy(
             affirmation_phrases=("კი", "კი")
         ),
+        lambda: PendingWorkflowPolicy(non_name_reply_tokens=[]),
+        lambda: PendingWorkflowPolicy(non_name_reply_tokens=()),
+        lambda: PendingWorkflowPolicy(
+            non_name_reply_tokens=("ფასი", "ფასი")
+        ),
         lambda: PendingWorkflowPolicy(manager_reference_terms=(" manager ",)),
     ],
 )
@@ -558,6 +563,9 @@ def test_generic_program_question_resumes_one_fresh_pending_workflow(kind):
         "მენეჯერის საკონტაქტო მომეცით",
         "მენეჯერის ტელეფონი გამომიგზავნეთ",
         "მენეჯერის ნომერი შეგიძლიათ მომწეროთ?",
+        "მენეჯერის კონტაქტი მომეცით",
+        "მენეჯერის კონტაქტი გამომიგზავნეთ",
+        "მენეჯერის კონტაქტს მომწერთ?",
     ],
 )
 def test_real_manager_contact_request_narrowly_overrides_pending(text):
@@ -576,6 +584,46 @@ def test_real_manager_contact_request_narrowly_overrides_pending(text):
 def test_exact_manager_number_anchor_keeps_current_phase3_program_question_result():
     message = normalize_message("მენეჯერის ნომერი მომწერეთ")
     assert resolve_conversation_act(message).act is ConversationAct.PROGRAM_QUESTION
+
+
+def test_manager_contact_anchor_real_chain_interrupts_even_while_phase3_is_unknown():
+    message = normalize_message("მენეჯერის კონტაქტი მომეცით")
+    act = resolve_conversation_act(message)
+    assert act.act is ConversationAct.UNKNOWN
+    decision = arbitrate_pending_workflow(
+        message,
+        act,
+        arbitrate_context(message, act, ()),
+        (_snapshot(),),
+    )
+    assert decision.action is PendingWorkflowAction.INTERRUPT_WITH_CURRENT_REQUEST
+    assert decision.primary_reason is PendingWorkflowReason.MANAGER_CONTACT_REQUEST_OVERRIDES_PENDING
+    assert decision.selected_workflow is None
+    assert decision.matched_reply_kinds == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "მენეჯერს ჩემი ნომერი გადაეცით",
+        "მენეჯერს ჩემი კონტაქტი მიეცით",
+        "მენეჯერს დამარეკინეთ",
+        "ჩემი ნომერია 595999733",
+    ),
+)
+def test_manager_contact_guard_rejects_user_owned_contact_false_positives(text):
+    message = normalize_message(text)
+    act = resolve_conversation_act(message)
+    decision = arbitrate_pending_workflow(
+        message,
+        act,
+        arbitrate_context(message, act, ()),
+        (_snapshot(),),
+    )
+    assert decision.action is PendingWorkflowAction.SUSPEND_PENDING_WORKFLOW
+    assert decision.primary_reason is PendingWorkflowReason.EXPECTED_REPLY_NOT_MATCHED
+    assert decision.selected_workflow is None
+    assert decision.matched_reply_kinds == ()
 
 
 def test_manager_reference_plus_user_owned_number_is_not_manager_contact_request():
@@ -753,6 +801,68 @@ def test_name_workflow_accepts_one_conservative_georgian_or_latin_token(text):
 
 @pytest.mark.parametrize(
     "text",
+    (
+        "ფასი",
+        "ბანაკი",
+        "სად",
+        "როდის",
+        "კარგი",
+        "კარგია",
+        "მოგვიანებით",
+        "კონტაქტი",
+        "ნომერი",
+    ),
+)
+def test_name_workflow_real_chain_rejects_high_risk_unknown_tokens(text):
+    message = normalize_message(text)
+    act = resolve_conversation_act(message)
+    assert act.act is ConversationAct.UNKNOWN
+    decision = arbitrate_pending_workflow(
+        message,
+        act,
+        arbitrate_context(message, act, ()),
+        (
+            _snapshot(
+                PendingWorkflowKind.CONTACT_COLLECTION,
+                expected=(ExpectedReplyKind.USER_NAME,),
+            ),
+        ),
+    )
+    assert decision.action is PendingWorkflowAction.SUSPEND_PENDING_WORKFLOW
+    assert decision.primary_reason is PendingWorkflowReason.EXPECTED_REPLY_NOT_MATCHED
+    assert decision.matched_reply_kinds == ()
+    assert decision.selected_workflow is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "როგორ",
+        "რამდენი",
+        "რატომ",
+        "რეგისტრაცია",
+        "მისამართი",
+        "დღეს",
+        "ხვალ",
+        "ჯერ",
+        "არა",
+        "მინდა",
+    ),
+)
+def test_name_workflow_direct_matcher_rejects_bounded_non_name_categories(text):
+    workflow = _snapshot(
+        PendingWorkflowKind.CONTACT_COLLECTION,
+        expected=(ExpectedReplyKind.USER_NAME,),
+    )
+    decision = _run(text, (workflow,), act=_act(ConversationAct.UNKNOWN))
+    assert decision.action is PendingWorkflowAction.SUSPEND_PENDING_WORKFLOW
+    assert decision.primary_reason is PendingWorkflowReason.EXPECTED_REPLY_NOT_MATCHED
+    assert decision.matched_reply_kinds == ()
+    assert decision.selected_workflow is None
+
+
+@pytest.mark.parametrize(
+    "text",
     [
         "მადლობა",
         "დამირეკეთ",
@@ -923,6 +1033,109 @@ def _decision_kwargs() -> dict[str, object]:
 
 
 @pytest.mark.parametrize(
+    ("kind", "expected", "matched"),
+    (
+        (
+            PendingWorkflowKind.CHILD_AGE_COLLECTION,
+            ExpectedReplyKind.CHILD_AGE,
+            ExpectedReplyKind.CHILD_AGE,
+        ),
+        (
+            PendingWorkflowKind.CONTACT_COLLECTION,
+            ExpectedReplyKind.USER_PHONE,
+            ExpectedReplyKind.USER_PHONE,
+        ),
+        (
+            PendingWorkflowKind.CONTACT_COLLECTION,
+            ExpectedReplyKind.USER_NAME,
+            ExpectedReplyKind.USER_NAME,
+        ),
+        (
+            PendingWorkflowKind.AFFIRMATION_CONFIRMATION,
+            ExpectedReplyKind.AFFIRMATION,
+            ExpectedReplyKind.AFFIRMATION,
+        ),
+    ),
+)
+def test_decision_accepts_valid_expected_reply_continuations(
+    kind,
+    expected,
+    matched,
+):
+    workflow = _snapshot(kind, expected=(expected,))
+    decision = PendingWorkflowDecision(
+        action=PendingWorkflowAction.CONTINUE_PENDING_WORKFLOW,
+        selected_workflow=workflow,
+        eligible_workflows=(workflow,),
+        rejected_workflows=(),
+        matched_reply_kinds=(matched,),
+        confidence=0.99,
+        primary_reason=PendingWorkflowReason.EXPECTED_REPLY_MATCHED,
+        evidence=(f"reply.matched.{matched.value}",),
+    )
+    assert decision.selected_workflow == workflow
+
+
+def test_decision_accepts_valid_program_question_resume():
+    workflow = _snapshot()
+    decision = PendingWorkflowDecision(
+        action=PendingWorkflowAction.RESUME_PENDING_AFTER_ANSWER,
+        selected_workflow=workflow,
+        eligible_workflows=(workflow,),
+        rejected_workflows=(),
+        matched_reply_kinds=(),
+        confidence=0.98,
+        primary_reason=PendingWorkflowReason.RESUMABLE_PROGRAM_QUESTION,
+        evidence=("request.program_question",),
+    )
+    assert decision.selected_workflow == workflow
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected", "matched"),
+    (
+        (
+            PendingWorkflowKind.CHILD_AGE_COLLECTION,
+            ExpectedReplyKind.CHILD_AGE,
+            ExpectedReplyKind.USER_PHONE,
+        ),
+        (
+            PendingWorkflowKind.CONTACT_COLLECTION,
+            ExpectedReplyKind.USER_PHONE,
+            ExpectedReplyKind.CHILD_AGE,
+        ),
+        (
+            PendingWorkflowKind.CONTACT_COLLECTION,
+            ExpectedReplyKind.USER_NAME,
+            ExpectedReplyKind.AFFIRMATION,
+        ),
+        (
+            PendingWorkflowKind.AFFIRMATION_CONFIRMATION,
+            ExpectedReplyKind.AFFIRMATION,
+            ExpectedReplyKind.USER_NAME,
+        ),
+    ),
+)
+def test_decision_rejects_matched_reply_not_expected_by_selected_workflow(
+    kind,
+    expected,
+    matched,
+):
+    workflow = _snapshot(kind, expected=(expected,))
+    with pytest.raises(PendingWorkflowError, match="must be expected"):
+        PendingWorkflowDecision(
+            action=PendingWorkflowAction.CONTINUE_PENDING_WORKFLOW,
+            selected_workflow=workflow,
+            eligible_workflows=(workflow,),
+            rejected_workflows=(),
+            matched_reply_kinds=(matched,),
+            confidence=0.99,
+            primary_reason=PendingWorkflowReason.EXPECTED_REPLY_MATCHED,
+            evidence=("reply.mismatched_kind",),
+        )
+
+
+@pytest.mark.parametrize(
     "mutate",
     [
         lambda values: values.update(action="continue_pending_workflow"),
@@ -967,6 +1180,70 @@ def test_decision_rejects_selected_workflow_outside_eligible_tuple():
         PendingWorkflowDecision(**values)
 
 
+def test_decision_rejects_continue_without_matched_reply():
+    values = _decision_kwargs()
+    values["matched_reply_kinds"] = ()
+    with pytest.raises(PendingWorkflowError, match="requires a matched reply"):
+        PendingWorkflowDecision(**values)
+
+
+def test_decision_rejects_continue_without_selected_workflow():
+    values = _decision_kwargs()
+    values["selected_workflow"] = None
+    with pytest.raises(PendingWorkflowError, match="does not match"):
+        PendingWorkflowDecision(**values)
+
+
+def test_decision_rejects_continue_with_multiple_eligible_workflows():
+    values = _decision_kwargs()
+    selected = values["selected_workflow"]
+    other = _snapshot(workflow_id="workflow.secondary")
+    values["eligible_workflows"] = (selected, other)
+    with pytest.raises(PendingWorkflowError, match="exactly one eligible"):
+        PendingWorkflowDecision(**values)
+
+
+def test_decision_rejects_continue_with_wrong_primary_reason():
+    values = _decision_kwargs()
+    values["primary_reason"] = PendingWorkflowReason.RESUMABLE_PROGRAM_QUESTION
+    with pytest.raises(PendingWorkflowError, match="expected_reply_matched"):
+        PendingWorkflowDecision(**values)
+
+
+def test_decision_rejects_resume_with_matched_reply():
+    values = _decision_kwargs()
+    values["action"] = PendingWorkflowAction.RESUME_PENDING_AFTER_ANSWER
+    values["primary_reason"] = PendingWorkflowReason.RESUMABLE_PROGRAM_QUESTION
+    with pytest.raises(PendingWorkflowError, match="cannot contain matched replies"):
+        PendingWorkflowDecision(**values)
+
+
+def test_decision_rejects_resume_with_wrong_primary_reason():
+    values = _decision_kwargs()
+    values["action"] = PendingWorkflowAction.RESUME_PENDING_AFTER_ANSWER
+    values["matched_reply_kinds"] = ()
+    with pytest.raises(PendingWorkflowError, match="resumable_program_question"):
+        PendingWorkflowDecision(**values)
+
+
+def test_decision_rejects_non_selection_action_with_selected_workflow():
+    values = _decision_kwargs()
+    values["action"] = PendingWorkflowAction.INTERRUPT_WITH_CURRENT_REQUEST
+    values["matched_reply_kinds"] = ()
+    values["primary_reason"] = PendingWorkflowReason.CURRENT_REQUEST_OVERRIDES_PENDING
+    with pytest.raises(PendingWorkflowError, match="does not match"):
+        PendingWorkflowDecision(**values)
+
+
+def test_decision_rejects_non_selection_action_with_matched_reply():
+    values = _decision_kwargs()
+    values["action"] = PendingWorkflowAction.SUSPEND_PENDING_WORKFLOW
+    values["selected_workflow"] = None
+    values["primary_reason"] = PendingWorkflowReason.EXPECTED_REPLY_NOT_MATCHED
+    with pytest.raises(PendingWorkflowError, match="cannot contain matched replies"):
+        PendingWorkflowDecision(**values)
+
+
 def test_decision_rejects_nondeterministic_workflow_tuple_order():
     first = _snapshot(workflow_id="workflow.a")
     second = _snapshot(workflow_id="workflow.b")
@@ -1002,6 +1279,36 @@ def test_default_policy_owns_the_exact_bounded_affirmation_lexicon():
         "რა თქმა უნდა",
         "კი გთხოვთ",
     )
+
+
+def test_default_policy_owns_bounded_non_name_and_manager_contact_terms():
+    required_non_names = frozenset(
+        (
+            "ფასი",
+            "ბანაკი",
+            "სად",
+            "როდის",
+            "როგორ",
+            "რამდენი",
+            "რატომ",
+            "რეგისტრაცია",
+            "მისამართი",
+            "კონტაქტი",
+            "ნომერი",
+            "დღეს",
+            "ხვალ",
+            "მოგვიანებით",
+            "ჯერ",
+            "არა",
+            "მინდა",
+            "კარგი",
+            "კარგია",
+        )
+    )
+    assert required_non_names <= frozenset(
+        DEFAULT_PENDING_WORKFLOW_POLICY.non_name_reply_tokens
+    )
+    assert "კონტაქტ" in DEFAULT_PENDING_WORKFLOW_POLICY.manager_contact_stems
 
 
 def test_phase5_module_imports_only_standard_library_and_local_models():
