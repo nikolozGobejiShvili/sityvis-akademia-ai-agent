@@ -129,6 +129,74 @@ class ContextArbitrationError(ValueError):
     """Raised when a context-arbitration contract is invalid."""
 
 
+class PendingWorkflowError(ValueError):
+    """Raised when a pending-workflow contract is invalid."""
+
+
+class PendingWorkflowKind(str, Enum):
+    """Generic kinds of pending inbound-reply workflows."""
+
+    CONTACT_COLLECTION = "contact_collection"
+    CHILD_AGE_COLLECTION = "child_age_collection"
+    AFFIRMATION_CONFIRMATION = "affirmation_confirmation"
+
+
+class PendingWorkflowSource(str, Enum):
+    """Closed provenance categories for pending-workflow evidence."""
+
+    TYPED_PENDING_RECORD = "typed_pending_record"
+    RECENT_ASSISTANT_REQUEST = "recent_assistant_request"
+    LEGACY_STATE = "legacy_state"
+
+
+class PendingWorkflowStatus(str, Enum):
+    """Lifecycle status supplied by the future runtime adapter."""
+
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class ExpectedReplyKind(str, Enum):
+    """Bounded reply shapes that a pending workflow may request."""
+
+    USER_NAME = "user_name"
+    USER_PHONE = "user_phone"
+    CHILD_AGE = "child_age"
+    AFFIRMATION = "affirmation"
+
+
+class PendingWorkflowAction(str, Enum):
+    """Closed orchestration signals emitted by pending-workflow arbitration."""
+
+    CONTINUE_PENDING_WORKFLOW = "continue_pending_workflow"
+    RESUME_PENDING_AFTER_ANSWER = "resume_pending_after_answer"
+    INTERRUPT_WITH_CURRENT_REQUEST = "interrupt_with_current_request"
+    SUSPEND_PENDING_WORKFLOW = "suspend_pending_workflow"
+    CANCEL_STALE_WORKFLOW = "cancel_stale_workflow"
+    REJECT_MALFORMED_WORKFLOW = "reject_malformed_workflow"
+    NO_PENDING_WORKFLOW = "no_pending_workflow"
+
+
+class PendingWorkflowReason(str, Enum):
+    """Closed explanation codes for pending-workflow decisions."""
+
+    NO_WORKFLOW_SUPPLIED = "no_workflow_supplied"
+    NO_ACTIVE_WORKFLOW = "no_active_workflow"
+    WORKFLOW_MALFORMED = "workflow_malformed"
+    WORKFLOW_STALE = "workflow_stale"
+    CONFLICTING_ACTIVE_WORKFLOWS = "conflicting_active_workflows"
+    EXPECTED_REPLY_MATCHED = "expected_reply_matched"
+    RESUMABLE_PROGRAM_QUESTION = "resumable_program_question"
+    MANAGER_CONTACT_REQUEST_OVERRIDES_PENDING = (
+        "manager_contact_request_overrides_pending"
+    )
+    CURRENT_REQUEST_OVERRIDES_PENDING = "current_request_overrides_pending"
+    NON_ANSWER_ACT_SUSPENDS_PENDING = "non_answer_act_suspends_pending"
+    EXPECTED_REPLY_NOT_MATCHED = "expected_reply_not_matched"
+
+
 def _validate_exact_text(value: object, field_name: str) -> None:
     if not isinstance(value, str) or not value:
         raise RegistryValidationError(f"{field_name} must be a non-empty string")
@@ -522,3 +590,284 @@ class ContextArbitrationDecision:
             )
         if len(set(self.evidence)) != len(self.evidence):
             raise ContextArbitrationError("evidence rule IDs must be unique")
+
+
+_EXPECTED_REPLY_ORDER = {
+    item: index for index, item in enumerate(ExpectedReplyKind)
+}
+_SELECTING_PENDING_ACTIONS = frozenset(
+    (
+        PendingWorkflowAction.CONTINUE_PENDING_WORKFLOW,
+        PendingWorkflowAction.RESUME_PENDING_AFTER_ANSWER,
+    )
+)
+
+
+def _validate_pending_text(value: object, field_name: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise PendingWorkflowError(
+            f"{field_name} must be a non-empty string"
+        )
+    if value != value.strip():
+        raise PendingWorkflowError(
+            f"{field_name} must not contain outer whitespace"
+        )
+
+
+def _validate_pending_string_tuple(
+    value: object,
+    field_name: str,
+) -> None:
+    if not isinstance(value, tuple):
+        raise PendingWorkflowError(
+            f"{field_name} must be an immutable tuple"
+        )
+    if not all(
+        isinstance(item, str) and item and item == item.strip()
+        for item in value
+    ):
+        raise PendingWorkflowError(
+            f"{field_name} must contain non-empty trimmed strings"
+        )
+    if len(set(value)) != len(value):
+        raise PendingWorkflowError(f"{field_name} must contain unique values")
+
+
+@dataclass(frozen=True, slots=True)
+class PendingWorkflowSnapshot:
+    """Immutable caller-supplied evidence for one pending workflow."""
+
+    workflow_id: str
+    owner_id: str
+    kind: PendingWorkflowKind
+    source: PendingWorkflowSource
+    status: PendingWorkflowStatus
+    expected_reply_kinds: tuple[ExpectedReplyKind, ...]
+    turn_distance: int
+    program_id: ProgramId | None = None
+
+    def __post_init__(self) -> None:
+        _validate_pending_text(self.workflow_id, "workflow_id")
+        _validate_pending_text(self.owner_id, "owner_id")
+        if not isinstance(self.kind, PendingWorkflowKind):
+            raise PendingWorkflowError("workflow kind is unsupported")
+        if not isinstance(self.source, PendingWorkflowSource):
+            raise PendingWorkflowError("workflow source is unsupported")
+        if not isinstance(self.status, PendingWorkflowStatus):
+            raise PendingWorkflowError("workflow status is unsupported")
+        if not isinstance(self.expected_reply_kinds, tuple):
+            raise PendingWorkflowError(
+                "expected_reply_kinds must be an immutable tuple"
+            )
+        if not all(
+            isinstance(item, ExpectedReplyKind)
+            for item in self.expected_reply_kinds
+        ):
+            raise PendingWorkflowError(
+                "expected_reply_kinds must contain ExpectedReplyKind values"
+            )
+        if len(set(self.expected_reply_kinds)) != len(
+            self.expected_reply_kinds
+        ):
+            raise PendingWorkflowError(
+                "expected_reply_kinds must contain unique values"
+            )
+        if tuple(
+            sorted(
+                self.expected_reply_kinds,
+                key=_EXPECTED_REPLY_ORDER.__getitem__,
+            )
+        ) != self.expected_reply_kinds:
+            raise PendingWorkflowError(
+                "expected_reply_kinds must be deterministically ordered"
+            )
+        if isinstance(self.turn_distance, bool) or not isinstance(
+            self.turn_distance, int
+        ):
+            raise PendingWorkflowError("turn_distance must be an integer")
+        if self.turn_distance < 0:
+            raise PendingWorkflowError(
+                "turn_distance must not be negative"
+            )
+        if self.program_id is not None and not isinstance(
+            self.program_id, ProgramId
+        ):
+            raise PendingWorkflowError("program_id is unsupported")
+
+
+def _pending_snapshot_sort_key(
+    snapshot: PendingWorkflowSnapshot,
+) -> tuple[object, ...]:
+    return (
+        snapshot.workflow_id,
+        snapshot.owner_id,
+        snapshot.kind.value,
+        snapshot.source.value,
+        snapshot.status.value,
+        tuple(item.value for item in snapshot.expected_reply_kinds),
+        snapshot.turn_distance,
+        snapshot.program_id.value if snapshot.program_id is not None else "",
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PendingWorkflowPolicy:
+    """Deterministic freshness and bounded pending-reply matching policy."""
+
+    child_age_collection_max_turn_distance: int = 1
+    contact_collection_max_turn_distance: int = 2
+    affirmation_confirmation_max_turn_distance: int = 1
+    child_age_minimum: int = 1
+    child_age_maximum: int = 17
+    affirmation_phrases: tuple[str, ...] = (
+        "კი",
+        "დიახ",
+        "ჰო",
+        "ხო",
+        "კი მინდა",
+        "კი, მინდა",
+        "დიახ მინდა",
+        "რა თქმა უნდა",
+        "კი გთხოვთ",
+    )
+    manager_reference_terms: tuple[str, ...] = ("მენეჯერის",)
+    manager_contact_stems: tuple[str, ...] = (
+        "ნომერ",
+        "საკონტაქტო",
+        "ტელეფონ",
+    )
+    manager_request_stems: tuple[str, ...] = (
+        "მომწერ",
+        "მომეც",
+        "გამომიგზავნ",
+    )
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "child_age_collection_max_turn_distance",
+            "contact_collection_max_turn_distance",
+            "affirmation_confirmation_max_turn_distance",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise PendingWorkflowError(f"{field_name} must be an integer")
+            if value < 0:
+                raise PendingWorkflowError(
+                    f"{field_name} must not be negative"
+                )
+        for field_name in ("child_age_minimum", "child_age_maximum"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise PendingWorkflowError(f"{field_name} must be an integer")
+        if self.child_age_minimum < 1:
+            raise PendingWorkflowError(
+                "child_age_minimum must be positive"
+            )
+        if self.child_age_maximum < self.child_age_minimum:
+            raise PendingWorkflowError(
+                "child_age_maximum must not be below child_age_minimum"
+            )
+        for field_name in (
+            "affirmation_phrases",
+            "manager_reference_terms",
+            "manager_contact_stems",
+            "manager_request_stems",
+        ):
+            _validate_pending_string_tuple(getattr(self, field_name), field_name)
+            if not getattr(self, field_name):
+                raise PendingWorkflowError(f"{field_name} must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class PendingWorkflowDecision:
+    """Immutable plan signal describing pending-workflow relevance."""
+
+    action: PendingWorkflowAction
+    selected_workflow: PendingWorkflowSnapshot | None
+    eligible_workflows: tuple[PendingWorkflowSnapshot, ...]
+    rejected_workflows: tuple[PendingWorkflowSnapshot, ...]
+    matched_reply_kinds: tuple[ExpectedReplyKind, ...]
+    confidence: float
+    primary_reason: PendingWorkflowReason
+    evidence: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action, PendingWorkflowAction):
+            raise PendingWorkflowError("pending workflow action is unsupported")
+        if self.selected_workflow is not None and not isinstance(
+            self.selected_workflow, PendingWorkflowSnapshot
+        ):
+            raise PendingWorkflowError(
+                "selected_workflow must be PendingWorkflowSnapshot or None"
+            )
+        if (
+            self.action in _SELECTING_PENDING_ACTIONS
+        ) != (self.selected_workflow is not None):
+            raise PendingWorkflowError(
+                "selected_workflow does not match pending workflow action"
+            )
+        for field_name in ("eligible_workflows", "rejected_workflows"):
+            value = getattr(self, field_name)
+            if not isinstance(value, tuple) or not all(
+                isinstance(item, PendingWorkflowSnapshot) for item in value
+            ):
+                raise PendingWorkflowError(
+                    f"{field_name} must be an immutable snapshot tuple"
+                )
+            if len(set(value)) != len(value):
+                raise PendingWorkflowError(
+                    f"{field_name} must contain unique workflows"
+                )
+            if tuple(sorted(value, key=_pending_snapshot_sort_key)) != value:
+                raise PendingWorkflowError(
+                    f"{field_name} must be deterministically ordered"
+                )
+        if set(self.eligible_workflows) & set(self.rejected_workflows):
+            raise PendingWorkflowError(
+                "a workflow cannot be both eligible and rejected"
+            )
+        if self.selected_workflow is not None and (
+            self.selected_workflow not in self.eligible_workflows
+        ):
+            raise PendingWorkflowError(
+                "selected_workflow must be eligible"
+            )
+        if not isinstance(self.matched_reply_kinds, tuple) or not all(
+            isinstance(item, ExpectedReplyKind)
+            for item in self.matched_reply_kinds
+        ):
+            raise PendingWorkflowError(
+                "matched_reply_kinds must be an immutable ExpectedReplyKind tuple"
+            )
+        if len(set(self.matched_reply_kinds)) != len(
+            self.matched_reply_kinds
+        ):
+            raise PendingWorkflowError(
+                "matched_reply_kinds must contain unique values"
+            )
+        if tuple(
+            sorted(
+                self.matched_reply_kinds,
+                key=_EXPECTED_REPLY_ORDER.__getitem__,
+            )
+        ) != self.matched_reply_kinds:
+            raise PendingWorkflowError(
+                "matched_reply_kinds must be deterministically ordered"
+            )
+        if (
+            self.action is PendingWorkflowAction.CONTINUE_PENDING_WORKFLOW
+        ) != bool(self.matched_reply_kinds):
+            raise PendingWorkflowError(
+                "matched replies require continue_pending_workflow"
+            )
+        if isinstance(self.confidence, bool) or not isinstance(
+            self.confidence, (int, float)
+        ):
+            raise PendingWorkflowError("confidence must be numeric")
+        if not 0.0 <= float(self.confidence) <= 1.0:
+            raise PendingWorkflowError(
+                "confidence must be between zero and one"
+            )
+        if not isinstance(self.primary_reason, PendingWorkflowReason):
+            raise PendingWorkflowError("primary_reason is unsupported")
+        _validate_pending_string_tuple(self.evidence, "evidence")
