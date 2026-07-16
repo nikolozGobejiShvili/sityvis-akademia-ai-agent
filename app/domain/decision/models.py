@@ -47,6 +47,44 @@ class CuratedMatchReason(str, Enum):
     EDIT_DISTANCE = "edit_distance"
 
 
+class ConversationAct(str, Enum):
+    """Canonical current-message conversational moves."""
+
+    PROGRAM_QUESTION = "program_question"
+    CLARIFICATION = "clarification"
+    CORRECTION = "correction"
+    COMPLAINT = "complaint"
+    NEGATIVE_FEEDBACK = "negative_feedback"
+    INSULT = "insult"
+    GREETING = "greeting"
+    THANKS = "thanks"
+    HUMAN_HANDOFF = "human_handoff"
+    CALLBACK_REQUEST = "callback_request"
+    UNRELATED = "unrelated"
+    UNKNOWN = "unknown"
+
+
+class ConversationActReason(str, Enum):
+    """Closed-set evidence category for conversation-act decisions."""
+
+    EXPLICIT_INSULT = "explicit_insult"
+    FACTUAL_CORRECTION = "factual_correction"
+    SERVICE_COMPLAINT = "service_complaint"
+    NEGATIVE_REACTION = "negative_reaction"
+    EXPLICIT_HUMAN_REQUEST = "explicit_human_request"
+    EXPLICIT_CALLBACK_REQUEST = "explicit_callback_request"
+    CLARIFICATION_REQUEST = "clarification_request"
+    GENERIC_PROGRAM_QUESTION = "generic_program_question"
+    STANDALONE_THANKS = "standalone_thanks"
+    GREETING_OPENING = "greeting_opening"
+    CLEAR_OFF_DOMAIN = "clear_off_domain"
+    CURATED_TYPO = "curated_typo"
+    EMPTY_INPUT = "empty_input"
+    PUNCTUATION_ONLY = "punctuation_only"
+    CONTEXT_DEPENDENT_FRAGMENT = "context_dependent_fragment"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
 def _validate_exact_text(value: object, field_name: str) -> None:
     if not isinstance(value, str) or not value:
         raise RegistryValidationError(f"{field_name} must be a non-empty string")
@@ -240,3 +278,47 @@ class CuratedTokenMatch:
             0.0 <= float(self.confidence) <= 1.0
         ):
             raise InputNormalizationError("confidence must be between zero and one")
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationActDecision:
+    """Immutable decision whose confidence is deterministic rule strength."""
+
+    act: ConversationAct
+    confidence: float
+    primary_reason: ConversationActReason
+    evidence: tuple[str, ...]
+    candidate_acts: tuple[ConversationAct, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.act, ConversationAct):
+            raise ValueError("act must be ConversationAct")
+        if isinstance(self.confidence, bool) or not isinstance(
+            self.confidence, (int, float)
+        ):
+            raise ValueError("confidence must be numeric")
+        if not 0.0 <= float(self.confidence) <= 1.0:
+            raise ValueError("confidence must be between zero and one")
+        if not isinstance(self.primary_reason, ConversationActReason):
+            raise ValueError("primary_reason must be ConversationActReason")
+        if not isinstance(self.evidence, tuple) or not self.evidence:
+            raise ValueError("evidence must be a non-empty immutable tuple")
+        if not all(
+            isinstance(item, str) and item and item == item.strip()
+            for item in self.evidence
+        ):
+            raise ValueError("evidence must contain stable non-empty rule IDs")
+        if len(set(self.evidence)) != len(self.evidence):
+            raise ValueError("evidence rule IDs must be unique")
+        if not isinstance(self.candidate_acts, tuple) or not self.candidate_acts:
+            raise ValueError(
+                "candidate_acts must be a non-empty immutable tuple"
+            )
+        if not all(
+            isinstance(item, ConversationAct) for item in self.candidate_acts
+        ):
+            raise ValueError("candidate_acts must contain ConversationAct values")
+        if len(set(self.candidate_acts)) != len(self.candidate_acts):
+            raise ValueError("candidate_acts must be unique")
+        if self.candidate_acts[0] is not self.act:
+            raise ValueError("primary act must be the first candidate")

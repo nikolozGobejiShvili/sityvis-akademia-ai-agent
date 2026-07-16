@@ -8,7 +8,11 @@ from .input_normalizer import (
     redact_phone_like,
     tokenize_message,
 )
+from .conversation_act import resolve_conversation_act
 from .models import (
+    ConversationAct,
+    ConversationActDecision,
+    ConversationActReason,
     CuratedMatchKind,
     CuratedMatchReason,
     CuratedTokenMatch,
@@ -26,6 +30,9 @@ from .models import (
 from .program_registry import PROGRAM_REGISTRY, ProgramRegistry
 
 __all__ = [
+    "ConversationAct",
+    "ConversationActDecision",
+    "ConversationActReason",
     "CuratedMatchKind",
     "CuratedMatchReason",
     "CuratedTokenMatch",
@@ -46,5 +53,6 @@ __all__ = [
     "match_curated_token",
     "normalize_message",
     "redact_phone_like",
+    "resolve_conversation_act",
     "tokenize_message",
 ]
