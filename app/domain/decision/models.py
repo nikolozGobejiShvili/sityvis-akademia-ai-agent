@@ -85,6 +85,50 @@ class ConversationActReason(str, Enum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
+class ContextSource(str, Enum):
+    """Closed provenance categories for prior program context."""
+
+    USER_EXPLICIT_PROGRAM = "user_explicit_program"
+    USER_CONFIRMED_PROGRAM = "user_confirmed_program"
+    ASSISTANT_REFERENCED_PROGRAM = "assistant_referenced_program"
+    LEGACY_STICKY_STATE = "legacy_sticky_state"
+    LEGACY_SEGMENT_INFERENCE = "legacy_segment_inference"
+
+
+class ContextUse(str, Enum):
+    """Closed outcomes for prior-context eligibility."""
+
+    BLOCKED = "blocked"
+    CURRENT_MESSAGE_AUTHORITATIVE = "current_message_authoritative"
+    PRIOR_CONTEXT_SELECTED = "prior_context_selected"
+    PRIOR_CONTEXT_FALLBACK_ONLY = "prior_context_fallback_only"
+    AMBIGUOUS = "ambiguous"
+    NO_RELEVANT_CONTEXT = "no_relevant_context"
+
+
+class ContextArbitrationReason(str, Enum):
+    """Closed explanation codes for context arbitration."""
+
+    ACT_BLOCKS_CONTEXT = "act_blocks_context"
+    CLARIFICATION_DOES_NOT_SELECT_CONTEXT = (
+        "clarification_does_not_select_context"
+    )
+    CURRENT_MESSAGE_SUBSTANTIVE = "current_message_substantive"
+    CONTEXT_RESET_OR_EXCLUSION = "context_reset_or_exclusion"
+    SINGLE_FRESH_STRONG_CONTEXT = "single_fresh_strong_context"
+    SINGLE_FRESH_ASSISTANT_CONTEXT = "single_fresh_assistant_context"
+    ASSISTANT_CONTEXT_FALLBACK_ONLY = "assistant_context_fallback_only"
+    CONFLICTING_FRESH_CONTEXTS = "conflicting_fresh_contexts"
+    NO_CONTEXT_CANDIDATES = "no_context_candidates"
+    STALE_CONTEXT_ONLY = "stale_context_only"
+    LEGACY_CONTEXT_NON_AUTHORITATIVE = "legacy_context_non_authoritative"
+    NO_ELIGIBLE_CONTEXT = "no_eligible_context"
+
+
+class ContextArbitrationError(ValueError):
+    """Raised when a context-arbitration contract is invalid."""
+
+
 def _validate_exact_text(value: object, field_name: str) -> None:
     if not isinstance(value, str) or not value:
         raise RegistryValidationError(f"{field_name} must be a non-empty string")
@@ -322,3 +366,159 @@ class ConversationActDecision:
             raise ValueError("candidate_acts must be unique")
         if self.candidate_acts[0] is not self.act:
             raise ValueError("primary act must be the first candidate")
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramContextCandidate:
+    """Minimal immutable evidence that a prior turn concerned one program."""
+
+    program_id: ProgramId
+    source: ContextSource
+    turn_distance: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.program_id, ProgramId):
+            raise ContextArbitrationError("program_id is unsupported")
+        if not isinstance(self.source, ContextSource):
+            raise ContextArbitrationError("context source is unsupported")
+        if isinstance(self.turn_distance, bool) or not isinstance(
+            self.turn_distance, int
+        ):
+            raise ContextArbitrationError("turn_distance must be an integer")
+        if self.turn_distance < 0:
+            raise ContextArbitrationError(
+                "turn_distance must not be negative"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ContextArbitrationPolicy:
+    """Deterministic turn-based freshness and weak-source policy."""
+
+    strong_context_max_turn_distance: int = 2
+    assistant_context_max_turn_distance: int = 1
+    allow_assistant_context_selection: bool = False
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "strong_context_max_turn_distance",
+            "assistant_context_max_turn_distance",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ContextArbitrationError(
+                    f"{field_name} must be an integer"
+                )
+            if value < 0:
+                raise ContextArbitrationError(
+                    f"{field_name} must not be negative"
+                )
+        if not isinstance(self.allow_assistant_context_selection, bool):
+            raise ContextArbitrationError(
+                "allow_assistant_context_selection must be boolean"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ContextArbitrationDecision:
+    """Immutable metadata describing whether prior context may be used."""
+
+    context_use: ContextUse
+    selected_program_id: ProgramId | None
+    eligible_program_ids: tuple[ProgramId, ...]
+    eligible_candidates: tuple[ProgramContextCandidate, ...]
+    rejected_candidates: tuple[ProgramContextCandidate, ...]
+    confidence: float
+    primary_reason: ContextArbitrationReason
+    evidence: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.context_use, ContextUse):
+            raise ContextArbitrationError("context_use is unsupported")
+        if self.selected_program_id is not None and not isinstance(
+            self.selected_program_id, ProgramId
+        ):
+            raise ContextArbitrationError(
+                "selected_program_id is unsupported"
+            )
+        if (
+            self.context_use is ContextUse.PRIOR_CONTEXT_SELECTED
+        ) != (self.selected_program_id is not None):
+            raise ContextArbitrationError(
+                "selected program requires PRIOR_CONTEXT_SELECTED"
+            )
+        if not isinstance(self.eligible_program_ids, tuple) or not all(
+            isinstance(item, ProgramId) for item in self.eligible_program_ids
+        ):
+            raise ContextArbitrationError(
+                "eligible_program_ids must be an immutable ProgramId tuple"
+            )
+        if len(set(self.eligible_program_ids)) != len(
+            self.eligible_program_ids
+        ):
+            raise ContextArbitrationError(
+                "eligible_program_ids must be unique"
+            )
+        if tuple(
+            sorted(self.eligible_program_ids, key=lambda item: item.value)
+        ) != self.eligible_program_ids:
+            raise ContextArbitrationError(
+                "eligible_program_ids must be deterministically ordered"
+            )
+        for field_name in ("eligible_candidates", "rejected_candidates"):
+            value = getattr(self, field_name)
+            if not isinstance(value, tuple) or not all(
+                isinstance(item, ProgramContextCandidate) for item in value
+            ):
+                raise ContextArbitrationError(
+                    f"{field_name} must be an immutable candidate tuple"
+                )
+            if len(set(value)) != len(value):
+                raise ContextArbitrationError(
+                    f"{field_name} must contain unique candidates"
+                )
+        candidate_program_ids = tuple(
+            sorted(
+                {item.program_id for item in self.eligible_candidates},
+                key=lambda item: item.value,
+            )
+        )
+        if candidate_program_ids != self.eligible_program_ids:
+            raise ContextArbitrationError(
+                "eligible program IDs must match eligible candidates"
+            )
+        if set(self.eligible_candidates) & set(self.rejected_candidates):
+            raise ContextArbitrationError(
+                "a candidate cannot be both eligible and rejected"
+            )
+        if self.selected_program_id is not None and (
+            self.selected_program_id not in self.eligible_program_ids
+        ):
+            raise ContextArbitrationError(
+                "selected program must be eligible"
+            )
+        if isinstance(self.confidence, bool) or not isinstance(
+            self.confidence, (int, float)
+        ):
+            raise ContextArbitrationError("confidence must be numeric")
+        if not 0.0 <= float(self.confidence) <= 1.0:
+            raise ContextArbitrationError(
+                "confidence must be between zero and one"
+            )
+        if not isinstance(self.primary_reason, ContextArbitrationReason):
+            raise ContextArbitrationError(
+                "primary_reason is unsupported"
+            )
+        if not isinstance(self.evidence, tuple) or not self.evidence:
+            raise ContextArbitrationError(
+                "evidence must be a non-empty immutable tuple"
+            )
+        if not all(
+            isinstance(item, str) and item and item == item.strip()
+            for item in self.evidence
+        ):
+            raise ContextArbitrationError(
+                "evidence must contain stable non-empty rule IDs"
+            )
+        if len(set(self.evidence)) != len(self.evidence):
+            raise ContextArbitrationError("evidence rule IDs must be unique")
