@@ -1077,23 +1077,152 @@ class ProgramMention:
 
 
 @dataclass(frozen=True, slots=True)
+class ProgramStemRule:
+    """One bounded token stem with explicitly-owned suffixes."""
+
+    stem: str
+    allowed_suffixes: tuple[str, ...]
+    evidence_id: str
+
+    def __post_init__(self) -> None:
+        _validate_program_text(self.stem, "stem")
+        if any(character.isspace() for character in self.stem):
+            raise ProgramResolutionError("stem must be a single token")
+        if not isinstance(self.allowed_suffixes, tuple):
+            raise ProgramResolutionError(
+                "allowed_suffixes must be an immutable tuple"
+            )
+        for suffix in self.allowed_suffixes:
+            if not isinstance(suffix, str):
+                raise ProgramResolutionError("suffixes must be strings")
+            if suffix != suffix.strip():
+                raise ProgramResolutionError(
+                    "suffixes must not contain outer whitespace"
+                )
+            if any(character.isspace() for character in suffix):
+                raise ProgramResolutionError(
+                    "suffixes must not contain whitespace"
+                )
+        if len(set(self.allowed_suffixes)) != len(self.allowed_suffixes):
+            raise ProgramResolutionError(
+                "allowed_suffixes must contain unique values"
+            )
+        if tuple(sorted(self.allowed_suffixes)) != self.allowed_suffixes:
+            raise ProgramResolutionError(
+                "allowed_suffixes must be deterministically ordered"
+            )
+        _validate_program_text(self.evidence_id, "evidence_id")
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramTokenRule:
+    """One generic phrase component that matches exactly one token."""
+
+    exact_forms: tuple[str, ...] = ()
+    stem_rules: tuple[ProgramStemRule, ...] = ()
+    evidence_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.exact_forms, tuple):
+            raise ProgramResolutionError(
+                "exact_forms must be an immutable tuple"
+            )
+        for exact_form in self.exact_forms:
+            _validate_program_text(exact_form, "exact_forms")
+            if any(character.isspace() for character in exact_form):
+                raise ProgramResolutionError(
+                    "exact_forms entries must be single tokens"
+                )
+        if len(set(self.exact_forms)) != len(self.exact_forms):
+            raise ProgramResolutionError(
+                "exact_forms must contain unique values"
+            )
+        if tuple(sorted(self.exact_forms)) != self.exact_forms:
+            raise ProgramResolutionError(
+                "exact_forms must be deterministically ordered"
+            )
+        if not isinstance(self.stem_rules, tuple):
+            raise ProgramResolutionError(
+                "stem_rules must be an immutable tuple"
+            )
+        if not all(isinstance(rule, ProgramStemRule) for rule in self.stem_rules):
+            raise ProgramResolutionError(
+                "stem_rules must contain ProgramStemRule values"
+            )
+        if len(set(self.stem_rules)) != len(self.stem_rules):
+            raise ProgramResolutionError(
+                "stem_rules must contain unique values"
+            )
+        if not self.exact_forms and not self.stem_rules:
+            raise ProgramResolutionError(
+                "token rule requires exact forms or stem rules"
+            )
+        _validate_program_text(self.evidence_id, "evidence_id")
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramPhraseRule:
+    """Ordered token-rule sequence with explicitly bounded gaps."""
+
+    components: tuple[ProgramTokenRule, ...]
+    maximum_gap: int
+    evidence_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.components, tuple) or not self.components:
+            raise ProgramResolutionError(
+                "components must be a non-empty immutable tuple"
+            )
+        if not all(isinstance(rule, ProgramTokenRule) for rule in self.components):
+            raise ProgramResolutionError(
+                "components must contain ProgramTokenRule values"
+            )
+        if len(set(self.components)) != len(self.components):
+            raise ProgramResolutionError(
+                "components must contain unique values"
+            )
+        if isinstance(self.maximum_gap, bool) or not isinstance(
+            self.maximum_gap, int
+        ):
+            raise ProgramResolutionError("maximum_gap must be an integer")
+        if self.maximum_gap < 0:
+            raise ProgramResolutionError("maximum_gap must not be negative")
+        _validate_program_text(self.evidence_id, "evidence_id")
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramIdentityDefinition:
+    """Program identity owned by generic phrase rules, not resolver branches."""
+
+    program_id: ProgramId
+    phrase_rules: tuple[ProgramPhraseRule, ...]
+    evidence_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.program_id, ProgramId):
+            raise ProgramResolutionError("program_id is unsupported")
+        if not isinstance(self.phrase_rules, tuple) or not self.phrase_rules:
+            raise ProgramResolutionError(
+                "phrase_rules must be a non-empty immutable tuple"
+            )
+        if not all(
+            isinstance(rule, ProgramPhraseRule) for rule in self.phrase_rules
+        ):
+            raise ProgramResolutionError(
+                "phrase_rules must contain ProgramPhraseRule values"
+            )
+        if len(set(self.phrase_rules)) != len(self.phrase_rules):
+            raise ProgramResolutionError(
+                "phrase_rules must contain unique values"
+            )
+        _validate_program_text(self.evidence_id, "evidence_id")
+
+
+@dataclass(frozen=True, slots=True)
 class ProgramResolutionPolicy:
     """Single immutable owner of bounded human-language program rules."""
 
-    georgian_stem_suffixes: tuple[str, ...]
-    summer_camp_stems: tuple[str, ...]
-    summer_camp_exact_tokens: tuple[str, ...]
-    summer_camp_modifier_tokens: tuple[str, ...]
-    summer_camp_phrases: tuple[tuple[str, ...], ...]
-    sunday_school_lead_tokens: tuple[str, ...]
-    sunday_school_school_stems: tuple[str, ...]
-    sunday_school_compound_tokens: tuple[str, ...]
-    sunday_school_phrases: tuple[tuple[str, ...], ...]
-    adult_audience_stems: tuple[str, ...]
-    adult_event_identity_stems: tuple[str, ...]
-    adult_cultural_stems: tuple[str, ...]
-    adult_evening_stems: tuple[str, ...]
-    adult_event_phrases: tuple[tuple[str, ...], ...]
+    program_identity_definitions: tuple[ProgramIdentityDefinition, ...]
     exclusion_following_phrases: tuple[tuple[str, ...], ...]
     exclusion_leading_phrases: tuple[tuple[str, ...], ...]
     reference_phrases: tuple[tuple[str, ...], ...]
@@ -1101,18 +1230,33 @@ class ProgramResolutionPolicy:
     clause_boundary_tokens: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.program_identity_definitions, tuple)
+            or not self.program_identity_definitions
+        ):
+            raise ProgramResolutionError(
+                "program_identity_definitions must be a non-empty immutable tuple"
+            )
+        if not all(
+            isinstance(definition, ProgramIdentityDefinition)
+            for definition in self.program_identity_definitions
+        ):
+            raise ProgramResolutionError(
+                "program_identity_definitions must contain ProgramIdentityDefinition values"
+            )
+        program_ids = tuple(
+            definition.program_id
+            for definition in self.program_identity_definitions
+        )
+        if len(set(program_ids)) != len(program_ids):
+            raise ProgramResolutionError(
+                "program_identity_definitions must contain unique program IDs"
+            )
+        if tuple(sorted(program_ids, key=lambda item: item.value)) != program_ids:
+            raise ProgramResolutionError(
+                "program_identity_definitions must be deterministically ordered"
+            )
         for field_name in (
-            "georgian_stem_suffixes",
-            "summer_camp_stems",
-            "summer_camp_exact_tokens",
-            "summer_camp_modifier_tokens",
-            "sunday_school_lead_tokens",
-            "sunday_school_school_stems",
-            "sunday_school_compound_tokens",
-            "adult_audience_stems",
-            "adult_event_identity_stems",
-            "adult_cultural_stems",
-            "adult_evening_stems",
             "pivot_tokens",
             "clause_boundary_tokens",
         ):
@@ -1121,9 +1265,6 @@ class ProgramResolutionPolicy:
                 field_name,
             )
         for field_name in (
-            "summer_camp_phrases",
-            "sunday_school_phrases",
-            "adult_event_phrases",
             "exclusion_following_phrases",
             "exclusion_leading_phrases",
             "reference_phrases",

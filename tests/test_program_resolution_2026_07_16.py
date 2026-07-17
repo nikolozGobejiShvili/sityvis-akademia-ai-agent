@@ -28,14 +28,18 @@ from app.domain.decision import (
     PendingWorkflowStatus,
     ProgramContextCandidate,
     ProgramId,
+    ProgramIdentityDefinition,
     ProgramMention,
     ProgramMentionRole,
+    ProgramPhraseRule,
     ProgramResolutionDecision,
     ProgramResolutionError,
     ProgramResolutionOutcome,
     ProgramResolutionPolicy,
     ProgramResolutionReason,
     ProgramResolutionSource,
+    ProgramStemRule,
+    ProgramTokenRule,
     PROGRAM_REGISTRY,
     ProgramRegistry,
     arbitrate_context,
@@ -299,24 +303,92 @@ def test_program_mention_rejects_invalid_types_spans_and_evidence(constructor):
         constructor()
 
 
+def _single_token_rule(token: str = "synthetic") -> ProgramTokenRule:
+    return ProgramTokenRule(
+        exact_forms=(token,),
+        evidence_id=f"program.test.token.{token}",
+    )
+
+
+def _single_phrase_rule(token: str = "synthetic") -> ProgramPhraseRule:
+    return ProgramPhraseRule(
+        components=(_single_token_rule(token),),
+        maximum_gap=0,
+        evidence_id=f"program.test.phrase.{token}",
+    )
+
+
+def _identity_definition(
+    program_id: ProgramId = ProgramId.SUMMER_CAMP,
+    token: str = "synthetic",
+) -> ProgramIdentityDefinition:
+    return ProgramIdentityDefinition(
+        program_id=program_id,
+        phrase_rules=(_single_phrase_rule(token),),
+        evidence_id=f"program.test.identity.{program_id.value}",
+    )
+
+
 @pytest.mark.parametrize(
-    "field_name,bad_value",
+    "constructor",
     [
-        ("summer_camp_stems", ["ბანაკ"]),
-        ("summer_camp_exact_tokens", ()),
-        ("pivot_tokens", ("ახლა", "ახლა")),
-        ("clause_boundary_tokens", (" ",)),
-        ("summer_camp_phrases", (("summer", "camp"), ("summer", "camp"))),
-        ("sunday_school_phrases", (("sunday school",),)),
-        ("reference_phrases", ((),)),
+        lambda: ProgramStemRule("?????", ["?"], "program.test.stem"),
+        lambda: ProgramStemRule("?????", ("?", "?"), "program.test.stem"),
+        lambda: ProgramStemRule("?????", ("??", "?"), "program.test.stem"),
+        lambda: ProgramStemRule("?????", (" ?",), "program.test.stem"),
+        lambda: ProgramStemRule("??? ??????", ("",), "program.test.stem"),
+        lambda: ProgramTokenRule(["camp"], (), "program.test.token"),
+        lambda: ProgramTokenRule(("camp", "camp"), (), "program.test.token"),
+        lambda: ProgramTokenRule(("summer camp",), (), "program.test.token"),
+        lambda: ProgramTokenRule((), (), "program.test.token"),
+        lambda: ProgramPhraseRule([_single_token_rule()], 0, "program.test.phrase"),
+        lambda: ProgramPhraseRule((_single_token_rule(),), True, "program.test.phrase"),
+        lambda: ProgramPhraseRule((_single_token_rule(),), -1, "program.test.phrase"),
+        lambda: ProgramIdentityDefinition(
+            ProgramId.SUMMER_CAMP,
+            (_single_phrase_rule(), _single_phrase_rule()),
+            "program.test.identity",
+        ),
+        lambda: ProgramResolutionPolicy(
+            [_identity_definition()],
+            DEFAULT_PROGRAM_RESOLUTION_POLICY.exclusion_following_phrases,
+            DEFAULT_PROGRAM_RESOLUTION_POLICY.exclusion_leading_phrases,
+            DEFAULT_PROGRAM_RESOLUTION_POLICY.reference_phrases,
+            DEFAULT_PROGRAM_RESOLUTION_POLICY.pivot_tokens,
+            DEFAULT_PROGRAM_RESOLUTION_POLICY.clause_boundary_tokens,
+        ),
+        lambda: replace(
+            DEFAULT_PROGRAM_RESOLUTION_POLICY,
+            program_identity_definitions=(
+                DEFAULT_PROGRAM_RESOLUTION_POLICY.program_identity_definitions[1],
+                DEFAULT_PROGRAM_RESOLUTION_POLICY.program_identity_definitions[0],
+                DEFAULT_PROGRAM_RESOLUTION_POLICY.program_identity_definitions[2],
+            ),
+        ),
+        lambda: replace(
+            DEFAULT_PROGRAM_RESOLUTION_POLICY,
+            program_identity_definitions=(
+                DEFAULT_PROGRAM_RESOLUTION_POLICY.program_identity_definitions[0],
+                DEFAULT_PROGRAM_RESOLUTION_POLICY.program_identity_definitions[0],
+            ),
+        ),
+        lambda: replace(
+            DEFAULT_PROGRAM_RESOLUTION_POLICY,
+            pivot_tokens=("????", "????"),
+        ),
+        lambda: replace(
+            DEFAULT_PROGRAM_RESOLUTION_POLICY,
+            clause_boundary_tokens=(" ",),
+        ),
+        lambda: replace(
+            DEFAULT_PROGRAM_RESOLUTION_POLICY,
+            reference_phrases=((),),
+        ),
     ],
 )
-def test_program_resolution_policy_rejects_mutable_or_malformed_rules(
-    field_name: str,
-    bad_value: object,
-):
+def test_program_resolution_policy_rejects_mutable_or_malformed_rules(constructor):
     with pytest.raises(ProgramResolutionError):
-        replace(DEFAULT_PROGRAM_RESOLUTION_POLICY, **{field_name: bad_value})
+        constructor()
 
 
 def test_decision_accepts_multiple_spans_but_summarizes_each_role_once():
@@ -1172,6 +1244,248 @@ def test_identity_markers_are_bounded_and_do_not_match_arbitrary_extensions(text
     assert decision.mentions == ()
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ბანაკა მაინტერესებს",
+        "ბანაკული მაინტერესებს",
+        "ბანაკთა მაინტერესებს",
+        "საკვირაო სკოლული მაინტერესებს",
+        "საკვირაო სკოლთა მაინტერესებს",
+        "ზრდასრულთა ღონისძიებული მაინტერესებს",
+    ],
+)
+def test_malformed_georgian_program_morphology_does_not_match_identity(text: str):
+    decision = _resolve(text)
+    assert decision.outcome is ProgramResolutionOutcome.ABSENT
+    assert decision.mentions == ()
+
+
+@pytest.mark.parametrize(
+    "text,excluded,requested",
+    [
+        (
+            "ბანაკი არა საკვირაო სკოლა მაინტერესებს",
+            ProgramId.SUMMER_CAMP,
+            ProgramId.SUNDAY_SCHOOL,
+        ),
+        (
+            "ბანაკი არა, საკვირაო სკოლა მაინტერესებს",
+            ProgramId.SUMMER_CAMP,
+            ProgramId.SUNDAY_SCHOOL,
+        ),
+        (
+            "საკვირაო სკოლა არა ბანაკი მაინტერესებს",
+            ProgramId.SUNDAY_SCHOOL,
+            ProgramId.SUMMER_CAMP,
+        ),
+        (
+            "საკვირაო სკოლა არა, ბანაკი მაინტერესებს",
+            ProgramId.SUNDAY_SCHOOL,
+            ProgramId.SUMMER_CAMP,
+        ),
+        (
+            "კულტურული საღამოები არა ბანაკი მაინტერესებს",
+            ProgramId.ADULT_EVENTS,
+            ProgramId.SUMMER_CAMP,
+        ),
+        (
+            "კულტურული საღამოები არა, ბანაკი მაინტერესებს",
+            ProgramId.ADULT_EVENTS,
+            ProgramId.SUMMER_CAMP,
+        ),
+    ],
+)
+def test_punctuation_independent_ara_pivot_excludes_first_program(
+    text: str,
+    excluded: ProgramId,
+    requested: ProgramId,
+):
+    decision = _assert_resolved(text, requested)
+    assert decision.excluded_program_ids == (excluded,)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("ბანაკი არ გაქვთ?", ProgramId.SUMMER_CAMP),
+        ("ბანაკი არაა?", ProgramId.SUMMER_CAMP),
+        ("ბანაკი აღარ იქნება?", ProgramId.SUMMER_CAMP),
+        ("ბანაკი არ ტარდება?", ProgramId.SUMMER_CAMP),
+        ("ბანაკი მაინტერესებს არა მხოლოდ ზაფხულში", ProgramId.SUMMER_CAMP),
+        ("ბანაკი არა მგონია მალე დაიწყოს", ProgramId.SUMMER_CAMP),
+        ("ბანაკი ალბათ არა საკვირაო სკოლაა", ProgramId.SUMMER_CAMP),
+    ],
+)
+def test_ara_pivot_does_not_turn_availability_or_modifier_questions_into_exclusions(
+    text: str,
+    expected: ProgramId,
+):
+    decision = _assert_resolved(text, expected)
+    assert decision.excluded_program_ids == ()
+
+
+def test_ara_pivot_does_not_invent_a_distinct_requested_program():
+    decision = _resolve("ბანაკი არა")
+    assert decision.outcome is ProgramResolutionOutcome.ABSENT
+    assert decision.requested_program_ids == ()
+    assert decision.excluded_program_ids == (ProgramId.SUMMER_CAMP,)
+
+
+def test_araa_copula_does_not_trigger_exclusion_pivot_before_distinct_program():
+    decision = _resolve("ბანაკი არაა საკვირაო სკოლა")
+    assert decision.outcome is ProgramResolutionOutcome.AMBIGUOUS
+    assert decision.requested_program_ids == (
+        ProgramId.SUMMER_CAMP,
+        ProgramId.SUNDAY_SCHOOL,
+    )
+    assert decision.excluded_program_ids == ()
+
+
+def test_ara_pivot_does_not_resolve_if_not_structured_as_direct_program_switch():
+    decision = _resolve("ბანაკი თუ არა საკვირაო სკოლა?")
+    assert decision.outcome is ProgramResolutionOutcome.AMBIGUOUS
+    assert decision.requested_program_ids == (
+        ProgramId.SUMMER_CAMP,
+        ProgramId.SUNDAY_SCHOOL,
+    )
+    assert decision.excluded_program_ids == ()
+
+
+def test_program_resolution_policy_shape_is_generic_and_program_scoped():
+    assert {item.name for item in fields(ProgramResolutionPolicy)} == {
+        "program_identity_definitions",
+        "exclusion_following_phrases",
+        "exclusion_leading_phrases",
+        "reference_phrases",
+        "pivot_tokens",
+        "clause_boundary_tokens",
+    }
+    assert {
+        "georgian_stem_suffixes",
+        "summer_camp_stems",
+        "summer_camp_exact_tokens",
+        "summer_camp_phrases",
+        "sunday_school_phrases",
+        "adult_event_phrases",
+    }.isdisjoint({item.name for item in fields(ProgramResolutionPolicy)})
+    assert tuple(
+        definition.program_id
+        for definition in DEFAULT_PROGRAM_RESOLUTION_POLICY.program_identity_definitions
+    ) == tuple(
+        sorted(
+            (definition.program_id for definition in PROGRAM_REGISTRY.all()),
+            key=lambda item: item.value,
+        )
+    )
+
+
+def test_program_identity_matching_is_config_driven_for_a_synthetic_token():
+    from app.domain.decision.program_resolver import _identity_matches
+
+    synthetic_definition = ProgramIdentityDefinition(
+        ProgramId.SUMMER_CAMP,
+        (
+            ProgramPhraseRule(
+                (
+                    ProgramTokenRule(
+                        exact_forms=("syntheticprogram",),
+                        evidence_id="program.test.synthetic_token",
+                    ),
+                ),
+                0,
+                "program.test.synthetic_phrase",
+            ),
+        ),
+        "program.test.synthetic_identity",
+    )
+    definitions = tuple(
+        synthetic_definition
+        if definition.program_id is ProgramId.SUMMER_CAMP
+        else definition
+        for definition in DEFAULT_PROGRAM_RESOLUTION_POLICY.program_identity_definitions
+    )
+    policy = replace(
+        DEFAULT_PROGRAM_RESOLUTION_POLICY,
+        program_identity_definitions=definitions,
+    )
+    message = normalize_message("syntheticprogram?")
+    matches = _identity_matches(message, policy)
+    assert tuple(
+        (match.program_id, match.token_start, match.token_end, match.evidence_id)
+        for match in matches
+    ) == ((ProgramId.SUMMER_CAMP, 0, 1, "program.test.synthetic_phrase"),)
+
+    decision = _resolve("syntheticprogram?", policy=policy)
+    assert decision.outcome is ProgramResolutionOutcome.RESOLVED
+    assert decision.selected_program_id is ProgramId.SUMMER_CAMP
+    assert decision.evidence == (
+        "resolution.current_single_requested",
+        "program.test.synthetic_phrase",
+    )
+
+
+def test_program_resolver_has_no_program_specific_matcher_functions():
+    tree = ast.parse(RESOLVER_PATH.read_text(encoding="utf-8"))
+    function_names = {
+        node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
+    assert {
+        "_match_camp",
+        "_match_sunday_school",
+        "_match_adult_events",
+    }.isdisjoint(function_names)
+
+
+def test_program_resolver_matching_helpers_do_not_branch_on_concrete_program_ids():
+    tree = ast.parse(RESOLVER_PATH.read_text(encoding="utf-8"))
+    checked_functions = {
+        "_matches_stem_rule",
+        "_matches_token_rule",
+        "_match_phrase_rule",
+        "_match_identity_definition",
+        "_best_identity_match_at",
+        "_identity_matches",
+        "_is_excluded",
+        "_is_exclusion_pivot_source",
+        "_assign_roles",
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in checked_functions:
+            continue
+        concrete_refs = [
+            child.attr
+            for child in ast.walk(node)
+            if isinstance(child, ast.Attribute)
+            and isinstance(child.value, ast.Name)
+            and child.value.id == "ProgramId"
+        ]
+        assert concrete_refs == [], node.name
+
+
+def test_program_resolver_uses_generic_policy_identity_loop_and_phrase_matcher():
+    tree = ast.parse(RESOLVER_PATH.read_text(encoding="utf-8"))
+    functions = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
+    best_match = functions["_best_identity_match_at"]
+    phrase_match = functions["_match_phrase_rule"]
+    assert any(
+        isinstance(node, ast.For)
+        and isinstance(node.iter, ast.Attribute)
+        and node.iter.attr == "program_identity_definitions"
+        for node in ast.walk(best_match)
+    )
+    assert any(
+        isinstance(node, ast.For)
+        and any(
+            isinstance(child, ast.Attribute) and child.attr == "components"
+            for child in ast.walk(node.iter)
+        )
+        for node in ast.walk(phrase_match)
+    )
+
+
 def test_evidence_and_repr_contain_no_raw_message_phone_or_private_identity():
     private_fragments = (
         "595123456",
@@ -1276,6 +1590,10 @@ def test_public_package_exports_every_phase6_contract():
         "ProgramResolutionSource",
         "ProgramResolutionReason",
         "ProgramMention",
+        "ProgramStemRule",
+        "ProgramTokenRule",
+        "ProgramPhraseRule",
+        "ProgramIdentityDefinition",
         "ProgramResolutionPolicy",
         "ProgramResolutionDecision",
         "DEFAULT_PROGRAM_RESOLUTION_POLICY",

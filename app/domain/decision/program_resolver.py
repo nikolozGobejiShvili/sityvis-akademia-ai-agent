@@ -11,71 +11,292 @@ from .models import (
     NormalizedMessage,
     PendingWorkflowAction,
     PendingWorkflowDecision,
+    ProgramIdentityDefinition,
     ProgramId,
     ProgramMention,
     ProgramMentionRole,
+    ProgramPhraseRule,
     ProgramResolutionDecision,
     ProgramResolutionError,
     ProgramResolutionOutcome,
     ProgramResolutionPolicy,
     ProgramResolutionReason,
     ProgramResolutionSource,
+    ProgramStemRule,
+    ProgramTokenRule,
 )
 from .program_registry import PROGRAM_REGISTRY, ProgramRegistry
 
 
+def _suffixes(*values: str) -> tuple[str, ...]:
+    return tuple(sorted(values))
+
+
+def _forms(*values: str) -> tuple[str, ...]:
+    return tuple(sorted(values))
+
+
+def _stem(stem: str, evidence_id: str, *suffixes: str) -> ProgramStemRule:
+    return ProgramStemRule(stem, _suffixes(*suffixes), evidence_id)
+
+
+def _token(
+    evidence_id: str,
+    *,
+    exact_forms: tuple[str, ...] = (),
+    stem_rules: tuple[ProgramStemRule, ...] = (),
+) -> ProgramTokenRule:
+    return ProgramTokenRule(
+        exact_forms=_forms(*exact_forms),
+        stem_rules=stem_rules,
+        evidence_id=evidence_id,
+    )
+
+
+def _phrase(
+    evidence_id: str,
+    *components: ProgramTokenRule,
+    maximum_gap: int = 0,
+) -> ProgramPhraseRule:
+    return ProgramPhraseRule(components, maximum_gap, evidence_id)
+
+
+def _identity(
+    program_id: ProgramId,
+    evidence_id: str,
+    *phrase_rules: ProgramPhraseRule,
+) -> ProgramIdentityDefinition:
+    return ProgramIdentityDefinition(program_id, phrase_rules, evidence_id)
+
+
+_CAMP_STEM_TOKEN = _token(
+    "program.summer_camp.token.georgian_stem",
+    stem_rules=(
+        _stem(
+            "ბანაკ",
+            "program.summer_camp.stem.banak",
+            "",
+            "ამდე",
+            "ი",
+            "იდან",
+            "ის",
+            "ზე",
+            "ში",
+        ),
+        _stem(
+            "ლაგერ",
+            "program.summer_camp.stem.lager",
+            "ი",
+            "ში",
+        ),
+    ),
+)
+_CAMP_EXACT_TOKEN = _token(
+    "program.summer_camp.token.exact",
+    exact_forms=("camp",),
+)
+_CAMP_SUMMER_MODIFIER = _token(
+    "program.summer_camp.token.summer_modifier",
+    exact_forms=("საზაფხულო",),
+)
+_CAMP_CHILDREN_MODIFIER = _token(
+    "program.summer_camp.token.children_modifier",
+    exact_forms=("ბავშვთა",),
+)
+_CAMP_ENGLISH_SUMMER = _token(
+    "program.summer_camp.token.english_summer",
+    exact_forms=("summer",),
+)
+_CAMP_ENGLISH_HYPHEN = _token(
+    "program.summer_camp.token.english_hyphen",
+    exact_forms=("summer-camp",),
+)
+
+_SUNDAY_LEAD_TOKEN = _token(
+    "program.sunday_school.token.sunday_lead",
+    exact_forms=("საკვირაო",),
+)
+_SUNDAY_SCHOOL_TOKEN = _token(
+    "program.sunday_school.token.school_stem",
+    stem_rules=(
+        _stem(
+            "სკოლ",
+            "program.sunday_school.stem.school",
+            "ა",
+            "აზე",
+            "აში",
+            "ის",
+        ),
+    ),
+)
+_SUNDAY_COMPOUND_TOKEN = _token(
+    "program.sunday_school.token.compound",
+    exact_forms=("sunday-school", "sundayschool", "საკვირაოსკოლა"),
+)
+_SUNDAY_ENGLISH_LEAD = _token(
+    "program.sunday_school.token.english_sunday",
+    exact_forms=("sunday",),
+)
+_SUNDAY_ENGLISH_SCHOOL = _token(
+    "program.sunday_school.token.english_school",
+    exact_forms=("school",),
+)
+
+_ADULT_AUDIENCE_TOKEN = _token(
+    "program.adult_events.token.audience",
+    stem_rules=(
+        _stem(
+            "ზრდასრულ",
+            "program.adult_events.stem.audience",
+            "ებისთვის",
+            "თა",
+        ),
+    ),
+)
+_ADULT_EVENT_TOKEN = _token(
+    "program.adult_events.token.event_identity",
+    stem_rules=(
+        _stem(
+            "ღონისძიებ",
+            "program.adult_events.stem.event",
+            "ა",
+            "აზე",
+            "აში",
+            "ები",
+            "ების",
+            "ებზე",
+            "ებს",
+            "ის",
+        ),
+    ),
+)
+_ADULT_CULTURAL_TOKEN = _token(
+    "program.adult_events.token.cultural",
+    stem_rules=(
+        _stem(
+            "კულტურულ",
+            "program.adult_events.stem.cultural",
+            "ი",
+        ),
+    ),
+)
+_ADULT_EVENING_TOKEN = _token(
+    "program.adult_events.token.evening",
+    stem_rules=(
+        _stem(
+            "საღამო",
+            "program.adult_events.stem.evening",
+            "",
+            "ები",
+            "ების",
+            "ებზე",
+            "ს",
+        ),
+    ),
+)
+_ADULT_ENGLISH_ADULT = _token(
+    "program.adult_events.token.english_adult",
+    exact_forms=("adult",),
+)
+_ADULT_ENGLISH_EVENT = _token(
+    "program.adult_events.token.english_event",
+    exact_forms=("event", "events"),
+)
+_ADULT_ENGLISH_CULTURAL = _token(
+    "program.adult_events.token.english_cultural",
+    exact_forms=("cultural",),
+)
+_ADULT_ENGLISH_EVENING = _token(
+    "program.adult_events.token.english_evening",
+    exact_forms=("evening", "evenings"),
+)
+_ADULT_EVENT_HYPHEN = _token(
+    "program.adult_events.token.event_hyphen",
+    exact_forms=("adult-events",),
+)
+_ADULT_CULTURAL_HYPHEN = _token(
+    "program.adult_events.token.cultural_hyphen",
+    exact_forms=("cultural-evenings",),
+)
+
+
 DEFAULT_PROGRAM_RESOLUTION_POLICY = ProgramResolutionPolicy(
-    georgian_stem_suffixes=(
-        "ა",
-        "ი",
-        "ო",
-        "ს",
-        "ის",
-        "ში",
-        "ზე",
-        "ით",
-        "მა",
-        "თან",
-        "ამდე",
-        "იდან",
-        "ები",
-        "ებმა",
-        "ებს",
-        "ების",
-        "ებში",
-        "ებზე",
-        "ებიდან",
-        "თა",
-        "თვის",
-        "ისთვის",
-        "ებისთვის",
-        "აში",
-        "აზე",
-        "ული",
-    ),
-    summer_camp_stems=("ბანაკ", "ლაგერ"),
-    summer_camp_exact_tokens=("camp",),
-    summer_camp_modifier_tokens=("საზაფხულო", "ბავშვთა"),
-    summer_camp_phrases=(("summer", "camp"), ("summer-camp",)),
-    sunday_school_lead_tokens=("საკვირაო",),
-    sunday_school_school_stems=("სკოლ",),
-    sunday_school_compound_tokens=(
-        "საკვირაოსკოლა",
-        "sunday-school",
-        "sundayschool",
-    ),
-    sunday_school_phrases=(("sunday", "school"),),
-    adult_audience_stems=("ზრდასრულ",),
-    adult_event_identity_stems=("ღონისძიებ", "კულტურ", "საღამო"),
-    adult_cultural_stems=("კულტურულ",),
-    adult_evening_stems=("საღამო",),
-    adult_event_phrases=(
-        ("adult", "events"),
-        ("adult", "event"),
-        ("adult-events",),
-        ("cultural", "evenings"),
-        ("cultural", "evening"),
-        ("cultural-evenings",),
+    program_identity_definitions=(
+        _identity(
+            ProgramId.ADULT_EVENTS,
+            "program.adult_events.identity",
+            _phrase(
+                "program.adult_events.audience_identity",
+                _ADULT_AUDIENCE_TOKEN,
+                _ADULT_EVENT_TOKEN,
+            ),
+            _phrase(
+                "program.adult_events.audience_cultural_evening",
+                _ADULT_AUDIENCE_TOKEN,
+                _ADULT_CULTURAL_TOKEN,
+                _ADULT_EVENING_TOKEN,
+            ),
+            _phrase(
+                "program.adult_events.cultural_evening",
+                _ADULT_CULTURAL_TOKEN,
+                _ADULT_EVENING_TOKEN,
+            ),
+            _phrase(
+                "program.adult_events.direct_phrase",
+                _ADULT_ENGLISH_ADULT,
+                _ADULT_ENGLISH_EVENT,
+            ),
+            _phrase(
+                "program.adult_events.direct_phrase",
+                _ADULT_EVENT_HYPHEN,
+            ),
+            _phrase(
+                "program.adult_events.direct_phrase",
+                _ADULT_ENGLISH_CULTURAL,
+                _ADULT_ENGLISH_EVENING,
+            ),
+            _phrase(
+                "program.adult_events.direct_phrase",
+                _ADULT_CULTURAL_HYPHEN,
+            ),
+        ),
+        _identity(
+            ProgramId.SUMMER_CAMP,
+            "program.summer_camp.identity",
+            _phrase("program.summer_camp.georgian_stem", _CAMP_STEM_TOKEN),
+            _phrase("program.summer_camp.exact_token", _CAMP_EXACT_TOKEN),
+            _phrase(
+                "program.summer_camp.modified_identity",
+                _CAMP_SUMMER_MODIFIER,
+                _CAMP_STEM_TOKEN,
+            ),
+            _phrase(
+                "program.summer_camp.modified_identity",
+                _CAMP_CHILDREN_MODIFIER,
+                _CAMP_STEM_TOKEN,
+            ),
+            _phrase(
+                "program.summer_camp.direct_phrase",
+                _CAMP_ENGLISH_SUMMER,
+                _CAMP_EXACT_TOKEN,
+            ),
+            _phrase("program.summer_camp.direct_phrase", _CAMP_ENGLISH_HYPHEN),
+        ),
+        _identity(
+            ProgramId.SUNDAY_SCHOOL,
+            "program.sunday_school.identity",
+            _phrase(
+                "program.sunday_school.georgian_compound",
+                _SUNDAY_LEAD_TOKEN,
+                _SUNDAY_SCHOOL_TOKEN,
+            ),
+            _phrase("program.sunday_school.compound", _SUNDAY_COMPOUND_TOKEN),
+            _phrase(
+                "program.sunday_school.english_compound",
+                _SUNDAY_ENGLISH_LEAD,
+                _SUNDAY_ENGLISH_SCHOOL,
+            ),
+        ),
     ),
     exclusion_following_phrases=(
         ("გარდა",),
@@ -110,171 +331,77 @@ class _IdentityMatch:
     evidence_id: str
 
 
-def _matches_bounded_stem(
-    token: str,
-    stems: tuple[str, ...],
-    suffixes: tuple[str, ...],
-) -> bool:
-    return any(
-        token == stem
-        or (
-            token.startswith(stem)
-            and token[len(stem) :] in suffixes
-        )
-        for stem in stems
-    )
+def _matches_stem_rule(token: str, rule: ProgramStemRule) -> bool:
+    return any(token == f"{rule.stem}{suffix}" for suffix in rule.allowed_suffixes)
 
 
-def _matches_phrase(
+def _matches_token_rule(token: str, rule: ProgramTokenRule) -> bool:
+    if token in rule.exact_forms:
+        return True
+    return any(_matches_stem_rule(token, stem_rule) for stem_rule in rule.stem_rules)
+
+
+def _match_phrase_rule(
     tokens: tuple[str, ...],
     start: int,
-    phrase: tuple[str, ...],
-) -> bool:
-    end = start + len(phrase)
-    return end <= len(tokens) and tokens[start:end] == phrase
-
-
-def _match_any_phrase(
-    tokens: tuple[str, ...],
-    start: int,
-    phrases: tuple[tuple[str, ...], ...],
-) -> tuple[str, ...] | None:
-    matches = tuple(
-        phrase for phrase in phrases if _matches_phrase(tokens, start, phrase)
-    )
-    if not matches:
+    rule: ProgramPhraseRule,
+) -> int | None:
+    if not _matches_token_rule(tokens[start], rule.components[0]):
         return None
-    return sorted(matches, key=lambda item: (-len(item), item))[0]
+
+    end = start + 1
+    for component in rule.components[1:]:
+        upper_bound = min(len(tokens), end + rule.maximum_gap + 1)
+        next_index = None
+        for candidate_index in range(end, upper_bound):
+            if _matches_token_rule(tokens[candidate_index], component):
+                next_index = candidate_index
+                break
+        if next_index is None:
+            return None
+        end = next_index + 1
+    return end
 
 
-def _match_identity_at(
+def _match_identity_definition(
+    tokens: tuple[str, ...],
+    start: int,
+    definition: ProgramIdentityDefinition,
+) -> tuple[_IdentityMatch, ...]:
+    matches: list[_IdentityMatch] = []
+    for phrase_rule in definition.phrase_rules:
+        token_end = _match_phrase_rule(tokens, start, phrase_rule)
+        if token_end is None:
+            continue
+        matches.append(
+            _IdentityMatch(
+                definition.program_id,
+                start,
+                token_end,
+                phrase_rule.evidence_id,
+            )
+        )
+    return tuple(matches)
+
+
+def _best_identity_match_at(
     tokens: tuple[str, ...],
     start: int,
     policy: ProgramResolutionPolicy,
 ) -> _IdentityMatch | None:
-    token = tokens[start]
-
-    if token in policy.sunday_school_compound_tokens:
-        return _IdentityMatch(
-            ProgramId.SUNDAY_SCHOOL,
-            start,
-            start + 1,
-            "program.sunday_school.compound",
-        )
-    if (
-        token in policy.sunday_school_lead_tokens
-        and start + 1 < len(tokens)
-        and _matches_bounded_stem(
-            tokens[start + 1],
-            policy.sunday_school_school_stems,
-            policy.georgian_stem_suffixes,
-        )
-    ):
-        return _IdentityMatch(
-            ProgramId.SUNDAY_SCHOOL,
-            start,
-            start + 2,
-            "program.sunday_school.georgian_compound",
-        )
-    phrase = _match_any_phrase(tokens, start, policy.sunday_school_phrases)
-    if phrase is not None:
-        return _IdentityMatch(
-            ProgramId.SUNDAY_SCHOOL,
-            start,
-            start + len(phrase),
-            "program.sunday_school.english_compound",
-        )
-
-    phrase = _match_any_phrase(tokens, start, policy.adult_event_phrases)
-    if phrase is not None:
-        return _IdentityMatch(
-            ProgramId.ADULT_EVENTS,
-            start,
-            start + len(phrase),
-            "program.adult_events.direct_phrase",
-        )
-    if (
-        _matches_bounded_stem(
-            token,
-            policy.adult_cultural_stems,
-            policy.georgian_stem_suffixes,
-        )
-        and start + 1 < len(tokens)
-        and _matches_bounded_stem(
-            tokens[start + 1],
-            policy.adult_evening_stems,
-            policy.georgian_stem_suffixes,
-        )
-    ):
-        return _IdentityMatch(
-            ProgramId.ADULT_EVENTS,
-            start,
-            start + 2,
-            "program.adult_events.cultural_evening",
-        )
-    if _matches_bounded_stem(
-        token,
-        policy.adult_audience_stems,
-        policy.georgian_stem_suffixes,
-    ):
-        identity_end = None
-        for index in range(start + 1, min(start + 3, len(tokens))):
-            if _matches_bounded_stem(
-                tokens[index],
-                policy.adult_event_identity_stems,
-                policy.georgian_stem_suffixes,
-            ):
-                identity_end = index + 1
-        if identity_end is not None:
-            return _IdentityMatch(
-                ProgramId.ADULT_EVENTS,
-                start,
-                identity_end,
-                "program.adult_events.audience_identity",
-            )
-
-    phrase = _match_any_phrase(tokens, start, policy.summer_camp_phrases)
-    if phrase is not None:
-        return _IdentityMatch(
-            ProgramId.SUMMER_CAMP,
-            start,
-            start + len(phrase),
-            "program.summer_camp.direct_phrase",
-        )
-    if (
-        token in policy.summer_camp_modifier_tokens
-        and start + 1 < len(tokens)
-        and _matches_bounded_stem(
-            tokens[start + 1],
-            policy.summer_camp_stems,
-            policy.georgian_stem_suffixes,
-        )
-    ):
-        return _IdentityMatch(
-            ProgramId.SUMMER_CAMP,
-            start,
-            start + 2,
-            "program.summer_camp.modified_identity",
-        )
-    if _matches_bounded_stem(
-        token,
-        policy.summer_camp_stems,
-        policy.georgian_stem_suffixes,
-    ):
-        return _IdentityMatch(
-            ProgramId.SUMMER_CAMP,
-            start,
-            start + 1,
-            "program.summer_camp.georgian_stem",
-        )
-    if token in policy.summer_camp_exact_tokens:
-        return _IdentityMatch(
-            ProgramId.SUMMER_CAMP,
-            start,
-            start + 1,
-            "program.summer_camp.exact_token",
-        )
-    return None
+    matches: list[_IdentityMatch] = []
+    for definition in policy.program_identity_definitions:
+        matches.extend(_match_identity_definition(tokens, start, definition))
+    if not matches:
+        return None
+    return sorted(
+        matches,
+        key=lambda item: (
+            -(item.token_end - item.token_start),
+            item.program_id.value,
+            item.evidence_id,
+        ),
+    )[0]
 
 
 def _identity_matches(
@@ -285,7 +412,7 @@ def _identity_matches(
     matches: list[_IdentityMatch] = []
     index = 0
     while index < len(tokens):
-        match = _match_identity_at(tokens, index, policy)
+        match = _best_identity_match_at(tokens, index, policy)
         if match is None:
             index += 1
             continue
@@ -403,6 +530,31 @@ def _has_reference_signal(
     )
 
 
+def _first_alpha_index_after(
+    tokens: tuple[str, ...],
+    start: int,
+) -> int | None:
+    for index in range(start, len(tokens)):
+        if tokens[index].isalpha():
+            return index
+    return None
+
+
+def _is_exclusion_pivot_source(
+    match: _IdentityMatch,
+    matches: tuple[_IdentityMatch, ...],
+    tokens: tuple[str, ...],
+) -> bool:
+    pivot_index = _first_alpha_index_after(tokens, match.token_end)
+    if pivot_index is None or tokens[pivot_index] != "არა":
+        return False
+    return any(
+        other.token_start > pivot_index
+        and other.program_id is not match.program_id
+        for other in matches
+    )
+
+
 def _assign_roles(
     matches: tuple[_IdentityMatch, ...],
     message: NormalizedMessage,
@@ -426,6 +578,11 @@ def _assign_roles(
 
     mentions: list[ProgramMention] = []
     for match, role in preliminary:
+        if (
+            role is ProgramMentionRole.REQUESTED
+            and _is_exclusion_pivot_source(match, matches, tokens)
+        ):
+            role = ProgramMentionRole.EXCLUDED
         if role is ProgramMentionRole.REQUESTED:
             for pivot_index in pivot_indices:
                 if match.token_end > pivot_index:
@@ -582,6 +739,26 @@ def _validate_registry_membership(
         )
 
 
+def _validate_policy_registry_alignment(
+    registry: ProgramRegistry,
+    policy: ProgramResolutionPolicy,
+) -> None:
+    registry_ids = tuple(
+        sorted(
+            (definition.program_id for definition in registry.all()),
+            key=lambda item: item.value,
+        )
+    )
+    policy_ids = tuple(
+        definition.program_id
+        for definition in policy.program_identity_definitions
+    )
+    if policy_ids != registry_ids:
+        raise ProgramResolutionError(
+            "program identity definitions must exactly match the supplied registry"
+        )
+
+
 def resolve_program(
     message: NormalizedMessage,
     conversation_act: ConversationActDecision,
@@ -600,6 +777,7 @@ def resolve_program(
         registry,
         policy,
     )
+    _validate_policy_registry_alignment(registry, policy)
     prior_program_ids = context_decision.eligible_program_ids
     _validate_registry_membership(registry, prior_program_ids)
 
