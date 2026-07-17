@@ -313,6 +313,7 @@ DEFAULT_PROGRAM_RESOLUTION_POLICY = ProgramResolutionPolicy(
         ("არ", "გეკითხები"),
         ("არ", "ვკითხულობ"),
     ),
+    exclusion_intermention_pivot_phrases=(("არა",),),
     reference_phrases=(
         ("ადრე", "ვსაუბრობდით"),
         ("რომ", "ვსაუბრობდით"),
@@ -546,21 +547,26 @@ def _has_exact_exclusion_pivot_between(
     source: _IdentityMatch,
     target: _IdentityMatch,
     tokens: tuple[str, ...],
+    policy: ProgramResolutionPolicy,
 ) -> bool:
     if source.program_id is target.program_id:
         return False
     if source.token_end > target.token_start:
         return False
-    return _lexical_tokens_between_mentions(tokens, source, target) == ("არა",)
+    return (
+        _lexical_tokens_between_mentions(tokens, source, target)
+        in policy.exclusion_intermention_pivot_phrases
+    )
 
 
 def _is_exclusion_pivot_source(
     match: _IdentityMatch,
     matches: tuple[_IdentityMatch, ...],
     tokens: tuple[str, ...],
+    policy: ProgramResolutionPolicy,
 ) -> bool:
     return any(
-        _has_exact_exclusion_pivot_between(match, other, tokens)
+        _has_exact_exclusion_pivot_between(match, other, tokens, policy)
         for other in matches
     )
 
@@ -590,7 +596,7 @@ def _assign_roles(
     for match, role in preliminary:
         if (
             role is ProgramMentionRole.REQUESTED
-            and _is_exclusion_pivot_source(match, matches, tokens)
+            and _is_exclusion_pivot_source(match, matches, tokens, policy)
         ):
             role = ProgramMentionRole.EXCLUDED
         if role is ProgramMentionRole.REQUESTED:

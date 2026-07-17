@@ -1225,6 +1225,7 @@ class ProgramResolutionPolicy:
     program_identity_definitions: tuple[ProgramIdentityDefinition, ...]
     exclusion_following_phrases: tuple[tuple[str, ...], ...]
     exclusion_leading_phrases: tuple[tuple[str, ...], ...]
+    exclusion_intermention_pivot_phrases: tuple[tuple[str, ...], ...]
     reference_phrases: tuple[tuple[str, ...], ...]
     pivot_tokens: tuple[str, ...]
     clause_boundary_tokens: tuple[str, ...]
@@ -1267,6 +1268,7 @@ class ProgramResolutionPolicy:
         for field_name in (
             "exclusion_following_phrases",
             "exclusion_leading_phrases",
+            "exclusion_intermention_pivot_phrases",
             "reference_phrases",
         ):
             _validate_program_phrase_tuple(

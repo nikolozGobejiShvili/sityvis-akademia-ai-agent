@@ -353,6 +353,7 @@ def _identity_definition(
             [_identity_definition()],
             DEFAULT_PROGRAM_RESOLUTION_POLICY.exclusion_following_phrases,
             DEFAULT_PROGRAM_RESOLUTION_POLICY.exclusion_leading_phrases,
+            DEFAULT_PROGRAM_RESOLUTION_POLICY.exclusion_intermention_pivot_phrases,
             DEFAULT_PROGRAM_RESOLUTION_POLICY.reference_phrases,
             DEFAULT_PROGRAM_RESOLUTION_POLICY.pivot_tokens,
             DEFAULT_PROGRAM_RESOLUTION_POLICY.clause_boundary_tokens,
@@ -1418,6 +1419,23 @@ def test_exact_ara_pivot_requires_distinct_program_ids(text: str):
     assert decision.excluded_program_ids == ()
 
 
+def test_exact_ara_pivot_is_owned_by_policy_configuration():
+    policy = replace(
+        DEFAULT_PROGRAM_RESOLUTION_POLICY,
+        exclusion_intermention_pivot_phrases=(("არაა",),),
+    )
+    decision = _resolve(
+        "ბანაკი არა საკვირაო სკოლა მაინტერესებს",
+        policy=policy,
+    )
+    assert decision.outcome is ProgramResolutionOutcome.AMBIGUOUS
+    assert decision.requested_program_ids == (
+        ProgramId.SUMMER_CAMP,
+        ProgramId.SUNDAY_SCHOOL,
+    )
+    assert decision.excluded_program_ids == ()
+
+
 def test_ara_pivot_does_not_resolve_if_not_structured_as_direct_program_switch():
     decision = _resolve("ბანაკი თუ არა საკვირაო სკოლა?")
     assert decision.outcome is ProgramResolutionOutcome.AMBIGUOUS
@@ -1433,6 +1451,7 @@ def test_program_resolution_policy_shape_is_generic_and_program_scoped():
         "program_identity_definitions",
         "exclusion_following_phrases",
         "exclusion_leading_phrases",
+        "exclusion_intermention_pivot_phrases",
         "reference_phrases",
         "pivot_tokens",
         "clause_boundary_tokens",
@@ -1568,6 +1587,7 @@ def test_program_resolver_exact_ara_pivot_uses_full_intervening_span():
     assert "first_intervening_token" not in source
     assert "_lexical_tokens_between_mentions" in source
     assert "_has_exact_exclusion_pivot_between" in source
+    assert "exclusion_intermention_pivot_phrases" in source
 
     tree = ast.parse(source)
     functions = {
