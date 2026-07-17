@@ -530,14 +530,28 @@ def _has_reference_signal(
     )
 
 
-def _first_alpha_index_after(
+def _lexical_tokens_between_mentions(
     tokens: tuple[str, ...],
-    start: int,
-) -> int | None:
-    for index in range(start, len(tokens)):
-        if tokens[index].isalpha():
-            return index
-    return None
+    source: _IdentityMatch,
+    target: _IdentityMatch,
+) -> tuple[str, ...]:
+    return tuple(
+        token
+        for token in tokens[source.token_end : target.token_start]
+        if any(character.isalnum() for character in token)
+    )
+
+
+def _has_exact_exclusion_pivot_between(
+    source: _IdentityMatch,
+    target: _IdentityMatch,
+    tokens: tuple[str, ...],
+) -> bool:
+    if source.program_id is target.program_id:
+        return False
+    if source.token_end > target.token_start:
+        return False
+    return _lexical_tokens_between_mentions(tokens, source, target) == ("არა",)
 
 
 def _is_exclusion_pivot_source(
@@ -545,12 +559,8 @@ def _is_exclusion_pivot_source(
     matches: tuple[_IdentityMatch, ...],
     tokens: tuple[str, ...],
 ) -> bool:
-    pivot_index = _first_alpha_index_after(tokens, match.token_end)
-    if pivot_index is None or tokens[pivot_index] != "არა":
-        return False
     return any(
-        other.token_start > pivot_index
-        and other.program_id is not match.program_id
+        _has_exact_exclusion_pivot_between(match, other, tokens)
         for other in matches
     )
 

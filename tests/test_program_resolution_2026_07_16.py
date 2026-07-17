@@ -1275,6 +1275,16 @@ def test_malformed_georgian_program_morphology_does_not_match_identity(text: str
             ProgramId.SUNDAY_SCHOOL,
         ),
         (
+            "ბანაკი არა — საკვირაო სკოლა მაინტერესებს",
+            ProgramId.SUMMER_CAMP,
+            ProgramId.SUNDAY_SCHOOL,
+        ),
+        (
+            "ბანაკი არა - საკვირაო სკოლა მაინტერესებს",
+            ProgramId.SUMMER_CAMP,
+            ProgramId.SUNDAY_SCHOOL,
+        ),
+        (
             "საკვირაო სკოლა არა ბანაკი მაინტერესებს",
             ProgramId.SUNDAY_SCHOOL,
             ProgramId.SUMMER_CAMP,
@@ -1339,6 +1349,72 @@ def test_araa_copula_does_not_trigger_exclusion_pivot_before_distinct_program():
         ProgramId.SUMMER_CAMP,
         ProgramId.SUNDAY_SCHOOL,
     )
+    assert decision.excluded_program_ids == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ბანაკი არა მხოლოდ საკვირაო სკოლა მაინტერესებს",
+        "ბანაკი არა მგონია საკვირაო სკოლა მაინტერესებდეს",
+        "ბანაკი არა უბრალოდ საკვირაო სკოლა მაინტერესებს",
+        "ბანაკი არა ახლა საკვირაო სკოლა მაინტერესებს",
+        "ბანაკი ალბათ არა საკვირაო სკოლა მაინტერესებს",
+    ],
+)
+def test_ara_pivot_requires_exact_intervening_lexical_sequence(text: str):
+    decision = _resolve(text)
+    assert decision.outcome is ProgramResolutionOutcome.AMBIGUOUS
+    assert decision.requested_program_ids == (
+        ProgramId.SUMMER_CAMP,
+        ProgramId.SUNDAY_SCHOOL,
+    )
+    assert decision.excluded_program_ids == ()
+
+
+def test_explicit_exclusion_grammar_still_works_without_exact_ara_pivot():
+    decision = _assert_resolved(
+        "ბანაკი არ მინდა, საკვირაო სკოლა მაინტერესებს",
+        ProgramId.SUNDAY_SCHOOL,
+    )
+    assert decision.excluded_program_ids == (ProgramId.SUMMER_CAMP,)
+
+
+def test_exact_ara_pivot_can_exclude_one_program_and_leave_two_requested():
+    decision = _resolve(
+        "ბანაკი არა საკვირაო სკოლა და კულტურული საღამოები მაინტერესებს"
+    )
+    assert decision.outcome is ProgramResolutionOutcome.AMBIGUOUS
+    assert decision.requested_program_ids == (
+        ProgramId.ADULT_EVENTS,
+        ProgramId.SUNDAY_SCHOOL,
+    )
+    assert decision.excluded_program_ids == (ProgramId.SUMMER_CAMP,)
+    assert decision.selected_program_id is None
+    assert decision.primary_reason is ProgramResolutionReason.CURRENT_MULTIPLE_REQUESTED
+
+
+def test_chained_exact_ara_pivots_apply_pairwise_and_deterministically():
+    decision = _assert_resolved(
+        "ბანაკი არა საკვირაო სკოლა არა კულტურული საღამოები მაინტერესებს",
+        ProgramId.ADULT_EVENTS,
+    )
+    assert decision.requested_program_ids == (ProgramId.ADULT_EVENTS,)
+    assert decision.excluded_program_ids == (
+        ProgramId.SUMMER_CAMP,
+        ProgramId.SUNDAY_SCHOOL,
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ბანაკი არა ლაგერი მაინტერესებს",
+        "ბანაკი არა ბანაკის ფასი მაინტერესებს",
+    ],
+)
+def test_exact_ara_pivot_requires_distinct_program_ids(text: str):
+    decision = _assert_resolved(text, ProgramId.SUMMER_CAMP)
     assert decision.excluded_program_ids == ()
 
 
@@ -1483,6 +1559,26 @@ def test_program_resolver_uses_generic_policy_identity_loop_and_phrase_matcher()
             for child in ast.walk(node.iter)
         )
         for node in ast.walk(phrase_match)
+    )
+
+
+def test_program_resolver_exact_ara_pivot_uses_full_intervening_span():
+    source = RESOLVER_PATH.read_text(encoding="utf-8")
+    assert "_first_alpha_index_after" not in source
+    assert "first_intervening_token" not in source
+    assert "_lexical_tokens_between_mentions" in source
+    assert "_has_exact_exclusion_pivot_between" in source
+
+    tree = ast.parse(source)
+    functions = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
+    pivot_source = functions["_is_exclusion_pivot_source"]
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_has_exact_exclusion_pivot_between"
+        for node in ast.walk(pivot_source)
     )
 
 
