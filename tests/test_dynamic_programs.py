@@ -104,3 +104,46 @@ def test_build_active_tools_respects_flag():
     on = {t["function"]["name"] for t in build_active_tools(True)}
     assert {"list_programs", "get_program_info"} <= on
     assert len(build_active_tools(True)) == len(PARENT_TOOLS) + len(DYNAMIC_PROGRAM_TOOLS)
+
+
+# Task 4 review fix — dedicated coverage for _dynamic_programs_prompt_suffix().
+# `app.config.Settings` is a FROZEN dataclass, so a plain
+# `monkeypatch.setattr(settings_instance, "USE_DYNAMIC_PROGRAMS", ...)` raises
+# `FrozenInstanceError`. Both tests instead replace the MODULE-level `settings`
+# binding that `parent_llm_engine` reads (`dataclasses.replace(...)` + module
+# monkeypatch) — the same mechanism `tests/conftest.py`'s autouse
+# `_force_parent_llm_engine_off` fixture already uses for this module.
+
+def test_dynamic_programs_prompt_suffix_empty_when_flag_off(monkeypatch):
+    import dataclasses
+    from app.agent.llm import parent_llm_engine
+
+    off_settings = dataclasses.replace(parent_llm_engine.settings, USE_DYNAMIC_PROGRAMS=False)
+    monkeypatch.setattr(parent_llm_engine, "settings", off_settings)
+
+    assert parent_llm_engine._dynamic_programs_prompt_suffix() == ""
+
+
+def test_dynamic_programs_prompt_suffix_lists_non_camp_when_on(monkeypatch):
+    import dataclasses
+    from app.agent.llm import parent_llm_engine
+    from app.services import admin_config_service
+
+    on_settings = dataclasses.replace(parent_llm_engine.settings, USE_DYNAMIC_PROGRAMS=True)
+    monkeypatch.setattr(parent_llm_engine, "settings", on_settings)
+    monkeypatch.setattr(
+        admin_config_service, "get_active_sections",
+        lambda: [
+            {"id": "summer_camp", "name": "საზაფხულო ბანაკი", "status": "active"},
+            {"id": "robotics_club", "name": "რობოტიკის კლუბი", "status": "active"},
+        ],
+    )
+
+    suffix = parent_llm_engine._dynamic_programs_prompt_suffix()
+
+    assert suffix != ""
+    assert "robotics_club" in suffix or "რობოტიკის კლუბი" in suffix
+    assert "summer_camp" not in suffix
+    assert "საზაფხულო ბანაკი" not in suffix
+    assert "list_programs" in suffix
+    assert "get_program_info" in suffix
