@@ -35,3 +35,18 @@ def test_ambiguous_stems_cover_classifier_keywords():
         k = kw.lower()
         assert any(k.startswith(a) or a.startswith(k) for a in amb), \
             f"classifier keyword {kw!r} not covered by _AMBIGUOUS_TAG_STEMS"
+
+def test_ambiguous_word_in_name_does_not_hijack():
+    poetry = {"id": "poetry", "name": "პოეზიის საღამო", "type": "adult_events",
+              "status": "active", "hashtags": []}
+    # A bare ambiguous word ("საღამო") appearing in the message must NOT match
+    # the program via its NAME token, same as the hashtag-gating rule.
+    assert match_dynamic_program("დღეს საღამოს რა ხდება?", [poetry]) is None
+    # But a program with a specific (non-ambiguous) name token is still matched
+    # by that specific word.
+    assert match_dynamic_program("რობოტიკის კლუბი რა ღირს?", [_ROBOTICS, poetry]) \
+        == {"program_id": "robotics_club", "type": "kids_program"}
+
+def test_inactive_section_not_matched():
+    inactive_robotics = dict(_ROBOTICS, status="inactive")
+    assert match_dynamic_program("რობოტიკის კლუბი რა ღირს?", [inactive_robotics]) is None

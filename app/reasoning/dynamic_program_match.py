@@ -10,8 +10,9 @@ import re
 # Ambiguous single-word stems that must NOT alone trigger a dynamic-program match
 # (they overlap the camp/adult/price keyword classifier in conversation_service
 # and would hijack routing). Kept in sync with those tuples by
-# test_ambiguous_stems_cover_classifier_keywords. Only HASHTAG matches are gated
-# by this set; program NAME tokens are treated as specific.
+# test_ambiguous_stems_cover_classifier_keywords. Applied to BOTH hashtags and
+# program NAME tokens — a bare ambiguous word inside a program's name (e.g.
+# `საღამო` in `პოეზიის საღამო`) must not alone identify that program either.
 _AMBIGUOUS_TAG_STEMS: tuple[str, ...] = (
     # camp
     "ბანაკ", "ლაგერ", "ბავშვ", "შვილ", "საზაფხულო", "ეკრან", "მოზარდ", "სკოლ",
@@ -56,9 +57,10 @@ def _is_ambiguous(tag: str) -> bool:
 
 
 def match_dynamic_program(message_text: str, sections: list[dict]) -> dict | None:
-    """Return {'program_id','type'} for the first active section the message NAMES
-    with sufficient specificity, else None. Specificity = a NAME-token match OR a
-    match on a non-ambiguous hashtag. Pure; iterates `sections` in given order."""
+    """Return {'program_id','type'} for the first ACTIVE section the message NAMES
+    with sufficient specificity, else None. Specificity = a match on a NON-AMBIGUOUS
+    NAME token OR a match on a non-ambiguous hashtag. Pure; iterates `sections` in
+    given order."""
     toks = _tokens(message_text)
     if not toks:
         return None
@@ -66,10 +68,12 @@ def match_dynamic_program(message_text: str, sections: list[dict]) -> dict | Non
         pid = (s.get("id") or "").strip()
         if not pid:
             continue
+        if (s.get("status") or "active").strip().lower() != "active":
+            continue
         name_hit = any(
             _token_matches(toks, nt)
             for nt in _tokens(s.get("name") or "")
-            if len(nt) >= _MIN_LEN
+            if len(nt) >= _MIN_LEN and not _is_ambiguous(nt)
         )
         specific_tags = [
             str(t) for t in (s.get("hashtags") or [])
