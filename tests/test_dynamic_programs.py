@@ -73,3 +73,22 @@ def test_get_program_info_unknown_and_inactive(monkeypatch):
     ex = _make_executor()
     assert ex.execute("get_program_info", {"program_id": "nope"})["reason"] == "unknown_program"
     assert ex.execute("get_program_info", {"program_id": "old"})["reason"] == "program_not_active"
+
+
+def test_get_program_info_surfaces_registration_url_when_open(monkeypatch):
+    # Positive counterpart to test_get_program_info_guards_and_facts: when
+    # registration_status is "open" the URL must be PRESENT in facts, not
+    # dropped. Self-contained section dict — does not touch _fake_sections
+    # so the closed-status guard test above is unaffected.
+    open_section = {
+        "id": "chess_club", "name": "ჭადრაკის კლუბი", "type": "kids_program",
+        "status": "active", "price_text": "200 ლარი",
+        "registration_url": "https://x/open-reg", "registration_status": "open",
+    }
+    from app.services import admin_config_service
+    monkeypatch.setattr(admin_config_service, "get_section",
+                        lambda pid: open_section if pid == "chess_club" else None)
+    out = _make_executor().execute("get_program_info", {"program_id": "chess_club"})
+    assert out["success"] is True
+    assert out["registration_open"] is True
+    assert out["facts"]["registration_url"] == "https://x/open-reg"
