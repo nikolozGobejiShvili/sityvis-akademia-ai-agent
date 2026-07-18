@@ -362,6 +362,10 @@ class Settings:
     # it is ALLOWED (min_age filter, phone format, configured event ids,
     # reservation_url presence).
     USE_ADULT_LLM_ENGINE: bool = True
+    # Dynamic Programs (2026-07): offer the PARENT engine generic
+    # list_programs/get_program_info tools + data-driven routing so an
+    # admin-panel program is answerable with no code change. OFF ⇒ identical.
+    USE_DYNAMIC_PROGRAMS: bool = False
     # P3-C / COMMENT FLOW PATCH 1 — public comment reply gate.
     # When False (default), the agent SKIPS the public Facebook /
     # Instagram comment reply (`reply_to_comment`) entirely and goes
@@ -536,6 +540,7 @@ class Settings:
             CONVERSATION_TRACE_DEBUG=_parse_bool_optional("CONVERSATION_TRACE_DEBUG", False),
             USE_SLIM_PROMPTS=_parse_bool_optional("USE_SLIM_PROMPTS", False),
             USE_ADULT_LLM_ENGINE=_parse_bool_optional("USE_ADULT_LLM_ENGINE", True),
+            USE_DYNAMIC_PROGRAMS=_parse_bool_optional("USE_DYNAMIC_PROGRAMS", False),
             ENABLE_PUBLIC_COMMENT_REPLY=_parse_bool_optional(
                 "ENABLE_PUBLIC_COMMENT_REPLY", False,
             ),
