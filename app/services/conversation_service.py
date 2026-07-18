@@ -370,6 +370,30 @@ def _classify_segment(message_text: str) -> str:
     return "UNCLEAR"
 
 
+def _match_active_program_segment(message_text: str) -> str | None:
+    """USE_DYNAMIC_PROGRAMS: if the message names an ACTIVE admin program
+    (by name token or hashtag), return the segment for that program's type —
+    adult_events → ADULT, otherwise PARENT. None when flag off / no match, so
+    flag-off routing is byte-identical. Heuristic (substring); Phase 2 replaces
+    it with the app/domain/decision resolver."""
+    if not getattr(settings, "USE_DYNAMIC_PROGRAMS", False):
+        return None
+    text = (message_text or "").lower()
+    if not text:
+        return None
+    try:
+        from app.services import admin_config_service
+        sections = admin_config_service.get_active_sections()
+    except Exception:  # pragma: no cover - defensive
+        return None
+    for s in sections:
+        name = (s.get("name") or "").lower()
+        tags = [str(t).lower().lstrip("#") for t in (s.get("hashtags") or [])]
+        if (name and name in text) or any(t and t in text for t in tags):
+            return "ADULT" if (s.get("type") == "adult_events") else "PARENT"
+    return None
+
+
 # PARENT Reschedule State + Segment Override Patch (2026-06-10).
 #
 # Live bug: a conversation that had been locked to ADULT (from earlier
@@ -872,7 +896,10 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
         if booked or (in_flow_state and lead is not None):
             conversation.segment = "PARENT"
         else:
-            conversation.segment = _classify_segment(message_text)
+            conversation.segment = (
+                _match_active_program_segment(message_text)
+                or _classify_segment(message_text)
+            )
 
     # PARENT Reschedule State + Segment Override Patch (2026-06-10).
     # A sticky ADULT segment (from earlier adult-event testing) must NOT

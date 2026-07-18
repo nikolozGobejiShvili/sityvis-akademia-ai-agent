@@ -147,3 +147,55 @@ def test_dynamic_programs_prompt_suffix_lists_non_camp_when_on(monkeypatch):
     assert "საზაფხულო ბანაკი" not in suffix
     assert "list_programs" in suffix
     assert "get_program_info" in suffix
+
+
+# Task 5 — data-driven segment routing so a new admin program REACHES the
+# parent LLM engine (the BLOCKER fix). `_match_active_program_segment` consults
+# the ACTIVE admin sections at the fresh-classification line so a message naming
+# a program routes by that program's `type`, overriding incidental keyword
+# collisions (e.g. "რობოტიკის კლუბი" would otherwise match the adult stem
+# "კლუბ" → ADULT).
+#
+# FROZEN-SETTINGS PATTERN: `app.config.Settings` is a frozen dataclass, so
+# `monkeypatch.setattr(cs.settings, "USE_DYNAMIC_PROGRAMS", ...)` raises
+# `FrozenInstanceError`. We instead swap the MODULE-level `conversation_service`
+# `settings` binding (the one the routing helper reads) via
+# `dataclasses.replace(...)` — the same mechanism `tests/conftest.py`'s autouse
+# fixture uses. `conversation_service.settings` is a SEPARATE reference from
+# `parent_flow.settings`, so it must be swapped specifically here.
+
+def test_match_active_program_segment(monkeypatch):
+    import dataclasses
+    from app.services import conversation_service as cs, admin_config_service
+
+    monkeypatch.setattr(admin_config_service, "get_active_sections", lambda: [
+        {"id": "robotics_club", "name": "რობოტიკის კლუბი", "type": "kids_program",
+         "status": "active", "hashtags": ["რობოტიკა", "robotics"]},
+    ])
+
+    # flag off → None (no behavior change; flag-off routing stays byte-identical)
+    off = dataclasses.replace(cs.settings, USE_DYNAMIC_PROGRAMS=False)
+    monkeypatch.setattr(cs, "settings", off)
+    assert cs._match_active_program_segment("რობოტიკა რა ღირს?") is None
+
+    # flag on → matched by hashtag/name → PARENT (overrides incidental "კლუბ"→ADULT)
+    on = dataclasses.replace(cs.settings, USE_DYNAMIC_PROGRAMS=True)
+    monkeypatch.setattr(cs, "settings", on)
+    assert cs._match_active_program_segment("რობოტიკის კლუბი მაინტერესებს") == "PARENT"
+    assert cs._match_active_program_segment("ამინდი როგორია") is None
+
+
+def test_existing_programs_unchanged_routing(monkeypatch):
+    import dataclasses
+    from app.services import conversation_service as cs, admin_config_service
+
+    monkeypatch.setattr(admin_config_service, "get_active_sections", lambda: [
+        {"id": "summer_camp", "name": "საზაფხულო ბანაკი", "type": "camp",
+         "status": "active", "hashtags": ["ბანაკი", "camp"]},
+        {"id": "adult_events", "name": "ზრდასრულთა ღონისძიება", "type": "adult_events",
+         "status": "active", "hashtags": ["ღონისძიება"]},
+    ])
+    on = dataclasses.replace(cs.settings, USE_DYNAMIC_PROGRAMS=True)
+    monkeypatch.setattr(cs, "settings", on)
+    assert cs._match_active_program_segment("ბანაკი მაინტერესებს") == "PARENT"
+    assert cs._match_active_program_segment("ღონისძიება როდისაა") == "ADULT"
