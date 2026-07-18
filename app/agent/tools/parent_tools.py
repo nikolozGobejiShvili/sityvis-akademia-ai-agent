@@ -42,6 +42,8 @@ TOOL_SWITCH_TO_ADULT_FLOW = "switch_to_adult_flow"
 # instead of inferring unavailability from a truncated get_available_slots
 # list.
 TOOL_CHECK_CONSULTATION_SLOT = "check_consultation_slot"
+TOOL_LIST_PROGRAMS = "list_programs"
+TOOL_GET_PROGRAM_INFO = "get_program_info"
 
 ALLOWED_TOOL_NAMES: frozenset[str] = frozenset({
     TOOL_GET_CAMP_INFO,
@@ -52,6 +54,8 @@ ALLOWED_TOOL_NAMES: frozenset[str] = frozenset({
     TOOL_MANAGE_CONSULTATION_BOOKING,
     TOOL_SWITCH_TO_ADULT_FLOW,
     TOOL_CHECK_CONSULTATION_SLOT,
+    TOOL_LIST_PROGRAMS,
+    TOOL_GET_PROGRAM_INFO,
 })
 
 # ``get_camp_info`` accepts only this closed set of topics. Anything else
@@ -408,4 +412,37 @@ PARENT_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+]
+
+
+# P4-1 Task 2 — generic program tool schemas (data only). Gated by
+# USE_DYNAMIC_PROGRAMS; deliberately kept OUT of PARENT_TOOLS so the
+# flag-off tool surface is unchanged. Consumed by the executor/engine in
+# later tasks.
+DYNAMIC_PROGRAM_TOOLS: list[dict[str, Any]] = [
+    {"type": "function", "function": {
+        "name": TOOL_LIST_PROGRAMS,
+        "description": (
+            "Return the currently ACTIVE programs the company offers "
+            "(program_id + Georgian name + type). Call this before answering "
+            "about any program you are not certain is offered. Only programs "
+            "returned here exist — never invent one."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    }},
+    {"type": "function", "function": {
+        "name": TOOL_GET_PROGRAM_INFO,
+        "description": (
+            "Return authoritative facts about ONE program from admin config. "
+            "Use for ANY question about a program other than the 2026 summer "
+            "camp (which still uses get_camp_info). program_id MUST come from "
+            "list_programs. topic is a free-form hint; answer ONLY from the "
+            "returned facts, never from memory. If success is false, tell the "
+            "user the program is unavailable and offer the manager — do not invent."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "program_id": {"type": "string", "description": "id from list_programs"},
+            "topic": {"type": "string", "description": "optional free-form topic hint"},
+        }, "required": ["program_id"]},
+    }},
 ]
