@@ -291,15 +291,33 @@ def test_e2e_new_program_answered_end_to_end(monkeypatch):
     captured = {"tool_names": None, "calls": 0}
 
     def fake_chat_with_tools(*, messages, tools, **kw):
+        import json
+
         captured["calls"] += 1
         captured["tool_names"] = {t["function"]["name"] for t in tools}
         # First LLM round → ask for get_program_info; after the tool result is
         # appended (a `role == "tool"` message) → answer from it.
-        if not any(m.get("role") == "tool" for m in messages):
+        tool_messages = [m for m in messages if m.get("role") == "tool"]
+        if not tool_messages:
             return _tool_call_response(
                 "get_program_info", '{"program_id": "robotics_club"}',
             )
-        return _final_text_response("რობოტიკის კლუბი ღირს 300 ლარი.")
+        # Derive the reply FROM the executor's actual tool result (the real
+        # `_get_program_info` Task-3 output, serialized via `serialize_result`
+        # into this `role=="tool"` message's `content`) — NOT a canned
+        # string. A regression that drops/empties `price_text`, or returns
+        # `success: False`, fails HERE with a clear message, instead of the
+        # test silently proving only that the tool-loop plumbing ran.
+        tool_result = json.loads(tool_messages[-1]["content"])
+        assert tool_result.get("success") is True, (
+            f"get_program_info tool result must be success:true, got {tool_result!r}"
+        )
+        facts = tool_result.get("facts") or {}
+        assert facts.get("price_text") == synthetic["price_text"], (
+            "get_program_info facts must carry the program's own "
+            f"price_text={synthetic['price_text']!r}, got {facts.get('price_text')!r}"
+        )
+        return _final_text_response(f"რობოტიკის კლუბი ღირს {facts['price_text']}.")
 
     monkeypatch.setattr(
         "app.services.openai_service.chat_with_tools", fake_chat_with_tools,
