@@ -92,3 +92,15 @@ def test_get_program_info_surfaces_registration_url_when_open(monkeypatch):
     assert out["success"] is True
     assert out["registration_open"] is True
     assert out["facts"]["registration_url"] == "https://x/open-reg"
+
+
+# Task 4 — wire the generic program tools into the LLM loop (flag-gated).
+
+def test_build_active_tools_respects_flag():
+    from app.agent.llm.parent_llm_engine import build_active_tools
+    from app.agent.tools.parent_tools import PARENT_TOOLS, DYNAMIC_PROGRAM_TOOLS
+    off = [t["function"]["name"] for t in build_active_tools(False)]
+    assert off == [t["function"]["name"] for t in PARENT_TOOLS]
+    on = {t["function"]["name"] for t in build_active_tools(True)}
+    assert {"list_programs", "get_program_info"} <= on
+    assert len(build_active_tools(True)) == len(PARENT_TOOLS) + len(DYNAMIC_PROGRAM_TOOLS)

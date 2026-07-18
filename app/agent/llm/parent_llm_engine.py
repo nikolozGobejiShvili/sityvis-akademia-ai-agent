@@ -29,7 +29,7 @@ from app.agent.services.timestamps import (
     resolve_relative_datetime,
 )
 from app.agent.tools.parent_tool_executor import ParentToolExecutor, serialize_result
-from app.agent.tools.parent_tools import PARENT_TOOLS
+from app.agent.tools.parent_tools import DYNAMIC_PROGRAM_TOOLS, PARENT_TOOLS
 from app.config import settings
 from app.models.conversation import Conversation
 from app.models.lead import Lead
@@ -41,6 +41,38 @@ from app.reasoning.age_question import (
 from app.services import openai_service
 
 logger = logging.getLogger(__name__)
+
+
+def build_active_tools(use_dynamic: bool) -> list[dict]:
+    """Flag-off ⇒ exactly PARENT_TOOLS (byte-identical). Flag-on ⇒ + generic program tools."""
+    tools = list(PARENT_TOOLS)
+    if use_dynamic:
+        tools = tools + DYNAMIC_PROGRAM_TOOLS
+    return tools
+
+
+def _dynamic_programs_prompt_suffix() -> str:
+    """Tell the LLM the generic tools exist and list active non-camp programs.
+    Empty string when the flag is off or there are none (so flag-off prompt is unchanged)."""
+    if not getattr(settings, "USE_DYNAMIC_PROGRAMS", False):
+        return ""
+    try:
+        from app.services import admin_config_service
+        others = [
+            s for s in admin_config_service.get_active_sections()
+            if s.get("id") != "summer_camp"
+        ]
+    except Exception:
+        return ""
+    if not others:
+        return ""
+    names = ", ".join(f"{s.get('name')} (id: {s.get('id')})" for s in others if s.get("id"))
+    return (
+        "\n\n[დინამიური პროგრამები] გარდა ბანაკისა, აქტიურია: " + names +
+        ". ამ პროგრამებზე ნებისმიერ კითხვაზე ჯერ გამოიძახე list_programs, "
+        "შემდეგ get_program_info(program_id). ფაქტები მხოლოდ ხელსაწყოს პასუხიდან "
+        "აიღე — არასდროს მოიგონო."
+    )
 
 
 def _trace_parent_llm_decision(**fields) -> None:
@@ -2041,7 +2073,7 @@ def run_parent_llm_turn(
         try:
             response = openai_service.chat_with_tools(
                 messages=messages,
-                tools=PARENT_TOOLS,
+                tools=build_active_tools(settings.USE_DYNAMIC_PROGRAMS),
                 tool_choice="auto",
                 max_tokens=DEFAULT_MAX_TOKENS,
                 temperature=DEFAULT_TEMPERATURE,
@@ -2189,11 +2221,12 @@ def _build_system_prompt() -> str:
     # prompt exactly as before (do NOT load system_parent_v2.md when slim).
     prompt_name = "parent_core" if _use_slim_prompts() else "system_parent_v2"
     raw = load_prompt(prompt_name)
-    return raw.format(
+    base_prompt = raw.format(
         company_name=company_name,
         age_min=age_min,
         age_max=age_max,
     )
+    return base_prompt + _dynamic_programs_prompt_suffix()
 
 
 def _build_slim_context(conversation, lead) -> tuple[str, str]:
