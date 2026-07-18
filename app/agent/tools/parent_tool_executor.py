@@ -45,6 +45,8 @@ from app.agent.tools.parent_tools import (
     TOOL_CHECK_CONSULTATION_SLOT,
     TOOL_GET_AVAILABLE_SLOTS,
     TOOL_GET_CAMP_INFO,
+    TOOL_GET_PROGRAM_INFO,
+    TOOL_LIST_PROGRAMS,
     TOOL_MANAGE_CONSULTATION_BOOKING,
     TOOL_REQUEST_MANAGER_CALLBACK,
     TOOL_SAVE_LEAD_INFO,
@@ -351,6 +353,10 @@ class ParentToolExecutor:
                 result = self._switch_to_adult_flow(args)
             elif tool_name == TOOL_CHECK_CONSULTATION_SLOT:
                 result = self._check_consultation_slot(args)
+            elif tool_name == TOOL_LIST_PROGRAMS:
+                result = self._list_programs(args)
+            elif tool_name == TOOL_GET_PROGRAM_INFO:
+                result = self._get_program_info(args)
             else:
                 result = {
                     "success": False,
@@ -382,6 +388,72 @@ class ParentToolExecutor:
             tool_name,
             {"success": False, "reason": "unknown_tool", "tool": tool_name},
         )
+    # -- list_programs / get_program_info (P4-1 Task 3) --------------------
+
+    # Operator-internal keys the LLM must never see or surface to a user.
+    _PROGRAM_INTERNAL_KEYS = frozenset({
+        "id", "status", "registration_status", "auto_dm_template_id",
+        "public_reply_template_id", "facebook_post_ids", "facebook_post_id",
+        "post_ids", "post_id", "hashtags", "cta_text", "lead_type",
+        "handoff_enabled",
+    })
+    # Keys gated behind an OPEN registration/booking status.
+    _PROGRAM_REGISTRATION_KEYS = frozenset({"registration_url"})
+    _REGISTRATION_OPEN_VALUES = frozenset({
+        "open", "active", "enabled", "on", "true", "1", "yes",
+    })
+
+    def _list_programs(self, args: dict[str, Any]) -> dict[str, Any]:
+        from app.services import admin_config_service
+        try:
+            sections = admin_config_service.get_active_sections()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("[parent_executor] list_programs failed: %s", exc)
+            return {"success": False, "reason": "config_error"}
+        programs = [
+            {"program_id": s.get("id"), "name": s.get("name"), "type": s.get("type")}
+            for s in sections if s.get("id")
+        ]
+        logger.info("[parent_tool] list_programs count=%d", len(programs))
+        return {"success": True, "programs": programs}
+
+    def _get_program_info(self, args: dict[str, Any]) -> dict[str, Any]:
+        program_id = str(args.get("program_id") or "").strip()
+        if not program_id:
+            return {"success": False, "reason": "missing_program_id"}
+        from app.services import admin_config_service
+        try:
+            section = admin_config_service.get_section(program_id)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("[parent_executor] get_program_info failed: %s", exc)
+            return {"success": False, "reason": "config_error"}
+        if not isinstance(section, dict):
+            return {"success": False, "reason": "unknown_program"}
+        status = (section.get("status") or "").strip().lower()
+        if status != "active":
+            return {"success": False, "reason": "program_not_active", "status": status}
+        reg_status = str(section.get("registration_status") or "open").strip().lower()
+        reg_open = reg_status in self._REGISTRATION_OPEN_VALUES
+        facts: dict[str, Any] = {}
+        for key, value in section.items():
+            if key in self._PROGRAM_INTERNAL_KEYS:
+                continue
+            if key in self._PROGRAM_REGISTRATION_KEYS and not reg_open:
+                continue
+            if value in (None, "", [], {}):
+                continue
+            facts[key] = value
+        logger.info(
+            "[parent_tool] get_program_info program_id=%s status=%s reg_open=%s fields=%d",
+            program_id, status, reg_open, len(facts),
+        )
+        return {
+            "success": True, "program_id": program_id,
+            "topic": str(args.get("topic") or "all"),
+            "name": section.get("name"), "type": section.get("type"),
+            "registration_open": reg_open, "facts": facts,
+        }
+
     # -- get_camp_info -----------------------------------------------------
 
     def _get_camp_info(self, args: dict[str, Any]) -> dict[str, Any]:
