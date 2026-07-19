@@ -29,7 +29,7 @@ from app.agent.services.timestamps import (
     resolve_relative_datetime,
 )
 from app.agent.tools.parent_tool_executor import ParentToolExecutor, serialize_result
-from app.agent.tools.parent_tools import DYNAMIC_PROGRAM_TOOLS, PARENT_TOOLS
+from app.agent.tools.parent_tools import DYNAMIC_PROGRAM_TOOLS, LEARNING_TOOLS, PARENT_TOOLS
 from app.config import settings
 from app.models.conversation import Conversation
 from app.models.lead import Lead
@@ -43,11 +43,17 @@ from app.services import openai_service
 logger = logging.getLogger(__name__)
 
 
-def build_active_tools(use_dynamic: bool) -> list[dict]:
-    """Flag-off ⇒ exactly PARENT_TOOLS (byte-identical). Flag-on ⇒ + generic program tools."""
+def build_active_tools(use_dynamic: bool, use_learning: bool = False) -> list[dict]:
+    """Flag-off ⇒ exactly PARENT_TOOLS (byte-identical). Flag-on ⇒ + generic
+    program tools (`use_dynamic`) and/or the operator-approved-answer tool
+    (`use_learning`). The two flags compose independently. `use_learning`
+    defaults to False so existing callers (e.g. the Phase-1 test's
+    `build_active_tools(False)` / `build_active_tools(True)`) stay valid."""
     tools = list(PARENT_TOOLS)
     if use_dynamic:
         tools = tools + DYNAMIC_PROGRAM_TOOLS
+    if use_learning:
+        tools = tools + LEARNING_TOOLS
     return tools
 
 
@@ -72,6 +78,20 @@ def _dynamic_programs_prompt_suffix() -> str:
         ". ამ პროგრამებზე ნებისმიერ კითხვაზე ჯერ გამოიძახე list_programs, "
         "შემდეგ get_program_info(program_id). ფაქტები მხოლოდ ხელსაწყოს პასუხიდან "
         "აიღე — არასდროს მოიგონო."
+    )
+
+
+def _approved_answer_prompt_suffix() -> str:
+    """Tell the LLM to check for an operator-approved answer on an unclear
+    question. Empty string when the flag is off (so flag-off prompt is
+    unchanged) — mirrors the `_dynamic_programs_prompt_suffix` guard."""
+    if not getattr(settings, "USE_LEARNING", False):
+        return ""
+    return (
+        "\n\n[დამტკიცებული პასუხები] გაურკვეველ ან ვარიაციულ კითხვაზე ჯერ "
+        "გამოიძახე get_approved_answer(question). თუ დაბრუნდა ოპერატორის "
+        "დამტკიცებული პასუხი (success:true), გამოიყენე ის. თუ არა "
+        "(success:false), უპასუხე ჩვეულებრივ."
     )
 
 
@@ -2073,7 +2093,7 @@ def run_parent_llm_turn(
         try:
             response = openai_service.chat_with_tools(
                 messages=messages,
-                tools=build_active_tools(settings.USE_DYNAMIC_PROGRAMS),
+                tools=build_active_tools(settings.USE_DYNAMIC_PROGRAMS, settings.USE_LEARNING),
                 tool_choice="auto",
                 max_tokens=DEFAULT_MAX_TOKENS,
                 temperature=DEFAULT_TEMPERATURE,
@@ -2226,7 +2246,7 @@ def _build_system_prompt() -> str:
         age_min=age_min,
         age_max=age_max,
     )
-    return base_prompt + _dynamic_programs_prompt_suffix()
+    return base_prompt + _dynamic_programs_prompt_suffix() + _approved_answer_prompt_suffix()
 
 
 def _build_slim_context(conversation, lead) -> tuple[str, str]:

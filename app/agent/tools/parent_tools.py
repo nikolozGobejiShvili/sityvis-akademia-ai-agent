@@ -44,6 +44,10 @@ TOOL_SWITCH_TO_ADULT_FLOW = "switch_to_adult_flow"
 TOOL_CHECK_CONSULTATION_SLOT = "check_consultation_slot"
 TOOL_LIST_PROGRAMS = "list_programs"
 TOOL_GET_PROGRAM_INFO = "get_program_info"
+# Phase 5 Task 5 — operator-approved answer lookup. Gated by USE_LEARNING;
+# deliberately kept OUT of PARENT_TOOLS/DYNAMIC_PROGRAM_TOOLS so the
+# flag-off tool surface is unchanged (see LEARNING_TOOLS below).
+TOOL_GET_APPROVED_ANSWER = "get_approved_answer"
 
 ALLOWED_TOOL_NAMES: frozenset[str] = frozenset({
     TOOL_GET_CAMP_INFO,
@@ -56,6 +60,7 @@ ALLOWED_TOOL_NAMES: frozenset[str] = frozenset({
     TOOL_CHECK_CONSULTATION_SLOT,
     TOOL_LIST_PROGRAMS,
     TOOL_GET_PROGRAM_INFO,
+    TOOL_GET_APPROVED_ANSWER,
 })
 
 # ``get_camp_info`` accepts only this closed set of topics. Anything else
@@ -444,5 +449,27 @@ DYNAMIC_PROGRAM_TOOLS: list[dict[str, Any]] = [
             "program_id": {"type": "string", "description": "id from list_programs"},
             "topic": {"type": "string", "description": "optional free-form topic hint"},
         }, "required": ["program_id"]},
+    }},
+]
+
+
+# Phase 5 Task 5 — operator-approved answer lookup (data only). Gated by
+# USE_LEARNING; deliberately kept OUT of PARENT_TOOLS so the flag-off tool
+# surface is unchanged. Consumed by the executor/engine in this task.
+LEARNING_TOOLS: list[dict[str, Any]] = [
+    {"type": "function", "function": {
+        "name": TOOL_GET_APPROVED_ANSWER,
+        "description": (
+            "Look up an operator-approved answer for an unclear or oddly-phrased "
+            "parent question BEFORE answering it yourself. Call this FIRST whenever "
+            "the question does not clearly match one of your other tools or the "
+            "phrasing is unusual. If the result has success=true, use the returned "
+            "answer as-is (it was reviewed and approved by a human operator). If "
+            "success=false, there is no approved answer for this — answer normally "
+            "using your other tools/knowledge."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "question": {"type": "string", "description": "the parent's question, verbatim"},
+        }, "required": ["question"]},
     }},
 ]

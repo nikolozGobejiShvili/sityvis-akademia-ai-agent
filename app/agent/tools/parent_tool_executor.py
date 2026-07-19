@@ -44,6 +44,7 @@ from app.agent.tools.parent_tools import (
     CAMP_INFO_TOPICS,
     TOOL_BOOK_CONSULTATION,
     TOOL_CHECK_CONSULTATION_SLOT,
+    TOOL_GET_APPROVED_ANSWER,
     TOOL_GET_AVAILABLE_SLOTS,
     TOOL_GET_CAMP_INFO,
     TOOL_GET_PROGRAM_INFO,
@@ -358,6 +359,8 @@ class ParentToolExecutor:
                 result = self._list_programs(args)
             elif tool_name == TOOL_GET_PROGRAM_INFO:
                 result = self._get_program_info(args)
+            elif tool_name == TOOL_GET_APPROVED_ANSWER:
+                result = self._get_approved_answer(args)
             else:
                 result = {
                     "success": False,
@@ -459,6 +462,24 @@ class ParentToolExecutor:
             "name": section.get("name"), "type": section.get("type"),
             "registration_open": reg_open, "facts": facts,
         }
+
+    # -- get_approved_answer (Phase 5 Task 5, USE_LEARNING) -----------------
+
+    def _get_approved_answer(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Surface an operator-approved answer for the LLM's consideration.
+
+        No deterministic override — the executor only reports what the
+        matcher found; the LLM decides whether to use it. Never raises:
+        the lead may be missing/partial, so segment is read defensively.
+        """
+        segment = (
+            getattr(self.lead, "segment", "") or getattr(self.conversation, "segment", "") or ""
+        )
+        from app.services import approved_answers_service
+        match = approved_answers_service.find_approved_answer(args.get("question", ""), segment)
+        if match:
+            return {"success": True, "id": match["id"], "answer": match["answer"]}
+        return {"success": False, "reason": "no_approved_answer"}
 
     # -- get_camp_info -----------------------------------------------------
 

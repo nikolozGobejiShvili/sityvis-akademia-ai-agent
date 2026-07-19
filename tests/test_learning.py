@@ -502,3 +502,99 @@ def test_find_approved_answer_empty_message_returns_none(monkeypatch):
     monkeypatch.setattr(aas, "load_answers", lambda: answers)
     assert aas.find_approved_answer("", "PARENT") is None
     assert aas.find_approved_answer(None, "PARENT") is None
+
+
+# -- Task 5: get_approved_answer tool + prompt hint (USE_LEARNING) ---------
+#
+# Mirrors the Phase-1 (P4-1 Task 2/3) dynamic-programs tool wiring pattern in
+# tests/test_dynamic_programs.py: build_active_tools flag-composition tests,
+# a guarded executor handler test, and a prompt-suffix flag-gate test using
+# dataclasses.replace(...) + monkeypatch.setattr(parent_llm_engine, "settings", ...)
+# because app.config.Settings is a frozen dataclass.
+
+
+def test_build_active_tools_flag_off_matches_today():
+    from app.agent.llm.parent_llm_engine import build_active_tools
+    from app.agent.tools.parent_tools import PARENT_TOOLS
+    names = [t["function"]["name"] for t in build_active_tools(False)]
+    assert names == [t["function"]["name"] for t in PARENT_TOOLS]
+    assert "get_approved_answer" not in names
+
+
+def test_build_active_tools_learning_flag_adds_get_approved_answer():
+    from app.agent.llm.parent_llm_engine import build_active_tools
+    names = {t["function"]["name"] for t in build_active_tools(False, True)}
+    assert "get_approved_answer" in names
+
+
+def test_build_active_tools_both_flags_compose():
+    from app.agent.llm.parent_llm_engine import build_active_tools
+    names = {t["function"]["name"] for t in build_active_tools(True, True)}
+    assert "list_programs" in names
+    assert "get_approved_answer" in names
+
+
+def _make_learning_executor(segment="PARENT"):
+    from app.agent.tools.parent_tool_executor import ParentToolExecutor
+    from app.models.lead import Lead
+    from app.models.conversation import Conversation
+    conv = Conversation(sender_id="t", platform="facebook", segment=segment)
+    lead = Lead(sender_id="t", platform="facebook", segment=segment)
+    return ParentToolExecutor(conversation=conv, lead=lead, sender_id="t", platform="facebook")
+
+
+def test_executor_get_approved_answer_returns_match(monkeypatch):
+    from app.services import approved_answers_service as aas
+    executor = _make_learning_executor()
+    monkeypatch.setattr(
+        aas, "find_approved_answer",
+        lambda question, segment: {"id": "a1", "answer": "ალერგიის შემთხვევაში მენეჯერი დაგეხმარებათ."},
+    )
+    result = executor._get_approved_answer({"question": "შვილს აქვს ალერგია"})
+    assert result == {
+        "success": True, "id": "a1",
+        "answer": "ალერგიის შემთხვევაში მენეჯერი დაგეხმარებათ.",
+    }
+
+
+def test_executor_get_approved_answer_no_match(monkeypatch):
+    from app.services import approved_answers_service as aas
+    executor = _make_learning_executor()
+    monkeypatch.setattr(aas, "find_approved_answer", lambda question, segment: None)
+    result = executor._get_approved_answer({"question": "სულ სხვა კითხვაა"})
+    assert result == {"success": False, "reason": "no_approved_answer"}
+
+
+def test_executor_get_approved_answer_dispatched_via_execute(monkeypatch):
+    from app.services import approved_answers_service as aas
+    executor = _make_learning_executor()
+    monkeypatch.setattr(
+        aas, "find_approved_answer",
+        lambda question, segment: {"id": "a1", "answer": "პასუხი"},
+    )
+    result = executor.execute("get_approved_answer", {"question": "ალერგია"})
+    assert result["success"] is True
+    assert result["id"] == "a1"
+    assert result["answer"] == "პასუხი"
+
+
+def test_approved_answer_prompt_suffix_empty_when_flag_off(monkeypatch):
+    import dataclasses
+    from app.agent.llm import parent_llm_engine
+
+    off_settings = dataclasses.replace(parent_llm_engine.settings, USE_LEARNING=False)
+    monkeypatch.setattr(parent_llm_engine, "settings", off_settings)
+
+    assert parent_llm_engine._approved_answer_prompt_suffix() == ""
+
+
+def test_approved_answer_prompt_suffix_nonempty_when_flag_on(monkeypatch):
+    import dataclasses
+    from app.agent.llm import parent_llm_engine
+
+    on_settings = dataclasses.replace(parent_llm_engine.settings, USE_LEARNING=True)
+    monkeypatch.setattr(parent_llm_engine, "settings", on_settings)
+
+    suffix = parent_llm_engine._approved_answer_prompt_suffix()
+    assert suffix != ""
+    assert "get_approved_answer" in suffix
