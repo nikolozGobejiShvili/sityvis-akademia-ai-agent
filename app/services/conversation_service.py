@@ -1122,6 +1122,20 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
     # state. TTL refreshes on every save (rolling 8-day conversation window).
     _save_conversation_to_redis(conversation)
 
+    # Durable lead memory (USE_LEAD_MEMORY, Phase 4 Task 3) — best-effort
+    # persist of identity facts keyed by the SAME session key
+    # `lead_memory_service.maybe_seed_new_lead` reads from, so a returning
+    # lead's facts survive past the conversation's own Redis TTL.
+    if getattr(settings, "USE_LEAD_MEMORY", False) and conversation.lead is not None:
+        try:
+            from app.services import lead_memory_service
+            lead_memory_service.save(
+                conversation_cache_key(conversation),
+                conversation.lead,
+            )
+        except Exception:  # pragma: no cover - best-effort
+            pass
+
     _trace.set_route_decision(
         segment_after=conversation.segment or route_segment or "",
         state_after=conversation.state or "",

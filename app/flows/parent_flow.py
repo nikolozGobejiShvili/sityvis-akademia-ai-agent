@@ -9951,6 +9951,8 @@ def _ensure_lead(conversation: Conversation) -> Lead:
             platform=conversation.platform,
             segment="PARENT",
         )
+        from app.services import lead_memory_service
+        lead_memory_service.maybe_seed_new_lead(conversation)
     conversation.lead.segment = "PARENT"
     return conversation.lead
 

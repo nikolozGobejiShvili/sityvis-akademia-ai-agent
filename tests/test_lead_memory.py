@@ -94,3 +94,57 @@ def test_seed_lead_non_dict_memory_is_noop():
 def test_memory_key_coerces_non_str():
     from app.services import lead_memory_service as lm
     assert lm.memory_key(123) == "leadmem:123"
+
+
+# -- Task 3: seed on lead creation (both flows) + persist after save --------
+
+def test_parent_ensure_lead_seeds_on_create(monkeypatch):
+    import dataclasses
+    from app import config
+    from app.flows import parent_flow as pf
+    from app.services import lead_memory_service as lm
+    from app.models.conversation import Conversation
+    monkeypatch.setattr(lm, "settings", dataclasses.replace(config.settings, USE_LEAD_MEMORY=True))
+    monkeypatch.setattr(lm, "load", lambda k: {"child_age": "8", "name": "ანა"})
+    conv = Conversation(sender_id="s", platform="facebook", page_id="P")
+    lead = pf._ensure_lead(conv)         # first creation → seeded
+    assert lead.child_age == "8" and lead.name == "ანა" and lead.segment == "PARENT"
+
+
+def test_adult_ensure_lead_seeds_on_create(monkeypatch):
+    import dataclasses
+    from app import config
+    from app.flows import adult_flow as af
+    from app.services import lead_memory_service as lm
+    from app.models.conversation import Conversation
+    monkeypatch.setattr(lm, "settings", dataclasses.replace(config.settings, USE_LEAD_MEMORY=True))
+    monkeypatch.setattr(lm, "load", lambda k: {"adult_age": "34"})
+    conv = Conversation(sender_id="s", platform="facebook", page_id="P")
+    lead = af._ensure_lead(conv)
+    assert lead.adult_age == "34" and lead.segment == "ADULT"
+
+
+def test_ensure_lead_flag_off_not_seeded(monkeypatch):
+    import dataclasses
+    from app import config
+    from app.flows import parent_flow as pf
+    from app.services import lead_memory_service as lm
+    from app.models.conversation import Conversation
+    monkeypatch.setattr(lm, "settings", dataclasses.replace(config.settings, USE_LEAD_MEMORY=False))
+    monkeypatch.setattr(lm, "load", lambda k: {"child_age": "8"})
+    conv = Conversation(sender_id="s", platform="facebook", page_id="P")
+    assert pf._ensure_lead(conv).child_age == ""     # flag off ⇒ blank
+
+
+def test_ensure_lead_does_not_reseed_existing(monkeypatch):
+    import dataclasses
+    from app import config
+    from app.flows import parent_flow as pf
+    from app.services import lead_memory_service as lm
+    from app.models.conversation import Conversation
+    monkeypatch.setattr(lm, "settings", dataclasses.replace(config.settings, USE_LEAD_MEMORY=True))
+    calls = {"n": 0}
+    monkeypatch.setattr(lm, "load", lambda k: calls.__setitem__("n", calls["n"] + 1) or {"child_age": "8"})
+    conv = Conversation(sender_id="s", platform="facebook", page_id="P")
+    pf._ensure_lead(conv); pf._ensure_lead(conv); pf._ensure_lead(conv)
+    assert calls["n"] == 1                            # seed only on first creation
