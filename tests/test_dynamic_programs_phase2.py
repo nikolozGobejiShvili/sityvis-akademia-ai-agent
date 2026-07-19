@@ -439,3 +439,41 @@ def test_dynamic_registration_question_reaches_engine(monkeypatch):
     conv.history = [{"role": "assistant", "content": "თქვენი შვილი რამდენი წლისაა?"}]
     out = pf._handle_core(conv, "რობოტიკის კლუბზე როგორ დავრეგისტრირდე?")
     assert out == "ENGINE_ANSWER" and "CAMP" not in out
+
+
+# Review fix (2026-07-19) — the hoist branch RETURNS before the identical
+# book-success-flag reset that lives inside `if engine_flag:` (~line 1338,
+# "so the guard cannot leak a success bit from the previous turn into this
+# one"). A dynamic-program turn never calls `book_consultation`, so without
+# its OWN reset it would inherit a stale True left by an EARLIER successful
+# booking turn in the SAME conversation, and
+# `_apply_privacy_notice_policy` (reached via `_sanitise_booking_confirmation`)
+# would wrongly append the privacy-notice sentence to the unrelated
+# dynamic-program answer.
+
+def test_dynamic_turn_clears_stale_booking_success_flag(monkeypatch):
+    from app.agent.tools.parent_tool_executor import (
+        book_consultation_success_for_conversation,
+    )
+    from app.services.session_key_service import conversation_cache_key
+
+    pf, conv = _dyn_engine_conv(monkeypatch)
+    conv.history = [{"role": "assistant", "content": "თქვენი შვილი რამდენი წლისაა?"}]
+    monkeypatch.setattr(
+        pf, "_run_llm_engine_safely",
+        lambda *a, **k: "რობოტიკის კლუბი: ვხვდებით სამშაბათობით 18:00-ზე.",
+    )
+
+    key = conversation_cache_key(conv)
+    # Simulate the [prior booking-success turn → dynamic-program turn] sequence:
+    # a PRIOR turn (e.g. a real `book_consultation` success) left this flag True.
+    book_consultation_success_for_conversation[key] = True
+
+    out = pf._handle_core(conv, "რობოტიკის კლუბი როდის ტარდება?")
+
+    assert "მხოლოდ კონსულტაციისთვის" not in out, (
+        "the hoist path must clear the stale book-success flag BEFORE calling "
+        "the engine, so the privacy-notice sentence is never wrongly appended "
+        "to an unrelated dynamic-program answer"
+    )
+    assert book_consultation_success_for_conversation.get(key) is False

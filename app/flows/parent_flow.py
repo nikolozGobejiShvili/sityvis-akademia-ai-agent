@@ -1000,6 +1000,24 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # handlers. Gated on the engine being available. Flag off / camp / adult /
     # no-program-named ⇒ _is_dynamic_program_turn is False ⇒ chain unchanged.
     if getattr(settings, "USE_PARENT_LLM_ENGINE", False) and _is_dynamic_program_turn(message):
+        # Reset per-turn book-success flag so the guard cannot leak a
+        # success bit from the previous turn into this one (review fix,
+        # 2026-07-19). This branch RETURNS before the identical reset
+        # further down (inside `if engine_flag:`), so a dynamic-program
+        # turn — which never calls `book_consultation` — would otherwise
+        # inherit a stale True from a prior successful booking turn and
+        # have `_apply_privacy_notice_policy` wrongly append the privacy
+        # notice to an unrelated program answer.
+        try:
+            from app.agent.tools.parent_tool_executor import (
+                book_consultation_success_for_conversation,
+            )
+            book_consultation_success_for_conversation[
+                conversation_cache_key(conversation)
+            ] = False
+        except Exception:
+            pass
+
         return _sanitise_booking_confirmation(
             conversation, _run_llm_engine_safely(conversation, message),
         )
