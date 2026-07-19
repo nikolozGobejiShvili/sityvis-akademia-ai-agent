@@ -993,6 +993,17 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # Pure lead mutation, gated on the bot having just asked the goal question.
     _maybe_capture_challenge_on_goal_reply(conversation, message)
 
+    # Dynamic Programs (Phase 2, hoist) — a turn that NAMES a non-hardcoded admin
+    # program goes straight to the LLM engine, above the ENTIRE deterministic camp
+    # interceptor chain, so ALL question types (price/schedule/operational/
+    # registration) are answered from the program's own data instead of camp
+    # handlers. Gated on the engine being available. Flag off / camp / adult /
+    # no-program-named ⇒ _is_dynamic_program_turn is False ⇒ chain unchanged.
+    if getattr(settings, "USE_PARENT_LLM_ENGINE", False) and _is_dynamic_program_turn(message):
+        return _sanitise_booking_confirmation(
+            conversation, _run_llm_engine_safely(conversation, message),
+        )
+
     # Camp admin-status gate (2026-07-01) — when the operator turns the camp off
     # (`summer_camp.status` != active), a CAMP question is answered with the
     # status message HERE, before the static welcome / camp intro / price /

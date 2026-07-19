@@ -391,15 +391,6 @@ class ParentToolExecutor:
         )
     # -- list_programs / get_program_info (P4-1 Task 3) --------------------
 
-    # Operator-internal keys the LLM must never see or surface to a user.
-    _PROGRAM_INTERNAL_KEYS = frozenset({
-        "id", "status", "registration_status", "auto_dm_template_id",
-        "public_reply_template_id", "facebook_post_ids", "facebook_post_id",
-        "post_ids", "post_id", "hashtags", "cta_text", "lead_type",
-        "handoff_enabled",
-    })
-    # Keys gated behind an OPEN registration/booking status.
-    _PROGRAM_REGISTRATION_KEYS = frozenset({"registration_url"})
     _REGISTRATION_OPEN_VALUES = frozenset({
         "open", "active", "enabled", "on", "true", "1", "yes",
     })

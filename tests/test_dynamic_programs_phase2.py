@@ -403,3 +403,39 @@ def test_e2e_dynamic_program_price_answered_end_to_end(monkeypatch):
         "the deterministic camp-price interceptor must not answer a "
         "dynamic-program price question"
     )
+
+
+# Task 7 — HOIST: the gate-2 guard moved from INSIDE `if engine_flag:` (below
+# ~25 deterministic camp interceptors) to the TOP of `_handle_core`, above the
+# ENTIRE pre-gate chain. Task 3 only proved PRICE questions reached the engine
+# (because Task 3b separately patched the one pre-gate camp-price handler that
+# hijacked price). Schedule / operational / registration questions had NO such
+# patch, so they were still hijacked pre-engine — a schedule question fell
+# through to `_maybe_handle_camp_topic_facts` (manager-defer), and a
+# registration question could reach `_maybe_handle_camp_registration_link`
+# (the CAMP registration URL). The hoisted guard now returns before ANY of the
+# ~25 interceptors run, so every question type about a dynamic program is
+# answered from the program's own data, not camp handlers.
+
+def test_dynamic_schedule_question_reaches_engine(monkeypatch):
+    pf, conv = _dyn_engine_conv(monkeypatch)
+    # Seed one prior turn to sidestep the first-turn brand welcome (as the
+    # Task-3 age test does).
+    conv.history = [{"role": "assistant", "content": "თქვენი შვილი რამდენი წლისაა?"}]
+    out = pf._handle_core(conv, "რობოტიკის კლუბი როდის ტარდება?")
+    assert out == "ENGINE_ANSWER" and "CAMP" not in out
+
+
+def test_dynamic_registration_question_reaches_engine(monkeypatch):
+    pf, conv = _dyn_engine_conv(monkeypatch)
+    # Extra sentinel beyond `_dyn_engine_conv`'s default set: the pre-gate CAMP
+    # registration-link handler must never answer a dynamic-program
+    # registration question — proves the hoisted guard sits above THIS
+    # handler too (not just the camp-price interceptors Task 3/3b covered).
+    monkeypatch.setattr(
+        pf, "_maybe_handle_camp_registration_link",
+        lambda *a, **k: "CAMP:_maybe_handle_camp_registration_link",
+    )
+    conv.history = [{"role": "assistant", "content": "თქვენი შვილი რამდენი წლისაა?"}]
+    out = pf._handle_core(conv, "რობოტიკის კლუბზე როგორ დავრეგისტრირდე?")
+    assert out == "ENGINE_ANSWER" and "CAMP" not in out
