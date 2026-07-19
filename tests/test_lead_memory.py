@@ -80,3 +80,17 @@ def test_maybe_seed_new_lead_flag_on_seeds(monkeypatch):
     conv.lead = _lead(child_age="")
     lm.maybe_seed_new_lead(conv)
     assert conv.lead.child_age == "9"
+
+
+def test_seed_lead_non_dict_memory_is_noop():
+    from app.services import lead_memory_service as lm
+    lead = _lead(child_age="")
+    lm.seed_lead(lead, ["not", "a", "dict"])
+    assert lead.child_age == ""
+    lm.seed_lead(lead, None)
+    assert lead.child_age == ""
+
+
+def test_memory_key_coerces_non_str():
+    from app.services import lead_memory_service as lm
+    assert lm.memory_key(123) == "leadmem:123"

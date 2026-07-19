@@ -27,7 +27,7 @@ _PREFIX = "leadmem:"
 
 
 def memory_key(session_key: str) -> str:
-    return _PREFIX + (session_key or "")
+    return _PREFIX + str(session_key or "")
 
 
 def save(session_key: str, lead: Lead) -> None:
@@ -69,7 +69,7 @@ def seed_lead(lead: Lead, memory: dict | None) -> None:
     """Fill ONLY empty Lead fields from memory (never overwrite a fact the
     current turn already established; each field maps to itself — no cross-
     assign)."""
-    if lead is None or not memory:
+    if lead is None or not isinstance(memory, dict):
         return
     for field in DURABLE_FIELDS:
         if getattr(lead, field, ""):
