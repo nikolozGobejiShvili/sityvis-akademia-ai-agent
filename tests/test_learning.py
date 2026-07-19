@@ -598,3 +598,199 @@ def test_approved_answer_prompt_suffix_nonempty_when_flag_on(monkeypatch):
     suffix = parent_llm_engine._approved_answer_prompt_suffix()
     assert suffix != ""
     assert "get_approved_answer" in suffix
+
+
+# -- Task 6: e2e — the whole Phase-5 loop composes end to end --------------
+#
+# (a) logging e2e with PII masking: mirrors
+# `test_process_message_logs_outcome_when_flag_on` above, but drives an
+# inbound message that CONTAINS a phone-like number and asserts the
+# *logged* record is masked (not just the raw log_turn unit tests earlier
+# in this file — this proves the real conversation_service chokepoint
+# masks end to end).
+#
+# (b) approved-answer REUSE e2e through the engine tool-loop: mirrors the
+# `_mk_response` / two-call `_chat` idiom in tests/test_parent_llm_engine.py
+# (see its price-question test, ~line 289-312), replicated minimally here
+# so this file is self-contained. Both `USE_PARENT_LLM_ENGINE` (read by
+# `parent_flow.settings`) and `USE_LEARNING` (read by
+# `parent_llm_engine.settings`) must be flipped on — they are two
+# independent module-level `settings` references, exactly like the
+# existing flag-swap idioms in this file and in test_parent_llm_engine.py.
+
+
+def test_process_message_logs_outcome_masks_phone_number_in_question(monkeypatch):
+    """RED-first sanity: before wiring, asserting `"555123456" not in
+    question` against an UNMASKED record would fail. GREEN below drives the
+    real (already-shipped) masking chokepoint end to end."""
+    import dataclasses
+    from app import config
+    from app.services import conversation_service as cs
+    from app.services import learning_log_service as lls
+    from app.flows import parent_flow as pf
+
+    _inmemory_learning_log_redis(monkeypatch)
+    monkeypatch.setattr(
+        cs, "settings", dataclasses.replace(config.settings, USE_LEARNING=True),
+    )
+    cs.conversations.clear()
+
+    conv = cs._get_or_create_conversation("u2", "facebook", "P1")
+    conv.segment = "PARENT"
+    monkeypatch.setattr(pf, "handle", lambda conversation, message: "მადლობა.")
+
+    response = cs.process_message(
+        sender_id="u2", message_text="ჩემი ნომერია 555123456",
+        platform="facebook", page_id="P1",
+    )
+    assert response == "მადლობა."
+
+    records = lls.recent(50)
+    assert len(records) >= 1
+    last = records[-1]
+    assert last["outcome"]
+    assert last["session_key"] == "facebook:P1:u2"
+    # PII mask must reach the STORED record via the real conversation_service
+    # -> learning_log_service chokepoint (Task 3 wiring over Task 2 masking).
+    assert "555123456" not in last["question"]
+    assert "[ტელეფონი]" in last["question"]
+
+
+def _mk_learning_engine_response(*, content: str = "", tool_calls: list | None = None):
+    """Minimal duck-typed OpenAI response object matching what
+    `parent_llm_engine` reads off `openai_service.chat_with_tools(...)`.
+    Replicates `tests/test_parent_llm_engine.py::_mk_response` so this e2e
+    test is self-contained in this file."""
+    from types import SimpleNamespace
+
+    tc_objs = []
+    for tc in tool_calls or []:
+        tc_objs.append(SimpleNamespace(
+            id=tc["id"],
+            function=SimpleNamespace(
+                name=tc["name"], arguments=tc.get("arguments", "{}"),
+            ),
+        ))
+    msg = SimpleNamespace(content=content or None, tool_calls=tc_objs or None)
+    choice = SimpleNamespace(message=msg)
+    return SimpleNamespace(choices=[choice])
+
+
+def _fresh_learning_engine_conversation(sender_id: str):
+    """Mirrors test_parent_llm_engine.py's `fresh_conversation` fixture: a
+    Conversation with one pre-seeded assistant turn so the first-reply
+    static-welcome bypass doesn't short-circuit engine routing."""
+    from app.models.conversation import Conversation
+
+    conv = Conversation(sender_id=sender_id, platform="instagram")
+    conv.history.append({"role": "assistant", "content": "_test_prior_welcome"})
+    return conv
+
+
+def test_learning_flag_off_tool_not_offered_and_suffix_empty():
+    """RED counterpart for part (b): flag off ⇒ get_approved_answer is not
+    in the active tool set and the prompt suffix is empty."""
+    from app.agent.llm.parent_llm_engine import (
+        _approved_answer_prompt_suffix,
+        build_active_tools,
+    )
+    from app.config import Settings
+
+    off = Settings()
+    assert off.USE_LEARNING is False
+    names = {t["function"]["name"] for t in build_active_tools(off.USE_DYNAMIC_PROGRAMS, off.USE_LEARNING)}
+    assert "get_approved_answer" not in names
+    assert _approved_answer_prompt_suffix() == ""
+
+
+def test_approved_answer_reused_through_engine_tool_loop(monkeypatch):
+    """GREEN: with USE_PARENT_LLM_ENGINE + USE_LEARNING both on, a mocked
+    LLM calls get_approved_answer, the executor surfaces an
+    operator-injected match, and the model's final reply (also mocked, as
+    the real LLM would do after seeing success:true) carries the vetted
+    answer through parent_flow.handle end to end. Also proves the tool was
+    OFFERED and the prompt suffix was PRESENT on the very call that made
+    the tool available — not just unit-tested in isolation."""
+    import dataclasses
+    import json
+
+    from app import config
+    from app.agent.llm import parent_llm_engine
+    from app.flows import parent_flow
+    from app.services import approved_answers_service, messenger_service, openai_service
+
+    monkeypatch.setattr(
+        parent_flow, "settings",
+        dataclasses.replace(config.settings, USE_PARENT_LLM_ENGINE=True),
+    )
+    monkeypatch.setattr(
+        parent_llm_engine, "settings",
+        dataclasses.replace(config.settings, USE_LEARNING=True),
+    )
+    monkeypatch.setattr(messenger_service, "get_user_profile", lambda sid, plat: {})
+    # Mirrors test_parent_llm_engine.py's `camp_registration_open` fixture —
+    # without it, a real-clock registration-closed date can pre-empt the
+    # engine with a deterministic closed-registration answer before the
+    # LLM (and its tool loop) ever runs.
+    monkeypatch.setattr(
+        "app.services.admin_config_service.get_camp_registration_status",
+        lambda: "open",
+    )
+
+    # "more details please" is the exact driving message
+    # test_parent_llm_engine.py::test_history_forwarded_to_llm and
+    # test_tool_loop_caps_iterations use to reach the engine's
+    # chat_with_tools call unconditionally (verified here by probing —
+    # several Georgian phrasings, incl. a bare "ფასი?", are now intercepted
+    # by a NEWER deterministic pre-engine price-copy handler
+    # (`parent_flow._camp_price_full_block`, added after this file's
+    # earlier price-question test was written) and never reach the LLM at
+    # all). The LLM mock below decides the tool-call arguments and final
+    # content — the actual routing intent doesn't matter here since we're
+    # proving the tool-loop plumbing, not intent classification.
+    question = "more details please"
+    vetted_answer = "ფასი ინდივიდუალურად განისაზღვრება — დეტალებს მენეჯერი დაგიზუსტებთ."
+
+    monkeypatch.setattr(
+        approved_answers_service, "find_approved_answer",
+        lambda q, seg: {"id": "a1", "answer": vetted_answer},
+    )
+
+    captured_calls: list[dict] = []
+
+    def _chat(**kwargs):
+        captured_calls.append(kwargs)
+        if len(captured_calls) == 1:
+            return _mk_learning_engine_response(tool_calls=[{
+                "id": "call_1",
+                "name": "get_approved_answer",
+                "arguments": json.dumps({"question": question}),
+            }])
+        return _mk_learning_engine_response(content=vetted_answer)
+
+    monkeypatch.setattr(openai_service, "chat_with_tools", _chat)
+
+    conv = _fresh_learning_engine_conversation("learning_e2e_reuse")
+    out = parent_flow.handle(conv, question)
+
+    # (1) the final reply carries the vetted answer through.
+    assert vetted_answer in out
+
+    # The tool loop must have made exactly two chat_with_tools calls: the
+    # tool-call turn, then the final-answer turn.
+    assert len(captured_calls) == 2
+
+    # (2) the tool WAS OFFERED on the call that produced the tool_call.
+    first_tool_names = {
+        t["function"]["name"] for t in captured_calls[0]["tools"]
+    }
+    assert "get_approved_answer" in first_tool_names
+
+    # (3) the prompt suffix WAS PRESENT in the system messages sent on
+    # that same call.
+    system_texts = "\n".join(
+        m.get("content", "") for m in captured_calls[0]["messages"]
+        if m.get("role") == "system"
+    )
+    assert "დამტკიცებული პასუხ" in system_texts
+    assert "get_approved_answer" in system_texts
