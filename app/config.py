@@ -374,6 +374,10 @@ class Settings:
     # operator-approved answers via a tool. Human-gated (no auto-approve, no
     # prompt mutation, no deploy). OFF ⇒ no logging, tool not offered, identical.
     USE_LEARNING: bool = False
+    # Skills registry (Phase 3, 2026-07): select operator-editable SKILL.md
+    # capability packs by situation and inject them into the PARENT system
+    # prompt. OFF ⇒ no selection, suffix "", system prompt byte-identical.
+    USE_SKILLS: bool = False
     # P3-C / COMMENT FLOW PATCH 1 — public comment reply gate.
     # When False (default), the agent SKIPS the public Facebook /
     # Instagram comment reply (`reply_to_comment`) entirely and goes
@@ -551,6 +555,7 @@ class Settings:
             USE_DYNAMIC_PROGRAMS=_parse_bool_optional("USE_DYNAMIC_PROGRAMS", False),
             USE_LEAD_MEMORY=_parse_bool_optional("USE_LEAD_MEMORY", False),
             USE_LEARNING=_parse_bool_optional("USE_LEARNING", False),
+            USE_SKILLS=_parse_bool_optional("USE_SKILLS", False),
             ENABLE_PUBLIC_COMMENT_REPLY=_parse_bool_optional(
                 "ENABLE_PUBLIC_COMMENT_REPLY", False,
             ),
