@@ -225,3 +225,181 @@ def test_get_program_info_allowlist_excludes_internal(monkeypatch):
 def test_get_program_info_refuses_hardcoded(monkeypatch):
     out = _make_executor().execute("get_program_info", {"program_id": "summer_camp"})
     assert out["success"] is False and out["reason"] == "use_specific_tool"
+
+
+# Task 5 — END-TO-END: a dynamic-program PRICE question is answered from the
+# program's OWN data THROUGH `conversation_service.process_message`, with camp
+# registration CLOSED (the live state). This is the exact question Phase 1 could
+# NOT answer (the Phase-1 e2e, `test_dynamic_programs.py::
+# test_e2e_new_program_answered_end_to_end`, had to use an INFO question because
+# the deterministic camp-price interceptor swallowed the PRICE question with the
+# camp price before it could reach the engine). It validates the whole Phase-2
+# stack composing on the live path: routing (Task 2) → the Task-3b pre-gate
+# camp-price bypass (registration CLOSED) → the gate-2 engine bypass (Task 3) →
+# the generic `get_program_info` tool → the Task-4 allowlist → a reply built
+# from the program's own price.
+#
+# MOCK SHAPE — copied VERBATIM from the Phase-1 e2e. `_tool_call_response` /
+# `_final_text_response` build objects shaped EXACTLY like the OpenAI response
+# `parent_llm_engine` reads: `response.choices[0].message` with `.content`
+# (final text) and `.tool_calls[i]` carrying `.id` + `.function.name` +
+# `.function.arguments`. The parent engine's response helpers consume that shape
+# via `getattr`, so `types.SimpleNamespace` satisfies them.
+#
+# TWO-TURN, on purpose — mirrors the Phase-1 e2e: the brand two-option
+# static-welcome menu owns the FIRST turn, so the engine is never consulted on
+# turn 1. A message NAMING the program on the next turn is the realistic path
+# that routes into the engine.
+#
+# FROZEN-SETTINGS PATTERN — both flags enabled on EVERY module that reads them
+# on this path (`conversation_service` routing, `parent_flow` engine gate +
+# registration accessor, `parent_llm_engine` tools + prompt suffix, `app.config`
+# singleton) via `dataclasses.replace(...)` + a module monkeypatch, the same
+# mechanism the autouse conftest fixture uses.
+
+
+def _tool_call_response(name, arguments):
+    """OpenAI-shaped response whose assistant message issues ONE tool call."""
+    from types import SimpleNamespace
+
+    tool_call = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name=name, arguments=arguments),
+    )
+    message = SimpleNamespace(content=None, tool_calls=[tool_call])
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def _final_text_response(text):
+    """OpenAI-shaped response whose assistant message is a plain final answer."""
+    from types import SimpleNamespace
+
+    message = SimpleNamespace(content=text, tool_calls=None)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def test_e2e_dynamic_program_price_answered_end_to_end(monkeypatch):
+    import dataclasses
+    from app.services import conversation_service as cs, admin_config_service
+    from app.agent.llm import parent_llm_engine
+    from app.flows import parent_flow
+    from app import config as app_config
+
+    synthetic = {
+        "id": "robotics_club", "name": "რობოტიკის კლუბი", "type": "kids_program",
+        "status": "active", "price_text": "300 ლარი",
+        "description_full": "რობოტების აწყობა და პროგრამირება.",
+        "registration_status": "closed",
+        "hashtags": ["რობოტიკა", "robotics"],
+    }
+
+    # Active sections drive routing (`_match_active_program_segment`) + the prompt
+    # suffix; `get_section` is what the guarded executor (`_get_program_info`)
+    # calls, so recording its calls proves the generic tool actually RAN.
+    monkeypatch.setattr(admin_config_service, "get_active_sections", lambda: [synthetic])
+    fetched_ids: list[str] = []
+
+    def _get_section(pid):
+        fetched_ids.append(pid)
+        return synthetic if pid == "robotics_club" else None
+
+    monkeypatch.setattr(admin_config_service, "get_section", _get_section)
+
+    # REGISTRATION CLOSED is the point. Force the SAME accessor the pre-gate camp
+    # handler reads (`parent_flow._is_camp_registration_open`, which wraps
+    # `admin_config_service.is_camp_registration_open`) to False, so the test
+    # proves the Task-3b bypass on the real, live-state path — a generic price
+    # word („რა ღირს") would otherwise be misclassified as a CAMP price question
+    # by `_maybe_handle_final_camp_public_policy` once registration is CLOSED.
+    monkeypatch.setattr(parent_flow, "_is_camp_registration_open", lambda: False)
+    monkeypatch.setattr(admin_config_service, "is_camp_registration_open", lambda: False)
+
+    # Enable BOTH flags on every module that reads them on this path.
+    for mod in (cs, parent_llm_engine, parent_flow, app_config):
+        swapped = dataclasses.replace(
+            mod.settings, USE_DYNAMIC_PROGRAMS=True, USE_PARENT_LLM_ENGINE=True,
+        )
+        monkeypatch.setattr(mod, "settings", swapped)
+
+    # Sentinel: if the deterministic camp-price interceptor answers this turn its
+    # marker (never a real reply) surfaces in the output. Asserting the marker is
+    # ABSENT proves the camp-price interceptor did NOT answer the
+    # dynamic-program price question — the engine did.
+    _CAMP_PRICE_SENTINEL = "CAMP_PRICE_INTERCEPTOR_FIRED"
+    monkeypatch.setattr(
+        parent_flow, "_maybe_handle_repeat_camp_price",
+        lambda *a, **k: _CAMP_PRICE_SENTINEL,
+    )
+
+    captured = {"tool_names": None, "calls": 0}
+
+    def fake_chat_with_tools(*, messages, tools, **kw):
+        import json
+
+        captured["calls"] += 1
+        captured["tool_names"] = {t["function"]["name"] for t in tools}
+        # First LLM round → ask for get_program_info; after the tool result is
+        # appended (a `role == "tool"` message) → answer from it.
+        tool_messages = [m for m in messages if m.get("role") == "tool"]
+        if not tool_messages:
+            return _tool_call_response(
+                "get_program_info", '{"program_id": "robotics_club"}',
+            )
+        # Derive the reply FROM the executor's actual tool result (the real
+        # `_get_program_info` Task-3 output, serialized into this `role=="tool"`
+        # message's `content`) — NOT a canned string. A regression that
+        # drops/empties `price_text`, or returns `success: False`, fails HERE
+        # with a clear message.
+        tool_result = json.loads(tool_messages[-1]["content"])
+        assert tool_result.get("success") is True, (
+            f"get_program_info tool result must be success:true, got {tool_result!r}"
+        )
+        facts = tool_result.get("facts") or {}
+        assert facts.get("price_text") == synthetic["price_text"], (
+            "get_program_info facts must carry the program's own "
+            f"price_text={synthetic['price_text']!r}, got {facts.get('price_text')!r}"
+        )
+        return _final_text_response(f"რობოტიკის კლუბი ღირს {facts['price_text']}.")
+
+    monkeypatch.setattr(
+        "app.services.openai_service.chat_with_tools", fake_chat_with_tools,
+    )
+
+    # Turn 1 — the brand two-option menu owns the first turn; the engine is not
+    # consulted yet (identical to the camp opening).
+    menu = cs.process_message(
+        sender_id="u_price_p2t5", message_text="გამარჯობა",
+        platform="facebook", page_id="p1",
+    )
+    assert menu, "the brand welcome must produce a reply"
+    assert captured["calls"] == 0, "the LLM engine must NOT be consulted on turn 1"
+
+    # Turn 2 — the dynamic-program PRICE question, with camp registration CLOSED.
+    #   Task 2 routing → PARENT (overrides the incidental „კლუბ"→ADULT stem)
+    #   Task 3b pre-gate → the camp-price policy handler bypasses this turn
+    #   Task 3 gate-2   → the engine bypass fires before every camp interceptor
+    #   Task 4 tools    → the engine offers list_programs + get_program_info
+    #   Task 3 executor → get_program_info fetches the section (get_section call)
+    reply = cs.process_message(
+        sender_id="u_price_p2t5",
+        message_text="რობოტიკის კლუბი რა ღირს?",
+        platform="facebook", page_id="p1",
+    )
+
+    # The price question REACHED the LLM engine — no deterministic camp
+    # interceptor swallowed it, even with registration CLOSED.
+    assert captured["calls"] >= 1, "the price question must reach the LLM engine"
+    # The GENERIC program tool was actually offered to the LLM (Task 4).
+    assert {"list_programs", "get_program_info"} <= captured["tool_names"]
+    # The generic tool actually RAN — the guarded executor fetched the program
+    # (Task 3), not merely offered the schema.
+    assert "robotics_club" in fetched_ids, "get_program_info must fetch the section"
+    # The reply carries the PROGRAM's OWN price (from the executor tool-result).
+    assert "300" in reply, "reply must answer from the program's own price"
+    # It must NOT fall back to the camp price, and the deterministic camp-price
+    # interceptor must NOT have answered this turn.
+    assert "2150" not in reply, "must not fall back to the camp price"
+    assert _CAMP_PRICE_SENTINEL not in reply, (
+        "the deterministic camp-price interceptor must not answer a "
+        "dynamic-program price question"
+    )
