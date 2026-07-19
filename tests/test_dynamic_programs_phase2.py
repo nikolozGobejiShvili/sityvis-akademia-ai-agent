@@ -50,3 +50,21 @@ def test_ambiguous_word_in_name_does_not_hijack():
 def test_inactive_section_not_matched():
     inactive_robotics = dict(_ROBOTICS, status="inactive")
     assert match_dynamic_program("რობოტიკის კლუბი რა ღირს?", [inactive_robotics]) is None
+
+
+# Task 2 — routing delegates to the precise matcher (gate 1).
+
+def test_routing_prefers_dynamic_then_classifier(monkeypatch):
+    import dataclasses
+    from app import config
+    from app.services import conversation_service as cs, admin_config_service
+    monkeypatch.setattr(admin_config_service, "get_active_sections",
+                        lambda: [_ADULT, _CAMP, _ROBOTICS])
+    monkeypatch.setattr(cs, "settings", dataclasses.replace(config.settings, USE_DYNAMIC_PROGRAMS=True))
+    # a genuine dynamic program routes PARENT via the matcher
+    assert cs._match_active_program_segment("რობოტიკის კლუბი რა ღირს?") == "PARENT"
+    # a camp-context message is NOT force-routed to ADULT by a bare adult hashtag
+    assert cs._match_active_program_segment("ბანაკში საღამოს რა ხდება?") in ("PARENT", None)
+    # flag off ⇒ None
+    monkeypatch.setattr(cs, "settings", dataclasses.replace(config.settings, USE_DYNAMIC_PROGRAMS=False))
+    assert cs._match_active_program_segment("რობოტიკის კლუბი რა ღირს?") is None

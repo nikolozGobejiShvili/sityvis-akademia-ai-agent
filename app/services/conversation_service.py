@@ -371,27 +371,24 @@ def _classify_segment(message_text: str) -> str:
 
 
 def _match_active_program_segment(message_text: str) -> str | None:
-    """USE_DYNAMIC_PROGRAMS: if the message names an ACTIVE admin program
-    (by name token or hashtag), return the segment for that program's type —
-    adult_events → ADULT, otherwise PARENT. None when flag off / no match, so
-    flag-off routing is byte-identical. Heuristic (substring); Phase 2 replaces
-    it with the app/domain/decision resolver."""
+    """USE_DYNAMIC_PROGRAMS: route a message that NAMES an active admin program by
+    that program's type (adult_events → ADULT, else PARENT). None when flag off /
+    no specific match — the caller falls back to _classify_segment, so flag-off
+    routing is byte-identical and the 3 generic-named programs keep classifier
+    routing. Precision lives in reasoning/dynamic_program_match (Phase 2)."""
     if not getattr(settings, "USE_DYNAMIC_PROGRAMS", False):
         return None
-    text = (message_text or "").lower()
-    if not text:
+    if not (message_text or "").strip():
         return None
     try:
         from app.services import admin_config_service
-        sections = admin_config_service.get_active_sections()
+        from app.reasoning.dynamic_program_match import match_dynamic_program
+        match = match_dynamic_program(message_text, admin_config_service.get_active_sections())
     except Exception:  # pragma: no cover - defensive
         return None
-    for s in sections:
-        name = (s.get("name") or "").lower()
-        tags = [str(t).lower().lstrip("#") for t in (s.get("hashtags") or [])]
-        if (name and name in text) or any(t and t in text for t in tags):
-            return "ADULT" if (s.get("type") == "adult_events") else "PARENT"
-    return None
+    if not match:
+        return None
+    return "ADULT" if match.get("type") == "adult_events" else "PARENT"
 
 
 # PARENT Reschedule State + Segment Override Patch (2026-06-10).

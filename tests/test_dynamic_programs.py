@@ -197,8 +197,12 @@ def test_existing_programs_unchanged_routing(monkeypatch):
     ])
     on = dataclasses.replace(cs.settings, USE_DYNAMIC_PROGRAMS=True)
     monkeypatch.setattr(cs, "settings", on)
-    assert cs._match_active_program_segment("ბანაკი მაინტერესებს") == "PARENT"
-    assert cs._match_active_program_segment("ღონისძიება როდისაა") == "ADULT"
+    # v2: the matcher no longer owns the generic-named programs; the composed
+    # routing (matcher or _classify_segment) still yields the same segment.
+    assert (cs._match_active_program_segment("ბანაკი მაინტერესებს")
+            or cs._classify_segment("ბანაკი მაინტერესებს")) == "PARENT"
+    assert (cs._match_active_program_segment("ღონისძიება როდისაა")
+            or cs._classify_segment("ღონისძიება როდისაა")) == "ADULT"
 
 
 # Task 6 — END-TO-END acceptance: a NEW admin program is answered THROUGH
