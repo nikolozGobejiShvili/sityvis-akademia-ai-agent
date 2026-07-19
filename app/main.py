@@ -49,6 +49,12 @@ async def startup():
     print(f"⚙️ USE_LEAD_MEMORY={getattr(settings, 'USE_LEAD_MEMORY', False)}")
     print(f"⚙️ USE_SKILLS={getattr(settings, 'USE_SKILLS', False)}")
     print(f"⚙️ USE_LEARNING={getattr(settings, 'USE_LEARNING', False)}")
+    # Phase 0b (2026-07-20) — boot-log the resolved admin-config directory so
+    # operators can see at a glance whether config is being read/written from
+    # the repo-default path (ephemeral on Railway) or an operator-mounted
+    # persistent volume (ADMIN_CONFIG_DIR env override).
+    from app.services import admin_config_service as _acs
+    print(f"⚙️ ADMIN_CONFIG_DIR={_acs.ADMIN_CONFIG_DIR}")
     # Conversation Planner (Phase 3) rollout visibility — confirm at boot whether
     # the planner is computing (shadow) and whether it is authoritative.
     print(f"⚙️ USE_CONVERSATION_PLANNER={settings.USE_CONVERSATION_PLANNER}")
