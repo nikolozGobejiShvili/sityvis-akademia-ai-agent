@@ -276,3 +276,83 @@ def test_classify_outcome_booked_beats_handed_off():
     conv = _conv(segment="PARENT")
     lead = _lead(calendly_booked=True)
     assert classify_outcome(conv, lead, "მადლობა.", manager_notified=True) == "booked"
+
+
+# -- Task 3: wire outcome logging into the conversation chokepoint ---------
+#
+# Mirrors the Phase-4 lead-memory e2e save-hook idiom in
+# tests/test_lead_memory.py (`test_e2e_returning_lead_child_age_remembered_
+# across_conversations`): pre-create the Conversation via
+# `_get_or_create_conversation`, pin its segment so routing is deterministic,
+# stub `parent_flow.handle` so no OpenAI call is made, back
+# `redis_state_service` with one in-memory dict, and drive the REAL
+# `conversation_service.process_message` entry point so the actual
+# `_process_message_impl` post-response hook under test runs unstubbed.
+
+
+def _inmemory_learning_log_redis(monkeypatch):
+    from app.services import redis_state_service as rss
+    store: dict = {}
+    monkeypatch.setattr(rss, "is_enabled", lambda: True)
+    monkeypatch.setattr(
+        rss, "set_json",
+        lambda k, v, ttl_seconds=None, **kw: (store.__setitem__(k, v), True)[1],
+    )
+    monkeypatch.setattr(rss, "get_json", lambda k: store.get(k))
+    monkeypatch.setattr(rss, "delete", lambda k: (store.pop(k, None), True)[1])
+    return store
+
+
+def test_process_message_logs_outcome_when_flag_on(monkeypatch):
+    import dataclasses
+    from app import config
+    from app.services import conversation_service as cs
+    from app.services import learning_log_service as lls
+    from app.flows import parent_flow as pf
+
+    _inmemory_learning_log_redis(monkeypatch)
+    monkeypatch.setattr(
+        cs, "settings", dataclasses.replace(config.settings, USE_LEARNING=True),
+    )
+    cs.conversations.clear()
+
+    conv = cs._get_or_create_conversation("u1", "facebook", "P1")
+    conv.segment = "PARENT"
+    monkeypatch.setattr(pf, "handle", lambda conversation, message: "მადლობა.")
+
+    response = cs.process_message(
+        sender_id="u1", message_text="გამარჯობა",
+        platform="facebook", page_id="P1",
+    )
+    assert response == "მადლობა."
+
+    records = lls.recent(50)
+    assert len(records) >= 1
+    assert records[-1]["outcome"] == "answered"
+    assert records[-1]["segment"] == "PARENT"
+    assert records[-1]["session_key"] == "facebook:P1:u1"
+
+
+def test_process_message_no_log_when_flag_off(monkeypatch):
+    import dataclasses
+    from app import config
+    from app.services import conversation_service as cs
+    from app.services import learning_log_service as lls
+    from app.flows import parent_flow as pf
+
+    _inmemory_learning_log_redis(monkeypatch)
+    monkeypatch.setattr(
+        cs, "settings", dataclasses.replace(config.settings, USE_LEARNING=False),
+    )
+    cs.conversations.clear()
+
+    conv = cs._get_or_create_conversation("u1", "facebook", "P1")
+    conv.segment = "PARENT"
+    monkeypatch.setattr(pf, "handle", lambda conversation, message: "მადლობა.")
+
+    cs.process_message(
+        sender_id="u1", message_text="გამარჯობა",
+        platform="facebook", page_id="P1",
+    )
+
+    assert lls.recent(50) == []

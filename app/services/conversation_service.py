@@ -1136,6 +1136,35 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
         except Exception:  # pragma: no cover - best-effort
             pass
 
+    # Bounded learning log (USE_LEARNING, Phase 5 Task 3) — flag-gated,
+    # best-effort outcome logging at the same post-response chokepoint as
+    # the Phase-4 lead-memory save hook immediately above. Wrapped in a
+    # bare except so a classification/logging failure can NEVER change the
+    # `response` already computed above (turn integrity comes first).
+    if getattr(settings, "USE_LEARNING", False):
+        try:
+            from app.reasoning.outcome_classifier import classify_outcome
+            from app.services import learning_log_service
+            from app.agent.tools import parent_tool_executor
+            key = conversation_cache_key(conversation)
+            manager_notified = bool(
+                parent_tool_executor.manager_notified_for_conversation.get(key)
+            )
+            outcome = classify_outcome(
+                conversation, conversation.lead, response,
+                manager_notified=manager_notified,
+            )
+            learning_log_service.log_turn({
+                "session_key": key,
+                "segment": getattr(conversation, "segment", "") or "",
+                "program_id": "",
+                "outcome": outcome,
+                "question": (message_text or "")[:200],
+                "answer_preview": (response or "")[:200],
+            })
+        except Exception:  # pragma: no cover - best-effort; logging must never break a turn
+            pass
+
     _trace.set_route_decision(
         segment_after=conversation.segment or route_segment or "",
         state_after=conversation.state or "",
