@@ -148,3 +148,49 @@ def test_camp_price_still_uses_camp_interceptor(monkeypatch):
     monkeypatch.setattr(pf, "_maybe_handle_repeat_camp_price", lambda *a, **k: "CAMP_PRICE")
     conv = Conversation(sender_id="t", platform="facebook", segment="PARENT")
     assert pf._handle_core(conv, "ბანაკი რა ღირს?") == "CAMP_PRICE"   # guard False for camp
+
+
+# Task 3b — close the confirmed PRE-GATE hijack: `_maybe_handle_final_camp_public_policy`
+# (parent_flow.py:304, called ~line 1037 — BEFORE the `engine_flag` gate and thus
+# structurally outside the Task-3 guard's reach) classified a dynamic-program price
+# question ("რობოტიკის კლუბი რა ღირს?") as a CAMP price question once camp
+# registration is CLOSED, because `_msg_has_camp_intent` → `_is_camp_price_intent`
+# matches generic price words ("ღირს") with no camp-keyword requirement. The fix adds
+# a flag-safe `_is_dynamic_program_turn` pass-through as the FIRST statement of the
+# handler, so a dynamic-program turn returns None from it and reaches the engine gate.
+
+def test_dynamic_price_not_hijacked_when_registration_closed(monkeypatch):
+    pf, conv = _dyn_engine_conv(monkeypatch)
+    # Force registration CLOSED (the live state that exposed the hijack).
+    # `_maybe_handle_final_camp_public_policy` reads registration via
+    # `parent_flow._is_camp_registration_open`, which wraps
+    # `admin_config_service.is_camp_registration_open` — patch the same accessor
+    # `_dyn_engine_conv` already uses (it pins it OPEN by default).
+    monkeypatch.setattr(pf, "_is_camp_registration_open", lambda: False)
+    # Seed one prior turn to sidestep the first-turn brand welcome (as the
+    # Task-3 age test does).
+    conv.history = [{"role": "assistant", "content": "თქვენი შვილი რამდენი წლისაა?"}]
+    out = pf._handle_core(conv, "რობოტიკის კლუბი რა ღირს?")
+    assert out == "ENGINE_ANSWER"
+    assert "CAMP" not in out
+    assert "2150" not in out
+
+
+def test_camp_price_policy_unchanged_when_dynamic_off(monkeypatch):
+    """Same registration-CLOSED setup, but the message IS a genuine camp price
+    question. `_is_dynamic_program_turn` is False for "ბანაკი" (a hardcoded
+    ProgramId — see test_is_dynamic_program_turn), so the Task 3b pass-through
+    never fires and `_maybe_handle_final_camp_public_policy` still classifies +
+    answers the turn (non-None) — proving the fix does not regress camp policy."""
+    import dataclasses
+    from app import config
+    from app.flows import parent_flow as pf
+    from app.models.conversation import Conversation
+
+    monkeypatch.setattr(
+        pf, "settings", dataclasses.replace(config.settings, USE_DYNAMIC_PROGRAMS=True),
+    )
+    monkeypatch.setattr(pf, "_is_camp_registration_open", lambda: False)
+    conv = Conversation(sender_id="t2", platform="facebook", segment="PARENT")
+    result = pf._maybe_handle_final_camp_public_policy(conv, "ბანაკი რა ღირს?")
+    assert result is not None

@@ -307,6 +307,15 @@ def _maybe_handle_final_camp_public_policy(
     *,
     fallback_category: str | None = None,
 ) -> str | None:
+    # Dynamic Programs (Phase 2, Task 3b): a turn naming an active NON-hardcoded
+    # admin program (e.g. "რობოტიკის კლუბი რა ღირს?") must reach the engine
+    # gate, not this deterministic camp-policy handler — even when camp
+    # registration is closed (`_is_camp_price_intent` below has no camp-keyword
+    # requirement and would otherwise misclassify it as a camp price question).
+    # Flag-gated no-op when USE_DYNAMIC_PROGRAMS is off or the turn isn't
+    # naming a dynamic program (camp/adult/non-program turns unaffected).
+    if _is_dynamic_program_turn(message):
+        return None
     category = _final_camp_public_policy_category(
         conversation,
         message,
