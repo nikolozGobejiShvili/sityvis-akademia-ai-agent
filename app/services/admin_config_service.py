@@ -24,6 +24,7 @@ Safety guarantees:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 from pathlib import Path
@@ -56,8 +57,22 @@ def _resolve_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
-# Config files live under <project>/data/admin_config/.
-ADMIN_CONFIG_DIR: Path = _resolve_base_dir() / "data" / "admin_config"
+# Config files live under <project>/data/admin_config/ by default. On Railway the
+# container FS is ephemeral (admin edits wiped on every redeploy), so an operator
+# mounts a persistent volume and points ADMIN_CONFIG_DIR at it. Writes go to that
+# dir; reads overlay volume-then-default (see _config_read_path). Env unset ⇒
+# identical to before.
+_DEFAULT_ADMIN_CONFIG_DIR: Path = _resolve_base_dir() / "data" / "admin_config"
+
+
+def _resolve_admin_config_dir() -> Path:
+    override = os.environ.get("ADMIN_CONFIG_DIR", "").strip()
+    if override:
+        return Path(override)
+    return _DEFAULT_ADMIN_CONFIG_DIR
+
+
+ADMIN_CONFIG_DIR: Path = _resolve_admin_config_dir()
 SECTIONS_PATH: Path = ADMIN_CONFIG_DIR / "sections.yaml"
 TEMPLATES_PATH: Path = ADMIN_CONFIG_DIR / "templates.yaml"
 BUSINESS_HOURS_PATH: Path = ADMIN_CONFIG_DIR / "business_hours.yaml"
