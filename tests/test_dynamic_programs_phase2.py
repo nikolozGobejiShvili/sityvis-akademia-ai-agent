@@ -194,3 +194,34 @@ def test_camp_price_policy_unchanged_when_dynamic_off(monkeypatch):
     conv = Conversation(sender_id="t2", platform="facebook", segment="PARENT")
     result = pf._maybe_handle_final_camp_public_policy(conv, "ბანაკი რა ღირს?")
     assert result is not None
+
+
+# Task 4 — `get_program_info` denylist -> allowlist + hardcoded-id refusal (gate 3).
+
+def _make_executor():
+    from app.agent.tools.parent_tool_executor import ParentToolExecutor
+    from app.models.lead import Lead
+    from app.models.conversation import Conversation
+    conv = Conversation(sender_id="t", platform="facebook", segment="PARENT")
+    return ParentToolExecutor(conversation=conv,
+                              lead=Lead(sender_id="t", platform="facebook", segment="PARENT"),
+                              sender_id="t", platform="facebook")
+
+
+def test_get_program_info_allowlist_excludes_internal(monkeypatch):
+    from app.services import admin_config_service
+    sec = {"id": "robotics_club", "name": "რობოტიკის კლუბი", "type": "kids_program",
+           "status": "active", "price_text": "300 ლარი", "description_full": "აღწერა",
+           "discovery_questions": ["შიდა?"], "events": [{"reservation_url": "https://secret"}],
+           "cta_text": "შიდა"}
+    monkeypatch.setattr(admin_config_service, "get_section",
+                        lambda pid: sec if pid == "robotics_club" else None)
+    out = _make_executor().execute("get_program_info", {"program_id": "robotics_club"})
+    assert out["success"] and out["facts"]["price_text"] == "300 ლარი"
+    for k in ("discovery_questions", "events", "cta_text"):
+        assert k not in out["facts"]
+
+
+def test_get_program_info_refuses_hardcoded(monkeypatch):
+    out = _make_executor().execute("get_program_info", {"program_id": "summer_camp"})
+    assert out["success"] is False and out["reason"] == "use_specific_tool"

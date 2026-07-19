@@ -38,6 +38,7 @@ from app.agent.services.timestamps import (
     now_tbilisi,
     resolve_relative_datetime,
 )
+from app.domain.decision.models import ProgramId
 from app.agent.tools.parent_tools import (
     ALLOWED_TOOL_NAMES,
     CAMP_INFO_TOPICS,
@@ -402,6 +403,16 @@ class ParentToolExecutor:
     _REGISTRATION_OPEN_VALUES = frozenset({
         "open", "active", "enabled", "on", "true", "1", "yes",
     })
+    # Customer-safe fields the generic tool may surface. Allowlist ⇒ a new
+    # operator field never leaks by default.
+    _PROGRAM_PUBLIC_FIELDS: tuple[str, ...] = (
+        "name", "type", "location", "price_text", "price_gel", "payment_terms",
+        "age_min", "age_max", "description_short", "description_full",
+        "schedule_text", "duration_text", "streams", "included_items", "discounts",
+    )
+    # The 3 hardcoded programs have curated tools/handlers — the generic
+    # get_program_info tool must refuse them (gate 3).
+    _HARDCODED_PROGRAM_IDS = frozenset(p.value for p in ProgramId)
 
     def _list_programs(self, args: dict[str, Any]) -> dict[str, Any]:
         from app.services import admin_config_service
@@ -421,6 +432,9 @@ class ParentToolExecutor:
         program_id = str(args.get("program_id") or "").strip()
         if not program_id:
             return {"success": False, "reason": "missing_program_id"}
+        if program_id in self._HARDCODED_PROGRAM_IDS:
+            return {"success": False, "reason": "use_specific_tool",
+                    "program_id": program_id}
         from app.services import admin_config_service
         try:
             section = admin_config_service.get_section(program_id)
@@ -435,14 +449,15 @@ class ParentToolExecutor:
         reg_status = str(section.get("registration_status") or "open").strip().lower()
         reg_open = reg_status in self._REGISTRATION_OPEN_VALUES
         facts: dict[str, Any] = {}
-        for key, value in section.items():
-            if key in self._PROGRAM_INTERNAL_KEYS:
-                continue
-            if key in self._PROGRAM_REGISTRATION_KEYS and not reg_open:
-                continue
+        for key in self._PROGRAM_PUBLIC_FIELDS:
+            value = section.get(key)
             if value in (None, "", [], {}):
                 continue
             facts[key] = value
+        if reg_open:
+            url = section.get("registration_url")
+            if url:
+                facts["registration_url"] = url
         logger.info(
             "[parent_tool] get_program_info program_id=%s status=%s reg_open=%s fields=%d",
             program_id, status, reg_open, len(facts),
