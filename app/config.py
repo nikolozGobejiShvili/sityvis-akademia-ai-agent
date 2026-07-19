@@ -370,6 +370,10 @@ class Settings:
     # (child age / name / interests) survive past the 8-day session and seed a
     # new conversation so they are not re-asked. OFF ⇒ no store, identical.
     USE_LEAD_MEMORY: bool = False
+    # Bounded learning loop (2026-07): log turn outcomes + let the agent reuse
+    # operator-approved answers via a tool. Human-gated (no auto-approve, no
+    # prompt mutation, no deploy). OFF ⇒ no logging, tool not offered, identical.
+    USE_LEARNING: bool = False
     # P3-C / COMMENT FLOW PATCH 1 — public comment reply gate.
     # When False (default), the agent SKIPS the public Facebook /
     # Instagram comment reply (`reply_to_comment`) entirely and goes
@@ -546,6 +550,7 @@ class Settings:
             USE_ADULT_LLM_ENGINE=_parse_bool_optional("USE_ADULT_LLM_ENGINE", True),
             USE_DYNAMIC_PROGRAMS=_parse_bool_optional("USE_DYNAMIC_PROGRAMS", False),
             USE_LEAD_MEMORY=_parse_bool_optional("USE_LEAD_MEMORY", False),
+            USE_LEARNING=_parse_bool_optional("USE_LEARNING", False),
             ENABLE_PUBLIC_COMMENT_REPLY=_parse_bool_optional(
                 "ENABLE_PUBLIC_COMMENT_REPLY", False,
             ),
