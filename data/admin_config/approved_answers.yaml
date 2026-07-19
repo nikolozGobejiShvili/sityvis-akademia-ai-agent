@@ -1,0 +1,15 @@
+# Operator-editable approved-answers store (Phase 5, Task 4).
+#
+# Each entry:
+#   id: unique string id
+#   triggers: [substrings] — lowercased substring match against the incoming
+#             message (see app/services/approved_answers_service.py for the
+#             matching algorithm)
+#   answer: the exact Georgian text to return on a match
+#   segment: "PARENT" | "ADULT" | "any"
+#   status: "active" | "hidden"
+#
+# This file starts EMPTY. The operator (or a later admin-panel UI) adds rows
+# here to steer answers with NO code change. A later task wires an LLM tool
+# that reads through app.services.approved_answers_service.find_approved_answer.
+answers: []

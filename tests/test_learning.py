@@ -359,3 +359,146 @@ def test_process_message_no_log_when_flag_off(monkeypatch):
     )
 
     assert lls.recent(50) == []
+
+
+# -- Task 4: operator-editable approved-answers store + matcher ------------
+#
+# Mirrors camp_topic_facts._score / detect_camp_topic (trigger-substring
+# scoring, strictly-greater tie-break, best_score > 0 gate) and
+# admin_config_service._safe_load_yaml (tolerant fresh read, never raises).
+# Tests inject the answer list via monkeypatching load_answers — never write
+# test data into the tracked seed YAML.
+
+
+def _answer(id_, triggers, answer, segment="any", status="active"):
+    return {
+        "id": id_,
+        "triggers": triggers,
+        "answer": answer,
+        "segment": segment,
+        "status": status,
+    }
+
+
+def test_load_answers_reads_seed_yaml_returns_list():
+    from app.services import approved_answers_service as aas
+    result = aas.load_answers()
+    assert isinstance(result, list)
+
+
+def test_find_approved_answer_triggers_and_segment_hit(monkeypatch):
+    from app.services import approved_answers_service as aas
+    answers = [_answer("a1", ["ალერგია", "დიეტა"], "ალერგიის შემთხვევაში მენეჯერი დაგეხმარებათ.", segment="PARENT")]
+    monkeypatch.setattr(aas, "load_answers", lambda: answers)
+    result = aas.find_approved_answer("შვილს აქვს ალერგია", "PARENT")
+    assert result == {"id": "a1", "answer": "ალერგიის შემთხვევაში მენეჯერი დაგეხმარებათ."}
+
+
+def test_find_approved_answer_no_match_returns_none(monkeypatch):
+    from app.services import approved_answers_service as aas
+    answers = [_answer("a1", ["ალერგია"], "პასუხი", segment="PARENT")]
+    monkeypatch.setattr(aas, "load_answers", lambda: answers)
+    assert aas.find_approved_answer("სულ სხვა კითხვაა", "PARENT") is None
+
+
+def test_find_approved_answer_hidden_never_returned(monkeypatch):
+    from app.services import approved_answers_service as aas
+    answers = [_answer("a1", ["ალერგია"], "პასუხი", segment="PARENT", status="hidden")]
+    monkeypatch.setattr(aas, "load_answers", lambda: answers)
+    assert aas.find_approved_answer("აქვს ალერგია", "PARENT") is None
+
+
+def test_find_approved_answer_segment_mismatch_returns_none(monkeypatch):
+    from app.services import approved_answers_service as aas
+    answers = [_answer("a1", ["ალერგია"], "პასუხი", segment="ADULT")]
+    monkeypatch.setattr(aas, "load_answers", lambda: answers)
+    assert aas.find_approved_answer("აქვს ალერგია", "PARENT") is None
+
+
+def test_find_approved_answer_segment_any_matches_both(monkeypatch):
+    from app.services import approved_answers_service as aas
+    answers = [_answer("a1", ["ალერგია"], "პასუხი", segment="any")]
+    monkeypatch.setattr(aas, "load_answers", lambda: answers)
+    assert aas.find_approved_answer("აქვს ალერგია", "PARENT") == {"id": "a1", "answer": "პასუხი"}
+    assert aas.find_approved_answer("აქვს ალერგია", "ADULT") == {"id": "a1", "answer": "პასუხი"}
+
+
+def test_find_approved_answer_malformed_yaml_graceful(monkeypatch):
+    from app.services import approved_answers_service as aas
+
+    def _boom():
+        raise ValueError("malformed yaml")
+
+    monkeypatch.setattr(aas, "load_answers", _boom)
+    assert aas.find_approved_answer("აქვს ალერგია", "PARENT") is None
+
+
+def test_load_answers_missing_file_returns_empty(monkeypatch, tmp_path):
+    from app.services import approved_answers_service as aas
+    monkeypatch.setattr(aas, "ANSWERS_PATH", tmp_path / "does_not_exist.yaml")
+    assert aas.load_answers() == []
+
+
+def test_load_answers_malformed_yaml_returns_empty(monkeypatch, tmp_path):
+    from app.services import approved_answers_service as aas
+    bad = tmp_path / "approved_answers.yaml"
+    bad.write_text("answers: [this is not: valid: yaml: [", encoding="utf-8")
+    monkeypatch.setattr(aas, "ANSWERS_PATH", bad)
+    assert aas.load_answers() == []
+
+
+def test_load_answers_wrong_shape_returns_empty(monkeypatch, tmp_path):
+    from app.services import approved_answers_service as aas
+    wrong = tmp_path / "approved_answers.yaml"
+    wrong.write_text("answers: 'not a list'", encoding="utf-8")
+    monkeypatch.setattr(aas, "ANSWERS_PATH", wrong)
+    assert aas.load_answers() == []
+
+
+def test_find_approved_answer_short_trigger_never_matches_alone(monkeypatch):
+    from app.services import approved_answers_service as aas
+    answers = [_answer("a1", ["ია"], "პასუხი", segment="any")]
+    monkeypatch.setattr(aas, "load_answers", lambda: answers)
+    assert aas.find_approved_answer("რაღაც ტექსტი აქ ია", "PARENT") is None
+
+
+def test_find_approved_answer_highest_score_wins(monkeypatch):
+    from app.services import approved_answers_service as aas
+    answers = [
+        _answer("a1", ["ალერგია"], "მოკლე პასუხი", segment="any"),
+        _answer("a2", ["ალერგია", "დიეტა", "საკვები"], "სრული პასუხი", segment="any"),
+    ]
+    monkeypatch.setattr(aas, "load_answers", lambda: answers)
+    result = aas.find_approved_answer("აქვს ალერგია და დიეტა საკვები", "PARENT")
+    assert result == {"id": "a2", "answer": "სრული პასუხი"}
+
+
+def test_find_approved_answer_tie_break_earliest_wins(monkeypatch):
+    from app.services import approved_answers_service as aas
+    answers = [
+        _answer("a1", ["ალერგია"], "პირველი", segment="any"),
+        _answer("a2", ["ალერგია"], "მეორე", segment="any"),
+    ]
+    monkeypatch.setattr(aas, "load_answers", lambda: answers)
+    result = aas.find_approved_answer("აქვს ალერგია", "PARENT")
+    assert result == {"id": "a1", "answer": "პირველი"}
+
+
+def test_find_approved_answer_never_raises_on_non_dict_rows(monkeypatch):
+    from app.services import approved_answers_service as aas
+    monkeypatch.setattr(aas, "load_answers", lambda: ["not a dict", None, 123])
+    assert aas.find_approved_answer("აქვს ალერგია", "PARENT") is None
+
+
+def test_find_approved_answer_never_raises_on_missing_keys(monkeypatch):
+    from app.services import approved_answers_service as aas
+    monkeypatch.setattr(aas, "load_answers", lambda: [{"id": "a1"}])
+    assert aas.find_approved_answer("აქვს ალერგია", "PARENT") is None
+
+
+def test_find_approved_answer_empty_message_returns_none(monkeypatch):
+    from app.services import approved_answers_service as aas
+    answers = [_answer("a1", ["ალერგია"], "პასუხი", segment="any")]
+    monkeypatch.setattr(aas, "load_answers", lambda: answers)
+    assert aas.find_approved_answer("", "PARENT") is None
+    assert aas.find_approved_answer(None, "PARENT") is None
