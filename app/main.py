@@ -41,6 +41,14 @@ async def startup():
     print(f"⚙️ USE_LLM_TURN_ANALYZER={settings.USE_LLM_TURN_ANALYZER}")
     print(f"⚙️ USE_LLM_COMPOSER={settings.USE_LLM_COMPOSER}")
     print(f"⚙️ USE_PARENT_LLM_ENGINE={settings.USE_PARENT_LLM_ENGINE}")
+    # Smart-agent feature-flag boot visibility (Phase 0a, 2026-07-20) — the
+    # audit found NO boot-log signal for these flags, which contributed to an
+    # admin-added dynamic program going unnoticed as "not live". Pure
+    # logging, zero behavior change.
+    print(f"⚙️ USE_DYNAMIC_PROGRAMS={getattr(settings, 'USE_DYNAMIC_PROGRAMS', False)}")
+    print(f"⚙️ USE_LEAD_MEMORY={getattr(settings, 'USE_LEAD_MEMORY', False)}")
+    print(f"⚙️ USE_SKILLS={getattr(settings, 'USE_SKILLS', False)}")
+    print(f"⚙️ USE_LEARNING={getattr(settings, 'USE_LEARNING', False)}")
     # Conversation Planner (Phase 3) rollout visibility — confirm at boot whether
     # the planner is computing (shadow) and whether it is authoritative.
     print(f"⚙️ USE_CONVERSATION_PLANNER={settings.USE_CONVERSATION_PLANNER}")

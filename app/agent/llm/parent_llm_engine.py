@@ -31,6 +31,7 @@ from app.agent.services.timestamps import (
 from app.agent.tools.parent_tool_executor import ParentToolExecutor, serialize_result
 from app.agent.tools.parent_tools import DYNAMIC_PROGRAM_TOOLS, LEARNING_TOOLS, PARENT_TOOLS
 from app.config import settings
+from app.domain.decision.models import ProgramId
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.reasoning.age_question import (
@@ -57,8 +58,20 @@ def build_active_tools(use_dynamic: bool, use_learning: bool = False) -> list[di
     return tools
 
 
+# Reserved program ids (Phase 0a hardening, 2026-07-20) — these three keep
+# their curated deterministic handlers/tools and `get_program_info` REFUSES
+# all of them (parent_tool_executor._get_program_info, reason
+# "use_specific_tool"). Previously this suffix only excluded "summer_camp",
+# so an active `sunday_school`/`adult_events` section was listed as a
+# "dynamic" program the LLM should call get_program_info on — a
+# self-contradiction (the tool would then refuse it). Single source of truth:
+# `app.domain.decision.models.ProgramId`, the same enum `parent_flow.py` and
+# `parent_tool_executor.py` derive their own `_HARDCODED_PROGRAM_IDS` from.
+_RESERVED_PROGRAM_IDS = frozenset(p.value for p in ProgramId)
+
+
 def _dynamic_programs_prompt_suffix() -> str:
-    """Tell the LLM the generic tools exist and list active non-camp programs.
+    """Tell the LLM the generic tools exist and list active non-reserved programs.
     Empty string when the flag is off or there are none (so flag-off prompt is unchanged)."""
     if not getattr(settings, "USE_DYNAMIC_PROGRAMS", False):
         return ""
@@ -66,7 +79,7 @@ def _dynamic_programs_prompt_suffix() -> str:
         from app.services import admin_config_service
         others = [
             s for s in admin_config_service.get_active_sections()
-            if s.get("id") != "summer_camp"
+            if s.get("id") not in _RESERVED_PROGRAM_IDS
         ]
     except Exception:
         return ""

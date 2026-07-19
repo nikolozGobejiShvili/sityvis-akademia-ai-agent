@@ -199,7 +199,19 @@ def get_section(section_id: str) -> dict[str, Any] | None:
 
 
 def get_active_sections() -> list[dict[str, Any]]:
-    return [s for s in load_sections() if s.get("status") == "active"]
+    """Return sections whose ``status`` is "active", whitespace/case-insensitive.
+
+    Phase 0a hardening (2026-07-20): an admin-saved status of ``"Active"`` or
+    ``" active "`` was silently excluded by the previous exact-match compare.
+    Shipped `sections.yaml` uses lowercase `active`/`coming_soon`, so behavior
+    for existing data is byte-identical — only case/whitespace VARIANTS of
+    "active" are newly included. Missing/empty status is NOT defaulted to
+    active (still excluded), matching the previous contract.
+    """
+    return [
+        s for s in load_sections()
+        if str(s.get("status") or "").strip().casefold() == "active"
+    ]
 
 
 def get_camp_status() -> str:
