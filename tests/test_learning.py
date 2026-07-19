@@ -182,3 +182,97 @@ def test_reset_clears_log(monkeypatch):
     assert lls.LOG_KEY in store
     lls.reset()
     assert lls.LOG_KEY not in store
+
+
+# -- PII mask boundary/form coverage (review fix: >=6-digit runs, not >=7) --
+
+def test_log_turn_masks_bare_six_digit_number(monkeypatch):
+    from app.services import learning_log_service as lls
+    _inmemory_learning_redis(monkeypatch)
+    lls.log_turn({
+        "ts": "2026-07-19T10:00:00Z",
+        "session_key": "facebook:P:s",
+        "segment": "PARENT",
+        "program_id": "",
+        "outcome": "answered",
+        "question": "კოდი 123456 დაიმახსოვრე",
+        "answer_preview": "მადლობა.",
+    })
+    records = lls.recent(50)
+    assert len(records) == 1
+    stored = records[0]
+    assert "123456" not in stored["question"]
+    assert "[ტელეფონი]" in stored["question"]
+
+
+def test_log_turn_does_not_mask_five_digit_price(monkeypatch):
+    from app.services import learning_log_service as lls
+    _inmemory_learning_redis(monkeypatch)
+    lls.log_turn({
+        "ts": "2026-07-19T10:00:00Z",
+        "session_key": "facebook:P:s",
+        "segment": "PARENT",
+        "program_id": "",
+        "outcome": "answered",
+        "question": "ფასი 21500",
+        "answer_preview": "დიახ.",
+    })
+    records = lls.recent(50)
+    assert len(records) == 1
+    stored = records[0]
+    assert "21500" in stored["question"]
+    assert "[ტელეფონი]" not in stored["question"]
+
+
+def test_log_turn_masks_spaced_phone_form(monkeypatch):
+    from app.services import learning_log_service as lls
+    _inmemory_learning_redis(monkeypatch)
+    lls.log_turn({
+        "ts": "2026-07-19T10:00:00Z",
+        "session_key": "facebook:P:s",
+        "segment": "PARENT",
+        "program_id": "",
+        "outcome": "answered",
+        "question": "დამირეკეთ 555 12 34 56",
+        "answer_preview": "კარგი.",
+    })
+    records = lls.recent(50)
+    assert len(records) == 1
+    stored = records[0]
+    assert "555 12 34 56" not in stored["question"]
+    assert "[ტელეფონი]" in stored["question"]
+
+
+def test_log_turn_masks_dashed_phone_form(monkeypatch):
+    from app.services import learning_log_service as lls
+    _inmemory_learning_redis(monkeypatch)
+    lls.log_turn({
+        "ts": "2026-07-19T10:00:00Z",
+        "session_key": "facebook:P:s",
+        "segment": "PARENT",
+        "program_id": "",
+        "outcome": "answered",
+        "question": "დამირეკეთ 555-12-34-56",
+        "answer_preview": "კარგი.",
+    })
+    records = lls.recent(50)
+    assert len(records) == 1
+    stored = records[0]
+    assert "555-12-34-56" not in stored["question"]
+    assert "[ტელეფონი]" in stored["question"]
+
+
+# -- classify_outcome priority coverage --------------------------------
+
+def test_classify_outcome_empty_beats_booked():
+    from app.reasoning.outcome_classifier import classify_outcome
+    conv = _conv(segment="PARENT")
+    booked_lead = _lead(calendly_booked=True)
+    assert classify_outcome(conv, booked_lead, "") == "empty"
+
+
+def test_classify_outcome_booked_beats_handed_off():
+    from app.reasoning.outcome_classifier import classify_outcome
+    conv = _conv(segment="PARENT")
+    lead = _lead(calendly_booked=True)
+    assert classify_outcome(conv, lead, "მადლობა.", manager_notified=True) == "booked"

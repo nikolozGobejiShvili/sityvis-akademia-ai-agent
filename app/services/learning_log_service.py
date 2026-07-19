@@ -29,8 +29,9 @@ LOG_KEY: str = "learninglog"
 # totals 6 or more digits — enough to catch a Georgian phone number
 # (9-digit local, or spaced/dashed groups like "555 12 34 56") without
 # touching short numbers like ages or prices. Defensive/simple by design:
-# a single \d[\d\s-]{5,}\d pattern, not a full phone-number grammar.
-_PHONE_LIKE_RE = re.compile(r"\d[\d\s-]{5,}\d")
+# a single \d[\d\s-]{4,}\d pattern (1 + 4 + 1 = 6 digits minimum), not a
+# full phone-number grammar.
+_PHONE_LIKE_RE = re.compile(r"\d[\d\s-]{4,}\d")
 _PII_MASK = "[ტელეფონი]"
 
 
