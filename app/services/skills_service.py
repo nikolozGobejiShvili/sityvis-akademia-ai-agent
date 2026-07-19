@@ -128,8 +128,14 @@ def select_skills(
             sk_seg = sk.get("segment") or "any"
             if sk_seg != "any" and sk_seg != seg:
                 continue
+            # Per-entry guard (review Important): a non-iterable `triggers` on
+            # ONE skill must not abort scoring for the whole batch. Mirrors
+            # approved_answers_service._count's isinstance guard.
+            raw_triggers = sk.get("triggers")
+            if not isinstance(raw_triggers, (list, tuple)):
+                raw_triggers = []
             score = sum(
-                1 for t in sk.get("triggers", [])
+                1 for t in raw_triggers
                 if isinstance(t, str) and len(t) >= 3 and t in low
             )
             if score >= 1:

@@ -152,3 +152,15 @@ def test_select_skills_never_raises(monkeypatch):
     monkeypatch.setattr(ss, "load_skills", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
     assert ss.select_skills("ძვირია", "PARENT") == []
     assert ss.select_skills(None, None) == []
+
+
+def test_select_skills_bad_triggers_does_not_drop_other_skills(monkeypatch):
+    # review Important: a malformed `triggers` on ONE skill must not abort
+    # scoring for the whole batch — other well-formed skills still match.
+    from app.services import skills_service as ss
+    monkeypatch.setattr(ss, "load_skills", lambda: [
+        {"id": "bad", "name": "B", "segment": "any", "status": "active",
+         "priority": 0, "triggers": 5, "body": "x"},
+        _mk_skill(id="good", triggers=["ძვირ"]),
+    ])
+    assert [s["id"] for s in ss.select_skills("ძვირია", "PARENT")] == ["good"]
