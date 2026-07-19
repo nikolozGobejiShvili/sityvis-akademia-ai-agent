@@ -79,6 +79,22 @@ BUSINESS_HOURS_PATH: Path = ADMIN_CONFIG_DIR / "business_hours.yaml"
 MANAGER_CONTACTS_PATH: Path = ADMIN_CONFIG_DIR / "manager_contacts.yaml"
 
 
+def _config_read_path(path: Path) -> Path:
+    """Overlay read (Phase 0b): return `path` if it exists; otherwise, when
+    using a volume override, fall back to the same-named repo-default file so
+    a fresh or misconfigured volume never yields empty config. Never raises."""
+    try:
+        if path.exists():
+            return path
+        if ADMIN_CONFIG_DIR != _DEFAULT_ADMIN_CONFIG_DIR:
+            default = _DEFAULT_ADMIN_CONFIG_DIR / path.name
+            if default.exists():
+                return default
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return path
+
+
 VALID_STATUSES = ("active", "hidden", "full", "coming_soon", "ended")
 # Camp (summer_camp) status values the live agent understands. "ended" (2026-07-01)
 # lets the operator turn the camp off after the last stream without a code change.
@@ -161,6 +177,7 @@ def _safe_load_yaml(path: Path) -> Any:
     belt-and-braces log line so an operator can confirm the right
     file version is being read.
     """
+    path = _config_read_path(path)
     if not path.exists():
         logger.info("[admin_config] %s not present — using defaults", path.name)
         return None
