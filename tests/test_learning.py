@@ -331,6 +331,9 @@ def test_process_message_logs_outcome_when_flag_on(monkeypatch):
     assert records[-1]["outcome"] == "answered"
     assert records[-1]["segment"] == "PARENT"
     assert records[-1]["session_key"] == "facebook:P1:u1"
+    # ts is spec-mandated (record shape {ts, session_key, segment, ...}); the
+    # caller is the sole source since log_turn does not stamp it.
+    assert records[-1]["ts"]
 
 
 def test_process_message_no_log_when_flag_off(monkeypatch):

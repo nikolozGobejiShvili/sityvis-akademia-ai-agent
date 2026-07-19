@@ -1155,6 +1155,7 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
                 manager_notified=manager_notified,
             )
             learning_log_service.log_turn({
+                "ts": datetime.utcnow().isoformat(),
                 "session_key": key,
                 "segment": getattr(conversation, "segment", "") or "",
                 "program_id": "",
