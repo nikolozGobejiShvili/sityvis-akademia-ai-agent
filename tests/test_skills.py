@@ -88,3 +88,67 @@ def test_load_skills_malformed_file_skipped(monkeypatch, tmp_path):
     monkeypatch.setattr(skills_service, "SKILLS_DIR", d)
     ids = {s["id"] for s in skills_service.load_skills()}
     assert "good" in ids  # the bad file must not crash the whole load
+
+
+# -- Task 3: select_skills matcher -----------------------------------------
+
+def _mk_skill(**kw):
+    base = {"id": "s", "name": "S", "segment": "PARENT", "status": "active",
+            "priority": 0, "triggers": ["ძვირ"], "body": "ტანი"}
+    base.update(kw)
+    return base
+
+
+def test_select_skills_trigger_and_segment_hit(monkeypatch):
+    from app.services import skills_service as ss
+    monkeypatch.setattr(ss, "load_skills", lambda: [_mk_skill(id="a", triggers=["ძვირ"])])
+    got = ss.select_skills("ეს ძვირია ცოტა", "PARENT")
+    assert [s["id"] for s in got] == ["a"]
+
+
+def test_select_skills_no_hit_returns_empty(monkeypatch):
+    from app.services import skills_service as ss
+    monkeypatch.setattr(ss, "load_skills", lambda: [_mk_skill(triggers=["ძვირ"])])
+    assert ss.select_skills("გამარჯობა", "PARENT") == []
+
+
+def test_select_skills_hidden_never_selected(monkeypatch):
+    from app.services import skills_service as ss
+    monkeypatch.setattr(ss, "load_skills", lambda: [_mk_skill(status="hidden", triggers=["ძვირ"])])
+    assert ss.select_skills("ძვირია", "PARENT") == []
+
+
+def test_select_skills_segment_mismatch_and_any(monkeypatch):
+    from app.services import skills_service as ss
+    monkeypatch.setattr(ss, "load_skills", lambda: [
+        _mk_skill(id="p", segment="PARENT", triggers=["ძვირ"]),
+        _mk_skill(id="a", segment="any", triggers=["ძვირ"]),
+        _mk_skill(id="d", segment="ADULT", triggers=["ძვირ"]),
+    ])
+    ids = {s["id"] for s in ss.select_skills("ძვირია", "PARENT")}
+    assert ids == {"p", "a"}  # ADULT-only excluded; "any" matches
+
+
+def test_select_skills_short_trigger_never_matches_alone(monkeypatch):
+    from app.services import skills_service as ss
+    monkeypatch.setattr(ss, "load_skills", lambda: [_mk_skill(triggers=["აბ"])])  # 2-char
+    assert ss.select_skills("აბგ დეფ", "PARENT") == []
+
+
+def test_select_skills_bounded_and_ranked(monkeypatch):
+    from app.services import skills_service as ss
+    monkeypatch.setattr(ss, "load_skills", lambda: [
+        _mk_skill(id="low", priority=1, triggers=["ძვირ"]),
+        _mk_skill(id="hi", priority=99, triggers=["ძვირ"]),
+        _mk_skill(id="two", priority=5, triggers=["ძვირ", "ფასი მაღალ"]),
+    ])
+    got = ss.select_skills("ძვირია და ფასი მაღალია", "PARENT", limit=2)
+    # "two" scores 2 (both triggers) → first; then higher-priority of the score-1 pair
+    assert [s["id"] for s in got] == ["two", "hi"]
+
+
+def test_select_skills_never_raises(monkeypatch):
+    from app.services import skills_service as ss
+    monkeypatch.setattr(ss, "load_skills", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert ss.select_skills("ძვირია", "PARENT") == []
+    assert ss.select_skills(None, None) == []

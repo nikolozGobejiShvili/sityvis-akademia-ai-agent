@@ -104,3 +104,38 @@ def load_skills() -> list[dict]:
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("[skills] load_skills failed: %s", exc)
         return []
+
+
+def select_skills(
+    message: str, segment: str, *, limit: int = DEFAULT_SKILL_LIMIT
+) -> list[dict]:
+    """Deterministically pick the most relevant ACTIVE skills for a turn.
+
+    Lowercase the message; among active skills whose segment matches ``segment``
+    or is ``"any"``, score by counting triggers (>=3 chars) that are substrings
+    of the message; keep score>=1; sort by (score, priority) descending; return
+    the top ``limit``. Never raises → [] on any error.
+    """
+    try:
+        low = (message or "").lower().strip()
+        if not low:
+            return []
+        seg = (segment or "").strip() or "any"
+        scored: list[tuple[int, int, dict]] = []
+        for sk in load_skills():
+            if sk.get("status") != "active":
+                continue
+            sk_seg = sk.get("segment") or "any"
+            if sk_seg != "any" and sk_seg != seg:
+                continue
+            score = sum(
+                1 for t in sk.get("triggers", [])
+                if isinstance(t, str) and len(t) >= 3 and t in low
+            )
+            if score >= 1:
+                scored.append((score, _safe_int(sk.get("priority"), 0), sk))
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        capped = max(0, int(limit)) if isinstance(limit, int) else DEFAULT_SKILL_LIMIT
+        return [sk for _, _, sk in scored[:capped]]
+    except Exception:  # pragma: no cover - defensive
+        return []
