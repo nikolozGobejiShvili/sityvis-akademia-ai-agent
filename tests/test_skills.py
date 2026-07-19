@@ -164,3 +164,57 @@ def test_select_skills_bad_triggers_does_not_drop_other_skills(monkeypatch):
         _mk_skill(id="good", triggers=["ძვირ"]),
     ])
     assert [s["id"] for s in ss.select_skills("ძვირია", "PARENT")] == ["good"]
+
+
+# -- Task 4: inject selected skills into _build_system_prompt --------------
+
+def _swap_flag(monkeypatch, **flags):
+    import dataclasses
+    from app import config
+    from app.agent.llm import parent_llm_engine as ple
+    swapped = dataclasses.replace(config.settings, **flags)
+    monkeypatch.setattr(ple, "settings", swapped)
+    return ple
+
+
+def test_skills_suffix_empty_when_flag_off(monkeypatch):
+    ple = _swap_flag(monkeypatch, USE_SKILLS=False)
+    assert ple._skills_prompt_suffix("ძვირია", "PARENT") == ""
+
+
+def test_skills_suffix_empty_when_no_match(monkeypatch):
+    ple = _swap_flag(monkeypatch, USE_SKILLS=True)
+    from app.services import skills_service
+    monkeypatch.setattr(skills_service, "select_skills", lambda m, s, **k: [])
+    assert ple._skills_prompt_suffix("გამარჯობა", "PARENT") == ""
+
+
+def test_skills_suffix_injects_selected_body(monkeypatch):
+    ple = _swap_flag(monkeypatch, USE_SKILLS=True)
+    from app.services import skills_service
+    monkeypatch.setattr(
+        skills_service, "select_skills",
+        lambda m, s, **k: [{"id": "x", "name": "ტესტ-უნარი", "body": "გამოიყენე X მიდგომა."}],
+    )
+    out = ple._skills_prompt_suffix("ძვირია", "PARENT")
+    assert "ტესტ-უნარი" in out
+    assert "გამოიყენე X მიდგომა." in out
+
+
+def test_build_system_prompt_byte_identical_when_flag_off(monkeypatch):
+    # With USE_SKILLS off, adding the message/segment args must not change output.
+    ple = _swap_flag(monkeypatch, USE_SKILLS=False)
+    assert ple._build_system_prompt("ძვირია", "PARENT") == ple._build_system_prompt()
+
+
+def test_build_system_prompt_appends_skill_when_on(monkeypatch):
+    ple = _swap_flag(monkeypatch, USE_SKILLS=True)
+    from app.services import skills_service
+    monkeypatch.setattr(
+        skills_service, "select_skills",
+        lambda m, s, **k: [{"id": "x", "name": "N", "body": " B-guidance."}],
+    )
+    base = ple._build_system_prompt()  # no message → suffix "" (empty message)
+    withskill = ple._build_system_prompt("ძვირია", "PARENT")
+    assert "B-guidance." in withskill
+    assert withskill.startswith(base)  # skills append at the end, base unchanged

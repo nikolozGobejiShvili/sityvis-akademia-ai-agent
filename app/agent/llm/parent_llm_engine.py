@@ -95,6 +95,29 @@ def _approved_answer_prompt_suffix() -> str:
     )
 
 
+def _skills_prompt_suffix(message: str = "", segment: str = "") -> str:
+    """Inject the situational SKILL.md capability pack(s) selected for this turn.
+    Empty string when USE_SKILLS is off OR nothing matches, so the flag-off (and
+    no-match) prompt is byte-identical. Never raises."""
+    if not getattr(settings, "USE_SKILLS", False):
+        return ""
+    try:
+        from app.services import skills_service
+        skills = skills_service.select_skills(message, segment)
+    except Exception:
+        return ""
+    blocks = "\n\n".join(
+        f"### {s.get('name')}\n{(s.get('body') or '').strip()}"
+        for s in skills if (s.get("body") or "").strip()
+    )
+    if not blocks.strip():
+        return ""
+    return (
+        "\n\n[სიტუაციური უნარები] ქვემოთ მოცემული სახელმძღვანელო(ები) "
+        "მიესადაგება ამ საუბარს — გამოიყენე მათი მიდგომა პასუხში:\n\n" + blocks
+    )
+
+
 def _trace_parent_llm_decision(**fields) -> None:
     try:
         from app.reasoning import conversation_trace as _trace
@@ -2040,7 +2063,7 @@ def run_parent_llm_turn(
     raises.
     """
     try:
-        system_prompt = _build_system_prompt()
+        system_prompt = _build_system_prompt(user_message, "PARENT")
     except Exception as exc:
         logger.exception(
             "[parent_llm_engine] system prompt assembly failed: %s", exc,
@@ -2229,7 +2252,7 @@ def _use_slim_prompts() -> bool:
     return bool(getattr(settings, "USE_SLIM_PROMPTS", False))
 
 
-def _build_system_prompt() -> str:
+def _build_system_prompt(message: str = "", segment: str = "") -> str:
     # Canonical Admin Config age band (5A-2 migration) — runtime prompt
     # context only; the `system_parent_v2.md` file is untouched. With the
     # shipped config the band stays 9–17, so the rendered prompt is identical.
@@ -2246,7 +2269,12 @@ def _build_system_prompt() -> str:
         age_min=age_min,
         age_max=age_max,
     )
-    return base_prompt + _dynamic_programs_prompt_suffix() + _approved_answer_prompt_suffix()
+    return (
+        base_prompt
+        + _dynamic_programs_prompt_suffix()
+        + _approved_answer_prompt_suffix()
+        + _skills_prompt_suffix(message, segment)
+    )
 
 
 def _build_slim_context(conversation, lead) -> tuple[str, str]:
