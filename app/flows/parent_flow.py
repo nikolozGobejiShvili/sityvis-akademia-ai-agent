@@ -18,6 +18,7 @@ from app.agent.llm.parent_reply_composer import (
 )
 from app.agent.services.knowledge_loader import load_knowledge
 from app.config import settings
+from app.domain.decision.models import ProgramId
 from app.flows.parent_turn_router import (
     contains_booking_confirmation,
     maybe_handle_analyzer_interrupt,
@@ -907,6 +908,30 @@ def handle(conversation: Conversation, message: str) -> str:
     return result
 
 
+# Dynamic Programs (Phase 2, Task 3) — single source of truth for the
+# hardcoded program ids that keep their curated deterministic handlers
+# (camp / Sunday School / adult events). Any OTHER active admin program the
+# matcher finds is a "dynamic" program and should reach the generic-tool LLM
+# engine instead of these Python interceptors.
+_HARDCODED_PROGRAM_IDS = frozenset(p.value for p in ProgramId)
+
+
+def _is_dynamic_program_turn(message: str) -> bool:
+    """True only when USE_DYNAMIC_PROGRAMS is on AND the message NAMES an active
+    admin program that is NOT one of the hardcoded ProgramId programs (which keep
+    their curated deterministic handlers). Flag off ⇒ False ⇒ interceptor chain
+    unchanged. Fail-closed on any error."""
+    if not getattr(settings, "USE_DYNAMIC_PROGRAMS", False):
+        return False
+    try:
+        from app.services import admin_config_service
+        from app.reasoning.dynamic_program_match import match_dynamic_program
+        match = match_dynamic_program(message, admin_config_service.get_active_sections())
+    except Exception:  # pragma: no cover - defensive
+        return False
+    return bool(match) and match.get("program_id") not in _HARDCODED_PROGRAM_IDS
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1302,6 +1327,18 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             ] = False
         except Exception:
             pass
+
+        # Dynamic Programs (Phase 2) — a turn that NAMES a non-hardcoded admin
+        # program goes straight to the generic-tool LLM engine, bypassing ALL
+        # camp/consultation deterministic interceptors below (which would answer
+        # with camp facts / eligibility). Placed first so even the early
+        # camp-content handlers (e.g. _maybe_handle_out_of_range_age) can't
+        # hijack it. Flag off / camp / adult / no-program-named ⇒ False ⇒ chain
+        # unchanged (byte-identical).
+        if _is_dynamic_program_turn(message):
+            return _sanitise_booking_confirmation(
+                conversation, _run_llm_engine_safely(conversation, message),
+            )
 
         # Reasoning Layer (Phase 1, 2026-06-23) — gated, DETERMINISTIC analyzer.
         # When USE_REASONING_LAYER is on, classify the turn into structured

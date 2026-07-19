@@ -68,3 +68,83 @@ def test_routing_prefers_dynamic_then_classifier(monkeypatch):
     # flag off ⇒ None
     monkeypatch.setattr(cs, "settings", dataclasses.replace(config.settings, USE_DYNAMIC_PROGRAMS=False))
     assert cs._match_active_program_segment("რობოტიკის კლუბი რა ღირს?") is None
+
+
+# Task 3 — interceptor bypass placed BEFORE the deterministic chain (gate 2).
+
+def test_is_dynamic_program_turn(monkeypatch):
+    import dataclasses
+    from app import config
+    from app.flows import parent_flow as pf
+    from app.services import admin_config_service
+    monkeypatch.setattr(admin_config_service, "get_active_sections",
+                        lambda: [_ROBOTICS, _CAMP, _ADULT])
+    monkeypatch.setattr(pf, "settings", dataclasses.replace(config.settings, USE_DYNAMIC_PROGRAMS=True))
+    assert pf._is_dynamic_program_turn("რობოტიკის კლუბი რა ღირს?") is True
+    assert pf._is_dynamic_program_turn("ბანაკი რა ღირს?") is False       # camp (hardcoded)
+    assert pf._is_dynamic_program_turn("მადლობა, არ მინდა") is False     # names no program
+    monkeypatch.setattr(pf, "settings", dataclasses.replace(config.settings, USE_DYNAMIC_PROGRAMS=False))
+    assert pf._is_dynamic_program_turn("რობოტიკის კლუბი რა ღირს?") is False
+
+
+def _dyn_engine_conv(monkeypatch, msg_program_only=True):
+    import dataclasses
+    from app import config
+    from app.flows import parent_flow as pf
+    from app.services import admin_config_service
+    from app.models.conversation import Conversation
+    monkeypatch.setattr(admin_config_service, "get_active_sections", lambda: [_ROBOTICS])
+    monkeypatch.setattr(pf, "settings", dataclasses.replace(
+        config.settings, USE_DYNAMIC_PROGRAMS=True, USE_PARENT_LLM_ENGINE=True))
+    monkeypatch.setattr(pf, "_run_llm_engine_safely", lambda *a, **k: "ENGINE_ANSWER")
+    # Pin camp registration OPEN. `_maybe_handle_final_camp_public_policy`
+    # (parent_flow.py:304, called ~line 1003 — BEFORE the `engine_flag` gate
+    # and thus structurally outside this guard's reach) treats ANY generic
+    # price question ("ღირს"/"ფასი"/...) as a CAMP price question once
+    # registration is CLOSED, because its camp-intent check
+    # (`_is_camp_price_intent` / `_CAMP_PRICE_MARKERS`) has no camp-keyword
+    # requirement and only excludes Sunday-School/adult-event vocabulary —
+    # not other dynamic programs. That is a genuine pre-gate hijack outside
+    # Task 3's scope (see p2-task-3-report.md); pinning registration OPEN
+    # here isolates this test suite to the gate-2 guard under test.
+    monkeypatch.setattr(pf, "_is_camp_registration_open", lambda: True)
+    # sentinels: NO camp-content interceptor may answer a dynamic-program turn
+    # (bound via a default arg so each sentinel reports its OWN name, not the
+    # last value of the loop variable via late-binding closure).
+    for name in ("_maybe_handle_repeat_camp_price", "_maybe_handle_out_of_range_age",
+                 "_maybe_handle_camp_intro", "_maybe_handle_camp_topic_facts"):
+        monkeypatch.setattr(pf, name, lambda *a, _n=name, **k: f"CAMP:{_n}")
+    return pf, Conversation(sender_id="t", platform="facebook", segment="PARENT")
+
+
+def test_dynamic_price_reaches_engine(monkeypatch):
+    pf, conv = _dyn_engine_conv(monkeypatch)
+    out = pf._handle_core(conv, "რობოტიკის კლუბი რა ღირს?")
+    assert out == "ENGINE_ANSWER" and "CAMP" not in out
+
+
+def test_dynamic_age_bearing_not_hijacked_by_camp_eligibility(monkeypatch):
+    # the v1 guard (below out_of_range_age) would have failed this. The message
+    # is NOT the conversation's first turn (a bot turn is seeded) so the
+    # topic-agnostic first-turn brand welcome (`_maybe_static_welcome`, which
+    # fires on ANY first message regardless of topic — see
+    # p2-task-3-report.md "pre-gate handler" note) does not interfere with
+    # this gate-2 regression guard.
+    pf, conv = _dyn_engine_conv(monkeypatch)
+    conv.history = [{"role": "assistant", "content": "თქვენი შვილი რამდენი წლისაა?"}]
+    out = pf._handle_core(conv, "ჩემი 5 წლის ბავშვისთვის რობოტიკის კლუბი?")
+    assert out == "ENGINE_ANSWER" and "CAMP" not in out
+
+
+def test_camp_price_still_uses_camp_interceptor(monkeypatch):
+    import dataclasses
+    from app import config
+    from app.flows import parent_flow as pf
+    from app.services import admin_config_service
+    from app.models.conversation import Conversation
+    monkeypatch.setattr(admin_config_service, "get_active_sections", lambda: [_CAMP])
+    monkeypatch.setattr(pf, "settings", dataclasses.replace(
+        config.settings, USE_DYNAMIC_PROGRAMS=True, USE_PARENT_LLM_ENGINE=True))
+    monkeypatch.setattr(pf, "_maybe_handle_repeat_camp_price", lambda *a, **k: "CAMP_PRICE")
+    conv = Conversation(sender_id="t", platform="facebook", segment="PARENT")
+    assert pf._handle_core(conv, "ბანაკი რა ღირს?") == "CAMP_PRICE"   # guard False for camp
