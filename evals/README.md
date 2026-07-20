@@ -107,9 +107,14 @@ decision-quality reference. Two layers:
 - **Layer B (paid, occasional, operator-gated)** — `evals/naturalness.py`:
   a Claude judge (temp=0, N-run median) scoring 4 binary criteria (reads like
   a human consultant / no canned-menu phrasing / varied wording / warm tone)
-  over **advisory-domain turns only**. Runs only on
-  `python -m evals.run_evals --llm --judge` (real OpenAI + Anthropic calls) —
-  never in the free/offline path.
+  over **advisory-domain turns only**. It is a **standalone, tested grader**
+  (`evals.naturalness.grade_naturalness(context, response)`) — **not yet wired
+  into the `--judge` run** (harness wiring was deliberately deferred; see the
+  Phase-1 plan). Today it is invoked MANUALLY by the operator over advisory-domain
+  turns; `phase1_baseline.json`'s `naturalness` stays `null` until that manual
+  pass fills it. It NEVER runs in the free/offline path. (A follow-up may wire it
+  into `--judge` so the number fills automatically — until then the README does
+  not claim automatic integration.)
 
 ### The gate rule (binding on Phases 2–4)
 

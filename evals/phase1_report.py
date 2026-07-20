@@ -239,7 +239,14 @@ def _compute_interception_and_footprint() -> tuple[dict, dict]:
                  "tests/corpus/test_live_conversation_corpus.py, each driven "
                  "as a fresh PARENT/START turn via "
                  "evals.interception.answered_by_message (free, read-only, "
-                 "engine-spied — no live OpenAI/Anthropic call)."),
+                 "engine-spied — no live OpenAI/Anthropic call). CAVEAT: this is "
+                 "measured over FRESH first turns, which INFLATES the intercept "
+                 "rate — the first-turn static welcome + (a live date-bomb) the "
+                 "generic camp-registration-closed fallback both short-circuit a "
+                 "brand-new turn because all 2026 camp streams have already "
+                 "started. A real multi-turn conversation reaches the engine "
+                 "more often. Read the DIRECTION (most turns are intercepted), "
+                 "not the exact percentage."),
     }
 
     try:
