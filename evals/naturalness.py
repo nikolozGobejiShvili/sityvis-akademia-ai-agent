@@ -116,6 +116,11 @@ def grade_naturalness(context: str, response: str, *, runs: int = 3) -> dict[str
     `score=None` is an explicit SKIP (judge SDK/key unavailable, or every run
     failed) — NEVER a fake 0. Never raises.
     """
+    # runs<=0 is a cost-control "disable" knob: 0 runs must mean 0 paid calls
+    # (review Important). Skip BEFORE touching the judge.
+    if runs <= 0:
+        return {"score": None, "issues": [], "runs": 0}
+
     try:
         available, _reason = _judge_available()
     except Exception:
@@ -124,7 +129,7 @@ def grade_naturalness(context: str, response: str, *, runs: int = 3) -> dict[str
         return {"score": None, "issues": [], "runs": 0}
 
     run_results: list[list[tuple[str, bool, str]]] = []
-    for _ in range(max(1, runs)):
+    for _ in range(runs):
         try:
             run_results.append(_judge_naturalness_once(context, response))
         except Exception:

@@ -208,3 +208,32 @@ def test_grade_naturalness_unavailable_is_skip(monkeypatch):
     monkeypatch.setattr(naturalness, "_judge_available", lambda: (False, "no key"))
 
     assert naturalness.grade_naturalness("c", "r")["score"] is None
+
+
+def test_grade_naturalness_median_across_varying_runs(monkeypatch):
+    # review Minor: prove MEDIAN aggregation (not first/last-run) with per-call
+    # VARYING scores. Scores [2,3,4] -> median 3 (a last-run bug would give 4).
+    from evals import naturalness
+    seq = iter([
+        [("a", True, ""), ("b", True, ""), ("c", False, ""), ("d", False, "")],   # 2
+        [("a", True, ""), ("b", True, ""), ("c", True, ""), ("d", False, "")],    # 3
+        [("a", True, ""), ("b", True, ""), ("c", True, ""), ("d", True, "")],     # 4
+    ])
+    monkeypatch.setattr(naturalness, "_judge_available", lambda: (True, ""))
+    monkeypatch.setattr(naturalness, "_judge_naturalness_once", lambda c, r: next(seq))
+    out = naturalness.grade_naturalness("ctx", "resp", runs=3)
+    assert out["score"] == 3  # median of {2,3,4}, NOT 4 (last) or 2 (first)
+
+
+def test_grade_naturalness_runs_zero_makes_no_call(monkeypatch):
+    # review Important: runs<=0 must skip with zero paid calls.
+    from evals import naturalness
+    called = {"n": 0}
+    def _boom(c, r):
+        called["n"] += 1
+        raise AssertionError("must not be called when runs<=0")
+    monkeypatch.setattr(naturalness, "_judge_available", lambda: (True, ""))
+    monkeypatch.setattr(naturalness, "_judge_naturalness_once", _boom)
+    out = naturalness.grade_naturalness("ctx", "resp", runs=0)
+    assert out == {"score": None, "issues": [], "runs": 0}
+    assert called["n"] == 0
