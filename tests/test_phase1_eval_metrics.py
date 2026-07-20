@@ -173,3 +173,38 @@ def test_botlike_proxy_score_empty_list_returns_zeros_never_raises():
 
     s = botlike_proxy.botlike_proxy_score([])
     assert s == {"avg_footprint": 0.0, "canned_menu_rate": 0.0, "n": 0}
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — NATURALNESS judge (`evals/naturalness.py`)
+#
+# Mocked/offline — `_judge_naturalness_once` and `_judge_available` are
+# monkeypatched so these run free, deterministic, with no live Claude call.
+# See the module docstring for the temp=0 + N-run-median rationale (fix C1)
+# and the score=None-on-unavailable (skip, never fake-0) contract.
+# ---------------------------------------------------------------------------
+
+
+def test_grade_naturalness_majority_of_runs(monkeypatch):
+    from evals import naturalness
+
+    calls = {"n": 0}
+
+    def _one(ctx, resp):
+        calls["n"] += 1
+        return [("a", True, ""), ("b", True, ""), ("c", True, ""), ("d", False, "flat")]
+
+    monkeypatch.setattr(naturalness, "_judge_naturalness_once", _one)
+    monkeypatch.setattr(naturalness, "_judge_available", lambda: (True, ""))
+
+    out = naturalness.grade_naturalness("ctx", "resp", runs=3)
+
+    assert out["score"] == 3 and calls["n"] == 3
+
+
+def test_grade_naturalness_unavailable_is_skip(monkeypatch):
+    from evals import naturalness
+
+    monkeypatch.setattr(naturalness, "_judge_available", lambda: (False, "no key"))
+
+    assert naturalness.grade_naturalness("c", "r")["score"] is None
