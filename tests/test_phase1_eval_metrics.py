@@ -237,3 +237,28 @@ def test_grade_naturalness_runs_zero_makes_no_call(monkeypatch):
     out = naturalness.grade_naturalness("ctx", "resp", runs=0)
     assert out == {"score": None, "issues": [], "runs": 0}
     assert called["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — per-domain tags + guardrail-vs-advisory coverage cases
+# (`evals/cases.py`)
+#
+# `EvalCase` (defined in evals/harness.py) is a plain, non-frozen, non-slotted
+# dataclass with no `domain` field. Task 4 does not touch harness.py, so
+# `evals/cases.py` tags cases by assigning `case.domain = "..."` as an ordinary
+# post-construction instance attribute (see `_DOMAIN_TAGS` at the bottom of
+# that file) — readable via `getattr(case, "domain", None)` exactly like a
+# real dataclass field. This smoke test is the one named in the Task 4 brief.
+# ---------------------------------------------------------------------------
+
+
+def test_domain_coverage_present():
+    from evals import cases
+
+    doms = set()
+    for c in cases.CASES:
+        d = getattr(c, "domain", None) if not isinstance(c, dict) else c.get("domain")
+        if d:
+            doms.add(d)
+    for d in ("objection", "camp_topic", "program_info", "booking_reliability", "contact_capture"):
+        assert d in doms, f"missing domain coverage: {d}"

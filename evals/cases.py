@@ -614,6 +614,130 @@ def _q10_unanswerable_specific(h):
         forbid_any=("ოთახი 1", "კორპუს", "ოთახ ნომერ"))
 
 
+# ════════════════════════════ DOMAIN COVERAGE (Task 4) ════════════════════════
+# New cases for the 5 conversational domains named in the Task 4 brief. Advisory
+# domains (objection / camp_topic / program_info) use the SAME require_any /
+# forbid_any full_turn mechanism as the existing U/Q cases (naturalness is
+# graded separately by the Task 3 judge over every captured reply). GUARDRAIL
+# domains (booking_reliability / contact_capture) are deterministic and check
+# ONLY reliability/grounding — never a wording/naturalness assertion — mirroring
+# the existing Q5 / R4 / E4 style. Domain tags themselves are applied below the
+# CASES list (see _DOMAIN_TAGS) so this section adds NO new case mechanism.
+
+# ── objection (advisory) ──
+def _ob1_budget_objection(h):
+    return _run_full_turn(h,
+        seed=dict(segment="PARENT", state="ASK_CHALLENGE", child_age="13",
+                  history=[{"role": "assistant", "content": "ბანაკის ღირებულებაა 2150 ლარი."}]),
+        message="ჩვენს ბიუჯეტს სცდება ეს თანხა, ფასდაკლება არ გაქვთ?",
+        require_any=("განვადება", "გადახდის", "ღირებულება", "შედის", "რას შეიცავს"),
+        forbid_any=("50%", "100%"))
+
+
+def _ob2_hesitation_no_pressure(h):
+    return _run_full_turn(h,
+        seed=dict(segment="PARENT", state="OFFER_BOOKING", child_age="12",
+                  history=[{"role": "assistant", "content": "კონსულტაციაზე ჩაგწერთ?"}]),
+        message="ჯერ არ ვიცი, მეუღლესთან უნდა გავიაზრო",
+        require_any=("კარგ", "მოგვიანებით", "ნებისმიერ", "დაგვიკავშირ", "შემოგწერ"),
+        forbid_any=("დღესვე", "ბოლო ადგილ", "აუცილებლად ახლავე"))
+
+
+# ── camp_topic (advisory) — deterministic, same idiom as U6 / Q1 / Q4 ──
+def _ct1_safety_supervision(h):
+    from app.reasoning import camp_topic_facts as ctf
+    out = ctf.resolve_camp_answer("ღამის განმავლობაში ვინ უყურებს ბავშვებს, დაცული არიან?")
+    return CaseOutcome([
+        chk("night-safety concern → safety block (24/7 + video monitoring)",
+            bool(out) and "24/7" in out and "ვიდეომონიტორ" in out,
+            "24/7 + ვიდეომონიტორინგი", (out or "None")[:80]),
+        chk("answered directly, no unknown-detail manager defer needed",
+            bool(out) and "მენეჯერ" not in out, "self-contained safety answer", (out or "None")[:80]),
+    ])
+
+
+def _ct2_food_allergy(h):
+    from app.reasoning import camp_topic_facts as ctf
+    out = ctf.resolve_camp_answer("ბავშვს ალერგია აქვს საკვებზე, კვება როგორ იმართება?")
+    return CaseOutcome([
+        chk("food-allergy concern → food block, names the allergy",
+            bool(out) and "ალერგია" in out, "food block mentions allergy", (out or "None")[:80]),
+        chk("individual detail honestly deferred to manager, not invented",
+            bool(out) and "მენეჯერ" in out, "manager clarification offered", (out or "None")[:80]),
+    ])
+
+
+# ── program_info (advisory) — a non-camp dynamic program question ──
+def _pi1_sunday_school_status(h):
+    from app.flows import parent_flow as pf
+    out = pf._render_sunday_school_answer()
+    return CaseOutcome([
+        chk("Sunday-School answer is non-empty and topic-grounded",
+            bool(out) and "საკვირაო სკოლ" in out, "non-empty, names საკვირაო სკოლა", (out or "None")[:80]),
+        chk("never mixes the camp price into a different program's answer",
+            "2150" not in (out or ""), "no camp price literal", (out or "None")[:80]),
+    ])
+
+
+def _pi2_other_programs(h):
+    return _run_full_turn(h,
+        seed=dict(segment="PARENT", state="START"),
+        message="ბანაკის გარდა კიდევ რა პროგრამები გაქვთ?",
+        require_any=("ღონისძიება", "ზრდასრულ", "კულტურულ", "საკვირაო"),
+        forbid_any=("2150",))
+
+
+# ── booking_reliability (GUARDRAIL — reliability/grounding ONLY) ──
+def _br1_fake_booking_guard(h):
+    from app.flows import parent_flow as pf
+    conv = h.seed(segment="PARENT", state="ASK_CHALLENGE", child_age="14")
+    fake = "კონსულტაცია ხვალ 14:00 საათზე ჩაგინიშნეთ."
+    out = pf._sanitise_booking_confirmation(conv, fake)
+    return CaseOutcome([
+        chk("confirmation WITHOUT tool success is replaced (no false booking claim)",
+            out != fake and "ვერ დავადასტურე" in out, "safe fallback, no false confirm", out[:90]),
+        chk("hallucinated confirmation stem is stripped from the reply",
+            "ჩაგინიშნეთ" not in out, "confirmation stem removed", out[:90]),
+    ])
+
+
+def _br2_admin_price_not_hardcoded(h):
+    from app.services import admin_config_service as acs
+    p_default = acs.parse_price_gel("2150")
+    p_changed = acs.parse_price_gel("2600")
+    return CaseOutcome([
+        chk("parses the current admin price text", p_default == 2150, "2150", p_default),
+        chk("price pipeline reflects a DIFFERENT admin price, not stuck at 2150",
+            p_changed == 2600, "2600 (tracks admin edit, not hardcoded)", p_changed),
+    ])
+
+
+# ── contact_capture (GUARDRAIL — reliability/grounding ONLY) ──
+def _cc1_filler_word_not_name(h):
+    from app.flows.parent_flow import _parse_name_phone
+    name1, phone1 = _parse_name_phone("კაი 595999733")
+    name2, phone2 = _parse_name_phone("დიახ 595999733")
+    return CaseOutcome([
+        chk("'კაი' filler NOT stored as the parent's name", name1 != "კაი", "not 'კაი'", repr(name1)),
+        chk("'დიახ' confirmation NOT stored as the parent's name", name2 != "დიახ", "not 'დიახ'", repr(name2)),
+        chk("phone still captured despite the filler prefix",
+            phone1 == "595999733" and phone2 == "595999733", "595999733 (both)",
+            f"{phone1!r} / {phone2!r}"),
+    ])
+
+
+def _cc2_valid_phone_formats(h):
+    from app.flows.parent_flow import _parse_name_phone
+    name1, phone1 = _parse_name_phone("ნინო 595-999-733")
+    name2, phone2 = _parse_name_phone("ლიზი 595 999 733")
+    return CaseOutcome([
+        chk("dashed phone captured as a clean 9-digit number", phone1 == "595999733", "595999733", repr(phone1)),
+        chk("spaced phone captured as a clean 9-digit number", phone2 == "595999733", "595999733", repr(phone2)),
+        chk("real name preserved alongside the captured phone",
+            name1 == "ნინო" and name2 == "ლიზი", "ნინო / ლიზი", f"{name1!r} / {name2!r}"),
+    ])
+
+
 # ════════════════════════════ REGISTRY ════════════════════════════
 CASES = [
     EvalCase("U1", "understanding", "free-form camp intent → continue flow, not menu",
@@ -729,4 +853,82 @@ CASES = [
              "adversarial — anxious", _q9_anxious_parent, stochastic=True),
     EvalCase("Q10", "response_quality", "unanswerable specific → defer, no invention",
              "adversarial — no-invention", _q10_unanswerable_specific, stochastic=True),
+
+    # ── domain coverage expansion (Task 4: objection / camp_topic / program_info
+    #    / booking_reliability GUARDRAIL / contact_capture GUARDRAIL) ──
+    EvalCase("OB1", "response_quality", "budget objection → value/payment framing",
+             "Task 4 — objection domain", _ob1_budget_objection, stochastic=True),
+    EvalCase("OB2", "response_quality", "soft hesitation → patient close, no pressure wording",
+             "Task 4 — objection domain", _ob2_hesitation_no_pressure, stochastic=True),
+    EvalCase("CT1", "response_quality", "night-safety/supervision concern → safety block",
+             "Task 4 — camp_topic domain", _ct1_safety_supervision),
+    EvalCase("CT2", "response_quality", "food allergy concern → food block, honest defer",
+             "Task 4 — camp_topic domain", _ct2_food_allergy),
+    EvalCase("PI1", "understanding", "Sunday School status (non-camp dynamic program)",
+             "Task 4 — program_info domain", _pi1_sunday_school_status),
+    EvalCase("PI2", "understanding", "non-camp program discovery question",
+             "Task 4 — program_info domain", _pi2_other_programs, stochastic=True),
+    EvalCase("BR1", "routing", "GUARDRAIL: never confirm booking without tool success",
+             "Task 4 — booking_reliability domain", _br1_fake_booking_guard),
+    EvalCase("BR2", "extraction", "GUARDRAIL: admin price sourced dynamically, not hardcoded",
+             "Task 4 — booking_reliability domain", _br2_admin_price_not_hardcoded),
+    EvalCase("CC1", "extraction", "GUARDRAIL: filler word never stored as a name",
+             "Task 4 — contact_capture domain", _cc1_filler_word_not_name),
+    EvalCase("CC2", "extraction", "GUARDRAIL: valid phone captured across formats",
+             "Task 4 — contact_capture domain", _cc2_valid_phone_formats),
 ]
+
+
+# ════════════════════════════ DOMAIN TAGS (Task 4) ═════════════════════════════
+# `EvalCase` (defined in evals/harness.py) has no `domain` field of its own, and
+# Task 4 deliberately does NOT touch harness.py — only evals/cases.py and the
+# Task 4 test file may change. `EvalCase` is a plain dataclass (not frozen, no
+# `__slots__`), so assigning `case.domain = "..."` after construction is a safe,
+# ordinary instance attribute — `getattr(case, "domain", None)` (the accessor
+# the Task 4 smoke test uses) reads it exactly like a real field. Every case NOT
+# listed in `_DOMAIN_TAGS` keeps `domain == ""` (no coverage claim), so this is
+# fully additive and 100% backward compatible with every pre-existing case.
+#
+# GUARDRAIL domains (booking_reliability, contact_capture) are scored on
+# reliability/grounding only; the other three (objection, camp_topic,
+# program_info) are advisory and scored on naturalness+correctness. This tag is
+# purely a grouping label for later per-domain aggregation — it changes no
+# case's checks, dimension, or stochastic flag.
+#
+# Existing cases tagged here (fix M1 — a representative sample, not only the 10
+# new ones above):
+#   objection            U4, U7, U11, Q2, Q8       (decline/price-pivot + price
+#                                                    objection full_turn cases)
+#   camp_topic            U2, U6, Q1, Q4, Q9         (parent-child contact,
+#                                                    gadgets, room-occupancy,
+#                                                    medical, anxious-safety)
+#   program_info          U5, R5                     (Sunday School intent,
+#                                                    adult-event discovery)
+#   booking_reliability    Q5, R4, R7, R10, R11        (verification re-check +
+#                                                    every forbid_tool=
+#                                                    book_consultation case)
+#   contact_capture        E4, E6, R6                 (name-vs-confirmation-token,
+#                                                    multi-phone, under-age
+#                                                    never-a-name)
+_DOMAIN_TAGS: dict[str, str] = {
+    # -- objection (advisory) --
+    "U4": "objection", "U7": "objection", "U11": "objection",
+    "Q2": "objection", "Q8": "objection",
+    "OB1": "objection", "OB2": "objection",
+    # -- camp_topic (advisory) --
+    "U2": "camp_topic", "U6": "camp_topic",
+    "Q1": "camp_topic", "Q4": "camp_topic", "Q9": "camp_topic",
+    "CT1": "camp_topic", "CT2": "camp_topic",
+    # -- program_info (advisory) --
+    "U5": "program_info", "R5": "program_info",
+    "PI1": "program_info", "PI2": "program_info",
+    # -- booking_reliability (GUARDRAIL — reliability only, no naturalness) --
+    "Q5": "booking_reliability", "R4": "booking_reliability",
+    "R7": "booking_reliability", "R10": "booking_reliability", "R11": "booking_reliability",
+    "BR1": "booking_reliability", "BR2": "booking_reliability",
+    # -- contact_capture (GUARDRAIL — reliability only, no naturalness) --
+    "E4": "contact_capture", "E6": "contact_capture", "R6": "contact_capture",
+    "CC1": "contact_capture", "CC2": "contact_capture",
+}
+for _case in CASES:
+    _case.domain = _DOMAIN_TAGS.get(_case.id, "")
