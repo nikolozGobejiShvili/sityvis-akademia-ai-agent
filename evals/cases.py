@@ -702,14 +702,27 @@ def _br1_fake_booking_guard(h):
 
 
 def _br2_admin_price_not_hardcoded(h):
+    # Review Important: guard the REAL pipeline, not the leaf parser. The
+    # historical bug (CLAUDE.md "stale price_gel: 2150") is price_gel getting
+    # stuck at a hardcoded value while the operator's price_text changed. So
+    # assert the numeric price the agent quotes (get_camp_facts()['price_gel'])
+    # is DERIVED from the operator's price_text field, not a constant.
     from app.services import admin_config_service as acs
-    p_default = acs.parse_price_gel("2150")
-    p_changed = acs.parse_price_gel("2600")
-    return CaseOutcome([
-        chk("parses the current admin price text", p_default == 2150, "2150", p_default),
-        chk("price pipeline reflects a DIFFERENT admin price, not stuck at 2150",
-            p_changed == 2600, "2600 (tracks admin edit, not hardcoded)", p_changed),
-    ])
+    facts = acs.get_camp_facts()
+    price_text = str(facts.get("price_text") or "").strip()
+    price_gel = facts.get("price_gel")
+    checks = [
+        chk("get_camp_facts() exposes a numeric camp price",
+            isinstance(price_gel, int) and price_gel > 0,
+            "positive int price_gel", repr(price_gel)),
+    ]
+    if price_text:
+        checks.append(chk(
+            "price_gel TRACKS the operator's price_text (not stuck at a hardcode)",
+            price_gel == acs.parse_price_gel(price_text),
+            f"price_gel == parse_price_gel({price_text!r})",
+            f"price_gel={price_gel!r} vs parse('{price_text}')={acs.parse_price_gel(price_text)!r}"))
+    return CaseOutcome(checks)
 
 
 # ── contact_capture (GUARDRAIL — reliability/grounding ONLY) ──
@@ -927,7 +940,10 @@ _DOMAIN_TAGS: dict[str, str] = {
     "R7": "booking_reliability", "R10": "booking_reliability", "R11": "booking_reliability",
     "BR1": "booking_reliability", "BR2": "booking_reliability",
     # -- contact_capture (GUARDRAIL — reliability only, no naturalness) --
-    "E4": "contact_capture", "E6": "contact_capture", "R6": "contact_capture",
+    "E4": "contact_capture", "E6": "contact_capture",
+    # R6 re-homed (review Minor): its checks are eligibility + no-booking on an
+    # under-age disclosure — a booking_reliability guard, not name-capture.
+    "R6": "booking_reliability",
     "CC1": "contact_capture", "CC2": "contact_capture",
 }
 for _case in CASES:
