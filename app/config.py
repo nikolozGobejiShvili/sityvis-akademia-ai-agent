@@ -378,6 +378,11 @@ class Settings:
     # capability packs by situation and inject them into the PARENT system
     # prompt. OFF ⇒ no selection, suffix "", system prompt byte-identical.
     USE_SKILLS: bool = False
+    # Reasoning loop (Phase 2, 2026-07): analyze→ground→answer→reflect in the
+    # PARENT engine — the model plans, grounds only needed facts, then verifies
+    # its answer's facts (REFLECT). OFF ⇒ engine path byte-identical. Distinct
+    # from USE_REASONING_LAYER (the Phase-1 deterministic router-tie-break).
+    USE_REASONING_PASS: bool = False
     # P3-C / COMMENT FLOW PATCH 1 — public comment reply gate.
     # When False (default), the agent SKIPS the public Facebook /
     # Instagram comment reply (`reply_to_comment`) entirely and goes
@@ -556,6 +561,7 @@ class Settings:
             USE_LEAD_MEMORY=_parse_bool_optional("USE_LEAD_MEMORY", False),
             USE_LEARNING=_parse_bool_optional("USE_LEARNING", False),
             USE_SKILLS=_parse_bool_optional("USE_SKILLS", False),
+            USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
             ENABLE_PUBLIC_COMMENT_REPLY=_parse_bool_optional(
                 "ENABLE_PUBLIC_COMMENT_REPLY", False,
             ),
