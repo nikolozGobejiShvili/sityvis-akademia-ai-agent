@@ -118,3 +118,58 @@ def test_guarded_turn_spies_adult_engine_for_readonly():
     # restored after the guard exits
     adult2 = interception._resolve(interception._ADULT_ENGINE_MODULE)
     assert getattr(adult2, interception._ADULT_ENGINE_ATTR).__name__ != "_adult_spy"
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — canned/botlike-footprint proxy (`evals/botlike_proxy.py`)
+#
+# FREE, deterministic, no-API signal. See the module docstring for the
+# marker-source rationale (the static PARENT welcome menu + a curated,
+# stable subset of `parent_llm_engine.FORBIDDEN_PHRASE_REPLACEMENTS`'
+# right-hand-side values). These two tests are the ones named in the Task 2
+# brief; the "natural" reply below was checked against the full curated
+# marker list to confirm it is genuinely free of every chosen marker.
+# ---------------------------------------------------------------------------
+
+
+def test_canned_footprint_flags_menu_and_stock():
+    from evals import botlike_proxy
+
+    fp = botlike_proxy.canned_footprint("ბანაკი თუ ზრდასრულთა ღონისძიება?")  # menu-like
+    assert fp["footprint"] >= 1
+    assert fp["canned_menu"] is True
+
+    natural = botlike_proxy.canned_footprint(
+        "რა თქმა უნდა, სიამოვნებით მოგიყვებით — რა გაინტერესებთ ბანაკზე?",
+    )
+    assert natural["footprint"] == 0
+    assert natural["canned_menu"] is False
+    assert natural["sanitizer_hits"] == 0
+    assert natural["stock_phrase_hits"] == 0
+
+
+def test_canned_footprint_handles_none_and_empty_without_raising():
+    from evals import botlike_proxy
+
+    for bad in (None, ""):
+        fp = botlike_proxy.canned_footprint(bad)
+        assert fp == {
+            "sanitizer_hits": 0,
+            "canned_menu": False,
+            "stock_phrase_hits": 0,
+            "footprint": 0,
+        }
+
+
+def test_botlike_proxy_score_aggregates():
+    from evals import botlike_proxy
+
+    s = botlike_proxy.botlike_proxy_score(["ბანაკი თუ ღონისძიება?", "სუფთა ბუნებრივი პასუხი"])
+    assert 0.0 <= s["canned_menu_rate"] <= 1.0 and s["n"] == 2
+
+
+def test_botlike_proxy_score_empty_list_returns_zeros_never_raises():
+    from evals import botlike_proxy
+
+    s = botlike_proxy.botlike_proxy_score([])
+    assert s == {"avg_footprint": 0.0, "canned_menu_rate": 0.0, "n": 0}
