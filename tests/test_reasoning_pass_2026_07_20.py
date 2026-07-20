@@ -143,3 +143,14 @@ def test_analyze_for_engine_coerces_unknown_fact_and_tool_values(monkeypatch):
     assert result["needed_facts"] == ["price", "age"]
     # "nonexistent" is not in the provided tool_names — coerced to None.
     assert result["suggested_tool"] is None
+
+
+def test_analyze_for_engine_should_greet_string_false_is_false(monkeypatch):
+    # review Minor: a malformed string "false" must NOT truthy-coerce to True.
+    _mock_reasoning_llm(monkeypatch, _valid_reasoning_json(should_greet="false"))
+    result = analyzer.analyze_for_engine(
+        user_message="გამარჯობა", lead=_reasoning_lead(),
+        conversation=_reasoning_conversation(),
+        knowledge_keys=["camp_2026"], tool_names=["get_camp_info"],
+    )
+    assert result is not None and result["should_greet"] is False

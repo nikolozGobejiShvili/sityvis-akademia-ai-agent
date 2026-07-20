@@ -528,7 +528,9 @@ def _coerce_reasoning_result(
         "suggested_tool": _coerce_reasoning_suggested_tool(
             payload.get("suggested_tool"), tool_names=tool_names,
         ),
-        "should_greet": bool(payload.get("should_greet", False)),
+        # Only a real JSON boolean counts as True — a malformed string
+        # "should_greet": "false" must NOT truthy-coerce to True (review Minor).
+        "should_greet": payload.get("should_greet") is True,
         "plan": _coerce_reasoning_plan(payload.get("plan")),
     }
 
