@@ -401,3 +401,211 @@ def analyze_parent_turn(
         result["reason_short"][:60],
     )
     return result
+
+
+# -- Phase 2 reasoning loop — ANALYZE step (Task 2) ------------------------
+#
+# ``analyze_for_engine`` is a SEPARATE entrypoint from ``analyze_parent_turn``
+# above. It backs the future ``USE_REASONING_PASS`` engine reasoning loop
+# (analyze -> ground -> answer -> reflect) but is NOT wired into anything
+# yet — Task 5 wires the caller + the flag gate. This function itself does
+# not check any feature flag; the caller decides when to invoke it.
+#
+# Contract: produces a strict-JSON reasoning PLAN — never a user-facing
+# answer, never a decided fact value (no price/date/age-range/phone/link).
+# It only NAMES which fact types the eventual answer will need
+# (``needed_facts``) so the backend can look them up. Returns the 7-field
+# dict on success, or ``None`` on ANY failure (prompt load, OpenAI call,
+# JSON parse, validation) — never raises. Pure: no lead mutation, no
+# Calendar/Sheets/Redis access, no side effects.
+
+# Closed set for `needed_facts`. NOTE: this intentionally does NOT reuse
+# ALLOWED_FACT_TYPES above (which lacks "age" and "phone" and is relied on
+# by the existing analyze_parent_turn / _validate_result contract) — a
+# local closed set keeps the two schemas independent so a future change to
+# one never silently changes the other.
+_REASONING_FACT_TYPES = frozenset({
+    "price", "dates", "location", "age", "registration", "conditions", "phone",
+})
+
+_REASONING_MAX_TOKENS = 300
+
+
+def _reasoning_format_list(items: list[str]) -> str:
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    return ", ".join(cleaned) if cleaned else "(none)"
+
+
+def _build_reasoning_user_payload(
+    *,
+    user_message: str,
+    lead: Lead,
+    history: list[dict[str, str]] | None,
+) -> str:
+    """Mirrors ``build_payload``'s block shape: message + compact recent
+    history + known lead facts. Pure string assembly, no I/O."""
+    blocks: list[str] = []
+    blocks.append(f"LATEST USER MESSAGE:\n\"{user_message}\"")
+    blocks.append("KNOWN LEAD FACTS:\n" + _lead_summary(lead))
+
+    if history:
+        recent = history[-6:]
+        history_text = "\n".join(
+            f"{turn.get('role', '?')}: {turn.get('content', '')}"
+            for turn in recent
+            if isinstance(turn, Mapping)
+        )
+        if history_text:
+            blocks.append("RECENT CONVERSATION (most recent last):\n" + history_text)
+
+    blocks.append(
+        "OUTPUT INSTRUCTION:\n"
+        "Return one JSON object matching the schema in the system prompt. "
+        "No prose. No markdown fences. No commentary."
+    )
+    return "\n\n=====================================\n\n".join(blocks)
+
+
+def _coerce_reasoning_needed_facts(raw: Any) -> list[str]:
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [
+        str(item) for item in raw
+        if isinstance(item, str) and item in _REASONING_FACT_TYPES
+    ]
+
+
+def _coerce_reasoning_missing_lead_fields(raw: Any) -> list[str]:
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                out.append(text)
+    return out
+
+
+def _coerce_reasoning_suggested_tool(raw: Any, *, tool_names: list[str]) -> str | None:
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text and text in tool_names:
+            return text
+    return None
+
+
+def _coerce_reasoning_plan(raw: Any) -> str:
+    if not isinstance(raw, str):
+        return ""
+    return raw.strip()[:200]
+
+
+def _coerce_reasoning_sentiment(raw: Any) -> str:
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return "neutral"
+
+
+def _coerce_reasoning_result(
+    payload: Mapping[str, Any], *, tool_names: list[str],
+) -> dict[str, Any]:
+    """Normalise a parsed JSON payload into the full 7-field schema.
+
+    Unknown ``needed_facts`` entries are dropped (closed set). An
+    unrecognised ``suggested_tool`` (not in ``tool_names``) becomes None.
+    Missing/malformed fields fall back to safe defaults — partial
+    information from the LLM is still useful, so this never rejects the
+    whole result the way ``_validate_result`` does for the older schema.
+    """
+    return {
+        "user_goal": str(payload.get("user_goal") or "").strip(),
+        "sentiment": _coerce_reasoning_sentiment(payload.get("sentiment")),
+        "needed_facts": _coerce_reasoning_needed_facts(payload.get("needed_facts")),
+        "missing_lead_fields": _coerce_reasoning_missing_lead_fields(
+            payload.get("missing_lead_fields")
+        ),
+        "suggested_tool": _coerce_reasoning_suggested_tool(
+            payload.get("suggested_tool"), tool_names=tool_names,
+        ),
+        "should_greet": bool(payload.get("should_greet", False)),
+        "plan": _coerce_reasoning_plan(payload.get("plan")),
+    }
+
+
+def analyze_for_engine(
+    *,
+    user_message: str,
+    lead: Lead,
+    conversation: Any,
+    knowledge_keys: list[str] | None = None,
+    tool_names: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """ANALYZE step of the Phase 2 reasoning loop — produces a strict-JSON
+    reasoning plan (NOT a user-facing answer).
+
+    Returns a dict with exactly these 7 keys on success: ``user_goal``,
+    ``sentiment``, ``needed_facts``, ``missing_lead_fields``,
+    ``suggested_tool``, ``should_greet``, ``plan``.
+
+    Returns ``None`` on ANY failure — prompt load/format error, the
+    OpenAI call raising, empty/non-JSON output, or a parsed result that
+    isn't a JSON object. Never raises. Does not check
+    ``settings.USE_REASONING_PASS`` — the caller (Task 5) is responsible
+    for the flag gate. Pure: never mutates ``lead``/``conversation``,
+    never touches Calendar/Sheets/Redis, never produces user-facing text.
+    """
+    try:
+        knowledge_keys = list(knowledge_keys or [])
+        tool_names = list(tool_names or [])
+
+        system_prompt = load_prompt("parent_reasoning").format(
+            knowledge_keys=_reasoning_format_list(knowledge_keys),
+            tool_names=_reasoning_format_list(tool_names),
+            known_facts=_lead_summary(lead),
+        )
+
+        history = getattr(conversation, "history", None)
+        user_payload = _build_reasoning_user_payload(
+            user_message=user_message,
+            lead=lead,
+            history=history,
+        )
+
+        raw = openai_service.analyze_parent_turn(
+            system_prompt=system_prompt,
+            user_payload=user_payload,
+            max_tokens=_REASONING_MAX_TOKENS,
+            temperature=_TEMPERATURE,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[reasoning] analyze_for_engine setup/call failed: %s — returning None",
+            exc,
+        )
+        return None
+
+    try:
+        blob = _extract_json_blob(raw or "")
+        if not blob:
+            logger.warning(
+                "[reasoning] no JSON object in analyze_for_engine output "
+                "(head=%r)", (raw or "")[:80],
+            )
+            return None
+
+        payload = json.loads(blob)
+        if not isinstance(payload, Mapping):
+            logger.warning(
+                "[reasoning] parsed JSON is not a mapping: %s",
+                type(payload).__name__,
+            )
+            return None
+
+        return _coerce_reasoning_result(payload, tool_names=tool_names)
+    except Exception as exc:
+        logger.warning(
+            "[reasoning] analyze_for_engine parse/validate failed: %s — "
+            "returning None", exc,
+        )
+        return None
