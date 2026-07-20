@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-07-20T19:51:35",
+  "note": "Phase-1 Layer-A metrics ONLY (free, deterministic, offline — see the 'Phase 1 gate' section of evals/README.md). `naturalness` is null here; it and the full response_quality/grammar scores come ONLY from the operator's permissioned `python -m evals.run_evals --llm --judge` run, which is the pre-Phase-2 reference capture. This file is a SEPARATE artifact from evals/baseline.json (the original 90/100 decision-quality reference) — that file is never read or written by this module.",
+  "interception": {
+    "intercepted": 36,
+    "reached_llm": 1,
+    "pct_reached_llm": 0.02702702702702703,
+    "by_handler": {
+      "interceptor": 36,
+      "engine": 1
+    },
+    "by_source": {
+      "representative": {
+        "n_messages": 28,
+        "interception_rate": {
+          "intercepted": 27,
+          "reached_llm": 1,
+          "pct_reached_llm": 0.03571428571428571,
+          "by_handler": {
+            "interceptor": 27,
+            "engine": 1
+          }
+        },
+        "genuine_replies_captured": 27
+      },
+      "corpus": {
+        "n_messages": 9,
+        "interception_rate": {
+          "intercepted": 9,
+          "reached_llm": 0,
+          "pct_reached_llm": 0.0,
+          "by_handler": {
+            "interceptor": 9
+          }
+        },
+        "genuine_replies_captured": 9
+      }
+    },
+    "note": "DIAGNOSTIC only, not a pass/fail target (see evals/README.md 'Phase 1 gate'). Combines the fixed representative Georgian PARENT message set with the real captured-bug turns in tests/corpus/test_live_conversation_corpus.py, each driven as a fresh PARENT/START turn via evals.interception.answered_by_message (free, read-only, engine-spied — no live OpenAI/Anthropic call)."
+  },
+  "canned_footprint": {
+    "avg_footprint": 0.6666666666666666,
+    "canned_menu_rate": 0.6666666666666666,
+    "n": 36,
+    "note": "Computed via evals.botlike_proxy.botlike_proxy_score over ONLY the genuine deterministic (non-LLM) replies captured while measuring interception above. Turns that reached the LLM engine are EXCLUDED — the eval harness spies the engine (never calls OpenAI), so a reached_llm=True turn's 'reply' is the spy's canned placeholder text, not a real agent reply, and scoring it would fabricate the metric. The full naturalness + footprint-over-real-LLM-replies picture is filled by the permissioned `--llm --judge` run."
+  },
+  "naturalness": null,
+  "per_domain": {
+    "untagged": 31,
+    "camp_topic": 7,
+    "objection": 7,
+    "contact_capture": 4,
+    "booking_reliability": 8,
+    "program_info": 4
+  }
+}

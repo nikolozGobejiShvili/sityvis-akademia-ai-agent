@@ -262,3 +262,101 @@ def test_domain_coverage_present():
             doms.add(d)
     for d in ("objection", "camp_topic", "program_info", "booking_reliability", "contact_capture"):
         assert d in doms, f"missing domain coverage: {d}"
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — Phase-1 baseline report generator (`evals/phase1_report.py`)
+#
+# FREE, deterministic, fully offline — every turn driven here goes through
+# the SAME read-only guard + engine spy the Task 1 interception instrument
+# already uses (see evals/interception.py), so no live OpenAI/Anthropic call
+# is ever made. Nothing here is mocked to fake "free" — it already is.
+#
+# `generate_phase1_report()` writes NOTHING by itself; only
+# `write_phase1_baseline()` touches disk, and only
+# evals/phase1_baseline.json — the original evals/baseline.json (the 90/100
+# `--llm --judge` decision-quality reference) must stay byte-identical.
+# ---------------------------------------------------------------------------
+
+
+def test_generate_phase1_report_has_expected_keys():
+    from evals import phase1_report
+
+    report = phase1_report.generate_phase1_report()
+
+    for key in ("interception", "canned_footprint", "naturalness", "per_domain", "generated_at", "note"):
+        assert key in report, f"missing key: {key}"
+
+
+def test_generate_phase1_report_interception_pct_is_a_fraction():
+    from evals import phase1_report
+
+    report = phase1_report.generate_phase1_report()
+
+    pct = report["interception"]["pct_reached_llm"]
+    assert isinstance(pct, float)
+    assert 0.0 <= pct <= 1.0
+
+    # the exact 4-key interception_rate() shape is present at the top level
+    for key in ("intercepted", "reached_llm", "pct_reached_llm", "by_handler"):
+        assert key in report["interception"]
+
+
+def test_generate_phase1_report_naturalness_is_null_offline():
+    # naturalness is a PAID Claude judge (evals.naturalness) — this module
+    # makes no Anthropic call, so it must always be explicit None, never a
+    # fabricated score.
+    from evals import phase1_report
+
+    report = phase1_report.generate_phase1_report()
+
+    assert report["naturalness"] is None
+
+
+def test_generate_phase1_report_per_domain_matches_cases_domains():
+    from evals import cases, phase1_report
+
+    report = phase1_report.generate_phase1_report()
+
+    expected_domains = {getattr(c, "domain", "") or "untagged" for c in cases.CASES}
+    assert set(report["per_domain"]) == expected_domains
+    assert sum(report["per_domain"].values()) == len(cases.CASES)
+
+
+def test_generate_phase1_report_never_raises_and_stays_read_only():
+    # Driving ~37 turns must not leak the eval conversations into the global
+    # in-memory store (mirrors the Task 1 leak-guard test above) and must not
+    # raise even though nothing here is mocked.
+    from app.services import conversation_service
+    from evals import phase1_report
+
+    before = dict(conversation_service.conversations)
+    report = phase1_report.generate_phase1_report()  # must not raise
+    after = dict(conversation_service.conversations)
+
+    assert report is not None
+    assert set(after) == set(before), "phase1 report leaked a conversation into the global store"
+
+
+def test_write_phase1_baseline_never_touches_original_baseline_json():
+    # The hard invariant of Task 5: evals/baseline.json (the 90/100 reference)
+    # must be byte-identical before and after generating phase1_baseline.json.
+    # write_phase1_baseline() targets the real repo path by design (it's a
+    # committed artifact, re-generated as part of the normal Task 5
+    # workflow) — this test verifies the ONE file it must never touch.
+    from pathlib import Path
+
+    import evals.phase1_report as phase1_report_module
+    from evals import phase1_report
+
+    baseline_path = Path(phase1_report_module.__file__).resolve().parent / "baseline.json"
+    before = baseline_path.read_bytes() if baseline_path.exists() else None
+
+    written = phase1_report.write_phase1_baseline(
+        phase1_report.generate_phase1_report(),
+    )
+
+    assert written.name == "phase1_baseline.json"
+    assert written != baseline_path
+    after = baseline_path.read_bytes() if baseline_path.exists() else None
+    assert before == after, "evals/baseline.json was modified — must stay untouched"
