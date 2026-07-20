@@ -58,6 +58,14 @@ from evals import safety
 _ENGINE_MODULE = "app.agent.llm.parent_llm_engine"
 _ENGINE_ATTR = "run_parent_llm_turn"
 
+# Review fix #1 (READ-ONLY, ANY segment): the PARENT engine is the reliable
+# reached_llm signal, but a non-PARENT conversation routes to the ADULT engine,
+# which would make a REAL OpenAI call. Spy BOTH so `answered_by` never sends a
+# live request regardless of the conversation's segment. Only the PARENT spy
+# increments engine_calls (the reached_llm signal is PARENT-scoped by design).
+_ADULT_ENGINE_MODULE = "app.agent.llm.adult_llm_engine"
+_ADULT_ENGINE_ATTR = "run_adult_llm_turn"
+
 # Mirrors the `patches` dict inside `evals/safety.py::install_readonly` — kept
 # here ONLY so the snapshot/restore machinery below knows which attributes to
 # put back after driving one turn. If `evals/safety.py` changes what it
@@ -137,7 +145,10 @@ class _GuardedTurn:
         ]
         smtplib_targets = [("smtplib", "SMTP"), ("smtplib", "SMTP_SSL")]
         httpx_targets = [("httpx", "post"), ("httpx", "get")]
-        engine_targets = [(_ENGINE_MODULE, _ENGINE_ATTR)]
+        engine_targets = [
+            (_ENGINE_MODULE, _ENGINE_ATTR),
+            (_ADULT_ENGINE_MODULE, _ADULT_ENGINE_ATTR),
+        ]
 
         self._saved = _snapshot(
             settings_targets + redis_targets + list(_SERVICE_PATCH_TARGETS)
@@ -179,6 +190,15 @@ class _GuardedTurn:
 
         setattr(mod, _ENGINE_ATTR, _spy)
 
+        # Defense-in-depth (review fix #1): also neutralise the ADULT engine so a
+        # non-PARENT conversation can never reach live OpenAI. Does NOT count
+        # toward engine_calls — reached_llm is the PARENT-engine signal.
+        adult_mod = _resolve(_ADULT_ENGINE_MODULE)
+        if adult_mod is not None:
+            def _adult_spy(*args: Any, **kwargs: Any) -> str:
+                return "[eval interception spy] adult engine reached (no live OpenAI call)"
+            setattr(adult_mod, _ADULT_ENGINE_ATTR, _adult_spy)
+
 
 def _drive_turn(conversation: Any, message: str) -> tuple[str, dict | None, int]:
     """Register ``conversation`` (if not already) and drive ONE turn through
@@ -187,16 +207,28 @@ def _drive_turn(conversation: Any, message: str) -> tuple[str, dict | None, int]
     from app.reasoning import conversation_trace as trace
     from app.services import conversation_service
 
-    conversation_service.conversations[conversation.sender_id] = conversation
+    # Review fix #2 (state hygiene): snapshot the conversations-dict slot so the
+    # fake eval conversation never leaks into the global in-memory store (a
+    # latent test-order hazard vs tests that assert the store is empty).
+    sid = conversation.sender_id
+    _had = sid in conversation_service.conversations
+    _prev = conversation_service.conversations.get(sid)
+    conversation_service.conversations[sid] = conversation
 
-    with _GuardedTurn() as guard:
-        trace.reset_history()
-        reply = conversation_service.process_message(
-            conversation.sender_id, message, conversation.platform,
-        )
-        history = trace.history()
-        block = history[-1] if history else None
-        engine_calls = guard.engine_calls
+    try:
+        with _GuardedTurn() as guard:
+            trace.reset_history()
+            reply = conversation_service.process_message(
+                conversation.sender_id, message, conversation.platform,
+            )
+            history = trace.history()
+            block = history[-1] if history else None
+            engine_calls = guard.engine_calls
+    finally:
+        if _had:
+            conversation_service.conversations[sid] = _prev
+        else:
+            conversation_service.conversations.pop(sid, None)
 
     return reply, block, engine_calls
 

@@ -95,3 +95,26 @@ def test_read_only_guard_settings_do_not_leak_after_answered_by_message():
     interception.answered_by_message("მადლობა")
 
     assert config_module.settings is before
+
+
+def test_answered_by_does_not_leak_conversation_into_global_store():
+    # review fix #2: driving a turn must not leave the fake eval conversation
+    # in conversation_service.conversations (latent test-order hazard).
+    from app.services import conversation_service
+    from evals import interception
+    before = dict(conversation_service.conversations)
+    interception.answered_by_message("მენეჯერის ნომერი მინდა")
+    after = dict(conversation_service.conversations)
+    assert set(after) == set(before), "eval conversation leaked into the global store"
+
+
+def test_guarded_turn_spies_adult_engine_for_readonly():
+    # review fix #1: the ADULT engine must also be spied so a non-PARENT turn
+    # can never reach live OpenAI.
+    from evals import interception
+    with interception._GuardedTurn():
+        adult = interception._resolve(interception._ADULT_ENGINE_MODULE)
+        assert getattr(adult, interception._ADULT_ENGINE_ATTR).__name__ == "_adult_spy"
+    # restored after the guard exits
+    adult2 = interception._resolve(interception._ADULT_ENGINE_MODULE)
+    assert getattr(adult2, interception._ADULT_ENGINE_ATTR).__name__ != "_adult_spy"
