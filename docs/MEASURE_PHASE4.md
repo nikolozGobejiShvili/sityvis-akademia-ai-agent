@@ -306,5 +306,17 @@ cp <safe> evals/baseline.json
 `evals/baseline.json` was snapshotted before and restored after every `--llm` run. **Final md5:
 `93973fcd10349b447f87fa320e0807f3` — byte-identical to the pinned value.** It was never committed.
 
-Measurement scripts were throwaway and live outside the repository; no file under `app/`, `tests/`,
-`evals/`, `data/admin_config/`, `CLAUDE.md` or `HANDOFF.md` was modified. Both flags remain default OFF.
+Measurement scripts were throwaway and live outside the repository. No file under `app/`, `tests/`,
+`data/admin_config/`, `CLAUDE.md` or `HANDOFF.md` was modified. Both flags remain default OFF.
+
+**Correction (2026-07-22, final review).** An earlier version of this section claimed no file
+under `evals/` was modified. That was wrong. **`evals/phase1_baseline.json` was regenerated
+during this pass** — it carries `generated_at: 2026-07-21T23:46:34`, inside the measurement
+window, written by `evals/phase1_report.py:322` (`write_phase1_baseline`); `run_evals` does not
+write it. The delta is effectively timestamp-only: the sole semantic change
+(`per_domain.objection` 7 → 8) traces to `evals/cases.py` commit `81e02fb` at 2026-07-21 13:47,
+which **predates** Phase 4's base commit (18:41). The file was not committed in this phase.
+
+**The protected baseline is unaffected:** `evals/baseline.json` remains md5
+`93973fcd10349b447f87fa320e0807f3`, untracked, snapshotted and restored around every `--llm`
+run, and never committed.

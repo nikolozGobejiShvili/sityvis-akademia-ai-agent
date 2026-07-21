@@ -145,6 +145,35 @@ becomes model-chosen. The conversion-proxy assertions on OB1/OB2/OB3
 that confirms the reply still sells. **If correctness drops there, revert row 39 to
 verbatim.**
 
+#### ⚠️ 3a-UPDATE (2026-07-22) — THE REVERT TRIGGER FIRED. Row 39 must revert before enablement.
+
+Task 5 measured it (`docs/MEASURE_PHASE4.md`). **Correctness dropped on a price
+objection, exactly as the trigger anticipated — but on `Q2`, not on any of the three
+case IDs the trigger enumerated.** Under `USE_LEAN_PROMPT`, Q2's
+`value/payment framing present` check went **3/3 → 1/3 → 0/3 reps** (1/1 → 0/1).
+`forbid_any` held throughout (0/15 failures — no invented discount, no pressure wording),
+so the failure is *under*-selling, not a safety breach: the reply reads better and sells
+less.
+
+**Ruling: before `USE_LEAN_PROMPT` is ever enabled, row 39 reverts to
+`prompt-only-verbatim`,** or its behavioral rendering must be re-validated and shown to
+hold value/payment framing.
+
+**Two lessons, both about the gate rather than the guardrail:**
+
+1. **The trigger was written as a list of case IDs instead of a semantic condition, which
+   made it near-unfalsifiable.** Two of its three enumerated cases cannot measure row 39
+   at all: `OB1` never reaches the LLM (the deterministic `_camp_price_full_block()`
+   interceptor answers it) and `OB3` hits the registration-closed fallback because the
+   camp is over. Had we waited for "correctness drops on OB1/OB2/OB3" literally, the
+   trigger could never have fired. **Write revert triggers as conditions
+   ("any price-objection case loses value/payment framing"), not as case lists.**
+2. **Leading mechanistic hypothesis for the regression:** `system_parent_v2.md:387`
+   step 2 names the four inclusions explicitly (`ტრანსპორტი/განთავსება/კვება/პროგრამა`);
+   `parent_lean.md:83` compresses them to `„დააკავშირე ფასი ღირებულებას (რა შედის)"`.
+   Dropping the explicit enumeration is the most plausible cause of the model dropping
+   value **and** payment framing. Restore the enumeration first if row 39 is retried.
+
 ---
 
 Rows 15, 16, 22, 25, 26, 27, 38, 45 carry an explicit **partial/hybrid** note in their
