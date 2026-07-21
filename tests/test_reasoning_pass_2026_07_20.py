@@ -321,3 +321,23 @@ def test_reasoning_prepare_skips_dynamic_program_turn(monkeypatch):
     g, d = ple._reasoning_prepare(_reasoning_conversation(), _reasoning_lead(), "ფორმულა1")
     assert (g, d) == ({}, None)
     assert calls["n"] == 0  # dynamic-program turn → ANALYZE never called
+
+
+def test_reflect_skips_phone_when_user_message_carried_a_phone():
+    # review Important: acknowledging the parent's OWN callback number must NOT
+    # be replaced (the user's message this turn carried a phone).
+    from app.agent.llm import parent_llm_engine as ple
+    ans = "მადლობა, თქვენი ნომერი 595 99 97 33 მივიღე."
+    out, replaced = ple._reasoning_reflect(
+        ans, {"phone": "558 67 47 33"}, user_message="ჩემი ნომერია 595 99 97 33")
+    assert replaced is False and out == ans
+
+
+def test_reflect_still_catches_wrong_manager_phone_without_user_phone():
+    # a pure "what's the manager's number" turn (no user phone in the message)
+    # → a wrong manager number IS still caught.
+    from app.agent.llm import parent_llm_engine as ple
+    out, replaced = ple._reasoning_reflect(
+        "მენეჯერის ნომერია 599 11 22 33.", {"phone": "558 67 47 33"},
+        user_message="მენეჯერის ნომერი მინდა")
+    assert replaced is True

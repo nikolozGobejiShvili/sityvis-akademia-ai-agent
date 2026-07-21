@@ -2169,7 +2169,22 @@ def _reasoning_digits(text: str) -> str:
     return "".join(ch for ch in str(text) if ch.isdigit())
 
 
-def _reasoning_reflect(answer: str, grounded: dict) -> tuple[str, bool]:
+_REASONING_MSG_PHONE_RE = re.compile(r"\d[\d\s\-]{5,}\d")
+
+
+def _reasoning_message_has_phone(user_message: str) -> bool:
+    """True when the user's OWN message this turn carries a phone-like run —
+    the answer is then likely acknowledging their callback number, so
+    phone-REFLECT is skipped to avoid replacing a legitimate acknowledgment."""
+    try:
+        return bool(_REASONING_MSG_PHONE_RE.search(user_message or ""))
+    except Exception:  # pragma: no cover
+        return False
+
+
+def _reasoning_reflect(
+    answer: str, grounded: dict, *, user_message: str = "",
+) -> tuple[str, bool]:
     """Verify ``answer``'s facts against ``grounded`` (per-class). Returns
     ``(final_answer, replaced)``. Replaces the answer with a safe fallback ONLY
     on a clear contradiction on a GROUNDED class (grounded value absent but a
@@ -2188,8 +2203,11 @@ def _reasoning_reflect(answer: str, grounded: dict) -> tuple[str, bool]:
             if gnum and ans_nums and gnum not in ans_nums:
                 return (_REASONING_SAFE_FALLBACK, True)
 
-        # PHONE — compare digit-normalised numbers.
-        if "phone" in grounded:
+        # PHONE — compare digit-normalised numbers. Skip when the user's own
+        # message carried a phone (review Important: the answer is then likely
+        # acknowledging the parent's callback number, not stating a wrong
+        # manager phone — replacing it would deflect a natural reply).
+        if "phone" in grounded and not _reasoning_message_has_phone(user_message):
             gph = _reasoning_digits(grounded["phone"])
             ans_ph = [p for p in
                       (_reasoning_digits(t) for t in prc._PHONE_PATTERN.findall(answer))
@@ -2459,7 +2477,7 @@ def run_parent_llm_turn(
             # when the pass didn't ground anything (flag off ⇒ {} ⇒ unchanged).
             if _reason_grounded:
                 final_answer, _reason_replaced = _reasoning_reflect(
-                    final_answer, _reason_grounded,
+                    final_answer, _reason_grounded, user_message=user_message,
                 )
                 if _reason_replaced:
                     logger.info("[parent_llm_engine] REFLECT replaced a hallucinated fact")
