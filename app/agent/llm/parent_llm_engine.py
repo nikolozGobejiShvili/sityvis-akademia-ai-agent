@@ -3001,14 +3001,28 @@ def _build_sales_context(
             # confirmation short-circuits earlier (see the confirmation
             # branch above), so this hint only shapes the discovery turn.
             if not (lead.challenge or "").strip():
-                lines.append(
-                    "- ასაკი დიაპაზონშია, მშობლის მიზანი ჯერ უცნობია — "
-                    "დასვი ერთი მკაფიო კითხვა: „რა არის მთავარი, რის "
-                    "მიღებაც გსურთ ბანაკიდან — ახალი მეგობრები, ეკრანთან "
-                    "დროის შემცირება, თვითგამოხატვა, თავდაჯერება თუ სხვა?“ "
-                    "შეშფოთება არ აიძულო. თუ მომხმარებელი ცხადად ითხოვს "
-                    "ჩაწერას — ჯერ ჩაწერა, მიზანი ნუ დაბლოკავს."
-                )
+                # Phase 4 / Task 3 (M2, review finding I-2): the hardcoded
+                # verbatim discovery question below is a SECOND script — under
+                # the lean prompt it fights `parent_lean.md`'s own "ask one
+                # natural motivational question" rule. Emit a behavioral
+                # pointer instead, keeping every guarantee (don't force a
+                # concern; never block an explicit booking request). Flag-OFF
+                # path below is untouched/byte-identical.
+                if _use_lean_prompt():
+                    lines.append(
+                        "- ასაკი დიაპაზონშია, მიზანი უცნობია — დასვი ერთი "
+                        "ბუნებრივი მოტივაციური კითხვა; შეშფოთება ნუ "
+                        "აიძულებ; ცხადი ჩაწერის მოთხოვნა არ დაბლოკო."
+                    )
+                else:
+                    lines.append(
+                        "- ასაკი დიაპაზონშია, მშობლის მიზანი ჯერ უცნობია — "
+                        "დასვი ერთი მკაფიო კითხვა: „რა არის მთავარი, რის "
+                        "მიღებაც გსურთ ბანაკიდან — ახალი მეგობრები, ეკრანთან "
+                        "დროის შემცირება, თვითგამოხატვა, თავდაჯერება თუ სხვა?“ "
+                        "შეშფოთება არ აიძულო. თუ მომხმარებელი ცხადად ითხოვს "
+                        "ჩაწერას — ჯერ ჩაწერა, მიზანი ნუ დაბლოკავს."
+                    )
             else:
                 lines.append(
                     "- ასაკი დიაპაზონშია და მშობლის მიზანი ცნობილია — "
