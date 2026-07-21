@@ -1,13 +1,21 @@
-"""LLM-as-judge (Claude / Anthropic).
+"""LLM-as-judge (OpenAI by default; Anthropic optional).
 
 Strict BINARY rubric, one criterion at a time. Used ONLY for the nuanced
-"response quality" dimension. Deterministic / objective checks never use the
-judge. Returns (criterion, passed, reason) tuples.
+"response quality" / "naturalness" dimensions. Deterministic / objective checks
+never use the judge. Returns (criterion, passed, reason) tuples.
 
-Fail-safe: if the anthropic SDK is missing OR ANTHROPIC_API_KEY is unset, the
+Backend is selected by ``EVAL_JUDGE_BACKEND`` (default ``openai`` — the
+operator's live OpenAI key; ``anthropic`` for a Claude cross-check). Every model
+call goes through the single ``_judge_completion`` chokepoint so the three
+rubrics (response-quality ``judge``, ``grade_grammar``, and naturalness) share
+one backend + model + token-param path.
+
+Fail-safe: if the selected backend's SDK is missing OR its API key is unset, the
 judge is DISABLED and the harness marks judge checks JUDGE-SKIPPED (never a
-silent pass). The judge itself performs NO side-effects beyond the Anthropic
-API call (the model under test for grading).
+silent pass). The judge itself performs NO side-effect beyond the grading API
+call. Using a DIFFERENT model than the agent under test (agent = gpt-4.1-mini,
+judge = gpt-5.4-mini) keeps the grader stronger than and distinct from the
+gradee, limiting self-judging bias.
 """
 from __future__ import annotations
 
@@ -15,8 +23,65 @@ import json
 import os
 from typing import Iterable
 
-# A capable, cost-reasonable judge with strong Georgian. Configurable via env.
-_JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "claude-sonnet-4-6")
+# Backend + model. OpenAI is the default because the operator has a live OpenAI
+# key; gpt-5.4-mini is the strongest model on that account AND a different model
+# than the agent under test (gpt-4.1-mini) — stronger grader, less self-bias.
+_JUDGE_BACKEND = (os.environ.get("EVAL_JUDGE_BACKEND", "openai") or "openai").strip().lower()
+_DEFAULT_JUDGE_MODEL = {"openai": "gpt-5.4-mini", "anthropic": "claude-sonnet-4-6"}
+_JUDGE_MODEL = (
+    os.environ.get("EVAL_JUDGE_MODEL", "").strip()
+    or _DEFAULT_JUDGE_MODEL.get(_JUDGE_BACKEND, "gpt-5.4-mini")
+)
+
+
+def _openai_api_key() -> str:
+    """OPENAI_API_KEY from os.environ first, then the app's .env resolver
+    (Railway/local parity). Empty string when unset."""
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        from app.config import _env
+        return (_env("OPENAI_API_KEY") or "").strip()
+    except Exception:
+        return ""
+
+
+def _openai_uses_completion_tokens(model: str) -> bool:
+    """gpt-5.x / o1 / o3 / o4 / anything containing '5.4' → max_completion_tokens
+    (mirrors app.services.openai_service._uses_max_completion_tokens)."""
+    m = (model or "").lower()
+    return ("5.4" in m) or m.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _judge_completion(system: str, user: str, *, max_tokens: int,
+                      temperature: float = 0.0) -> str:
+    """ONE judge model call → the model's text output. Backend selected by
+    ``_JUDGE_BACKEND`` (read at call time so tests/env can override). Raises on a
+    hard SDK/transport error (callers treat that as JUDGE-ERROR / a dropped
+    naturalness run)."""
+    if _JUDGE_BACKEND == "anthropic":
+        import anthropic
+        client = anthropic.Anthropic()
+        resp = client.messages.create(
+            model=_JUDGE_MODEL, max_tokens=max_tokens, temperature=temperature,
+            system=system, messages=[{"role": "user", "content": user}],
+        )
+        return "".join(getattr(b, "text", "") for b in resp.content).strip()
+    # default: OpenAI (the operator's live key)
+    from openai import OpenAI
+    client = OpenAI(api_key=_openai_api_key())
+    token_kw = ("max_completion_tokens"
+                if _openai_uses_completion_tokens(_JUDGE_MODEL) else "max_tokens")
+    resp = client.chat.completions.create(
+        model=_JUDGE_MODEL,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+        temperature=temperature,
+        **{token_kw: max_tokens},
+    )
+    return (resp.choices[0].message.content or "").strip()
+
 
 _SYSTEM = (
     "You are a STRICT evaluator of a Georgian-language sales agent's replies. "
@@ -28,34 +93,37 @@ _SYSTEM = (
 
 
 def judge_available() -> tuple[bool, str]:
+    """Is the configured judge backend usable? OpenAI (default) needs the openai
+    SDK + an OPENAI_API_KEY; Anthropic needs the anthropic SDK +
+    ANTHROPIC_API_KEY. Never raises — a False verdict marks judge checks
+    JUDGE-SKIPPED (never a silent pass)."""
+    if _JUDGE_BACKEND == "anthropic":
+        try:
+            import anthropic  # noqa: F401
+        except Exception:
+            return False, "anthropic SDK not installed"
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return False, "ANTHROPIC_API_KEY not set"
+        return True, ""
     try:
-        import anthropic  # noqa: F401
+        from openai import OpenAI  # noqa: F401
     except Exception:
-        return False, "anthropic SDK not installed"
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return False, "ANTHROPIC_API_KEY not set"
+        return False, "openai SDK not installed"
+    if not _openai_api_key():
+        return False, "OPENAI_API_KEY not set"
     return True, ""
 
 
 def judge(context: str, criteria: list[str]) -> list[tuple[str, bool, str]]:
     """Grade `context` against each binary `criteria` item. Raises only on a
     hard SDK/transport error (the caller treats that as JUDGE-ERROR)."""
-    import anthropic
-
-    client = anthropic.Anthropic()
     numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(criteria))
     user = (
         f"CONTEXT (conversation excerpt):\n{context}\n\n"
         f"CRITERIA (binary, judge each independently):\n{numbered}\n\n"
         "Return the JSON list now."
     )
-    resp = client.messages.create(
-        model=_JUDGE_MODEL,
-        max_tokens=1024,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": user}],
-    )
-    text = "".join(getattr(b, "text", "") for b in resp.content).strip()
+    text = _judge_completion(_SYSTEM, user, max_tokens=1024)
     # Extract the JSON array defensively.
     start, end = text.find("["), text.rfind("]")
     parsed = json.loads(text[start:end + 1]) if start != -1 and end != -1 else []
@@ -145,14 +213,10 @@ def _extract_json_object(text: str) -> str | None:
     return None            # unbalanced — no complete object
 
 
-def _grammar_completion(client, user: str) -> str:
-    """One grader model call → concatenated text of the response blocks."""
-    resp = client.messages.create(
-        model=_JUDGE_MODEL, max_tokens=1500,
-        system=_GRAMMAR_SYSTEM,
-        messages=[{"role": "user", "content": user}],
-    )
-    return "".join(getattr(b, "text", "") for b in resp.content).strip()
+def _grammar_completion(user: str) -> str:
+    """One grader model call → the model's text output (via the shared
+    backend chokepoint `_judge_completion`)."""
+    return _judge_completion(_GRAMMAR_SYSTEM, user, max_tokens=1500)
 
 
 def grade_grammar(response: str) -> list[dict]:
@@ -165,9 +229,6 @@ def grade_grammar(response: str) -> list[dict]:
     ONCE. Only if BOTH attempts fail does it raise :class:`GrammarGraderError` —
     which the caller records as an explicit grader_error (never a silent pass,
     never a false FAIL). What it JUDGES is unchanged — only the parsing hardened."""
-    import anthropic
-
-    client = anthropic.Anthropic()
     numbered = "\n".join(f"- id={cid}: {crit}" for cid, _label, crit in GRAMMAR_CRITERIA)
     user = (
         f"AGENT REPLY (Georgian):\n{response}\n\n"
@@ -178,7 +239,7 @@ def grade_grammar(response: str) -> list[dict]:
     last_err: Exception | None = None
     for _attempt in range(2):        # initial call + ONE retry on a parse failure
         try:
-            text = _grammar_completion(client, user)
+            text = _grammar_completion(user)
             blob = _extract_json_object(text)
             if blob is None:
                 raise ValueError("no JSON object found in grader output")

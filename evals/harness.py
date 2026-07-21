@@ -90,7 +90,7 @@ class Harness:
         self.judge_enabled = judge_enabled
         self.last_tool_calls: list[tuple[str, dict]] = []
         self.current_case_id: str = ""
-        self.responses: list[tuple[str, str]] = []   # (case_id, agent reply) for grammar
+        self.responses: list[tuple[str, str, str]] = []   # (case_id, user_msg, agent reply)
         self._install_tool_recorder()
 
     # -- conversation seeding -------------------------------------------------
@@ -125,9 +125,10 @@ class Harness:
         from app.services import conversation_service
         self.last_tool_calls = []
         reply = conversation_service.process_message(conv.sender_id, message, conv.platform)
-        # Capture every agent reply for the separate Georgian-grammar evaluator.
+        # Capture every agent reply (+ the user turn that triggered it) for the
+        # separate Georgian-grammar and naturalness evaluators.
         if reply and reply.strip():
-            self.responses.append((self.current_case_id, reply))
+            self.responses.append((self.current_case_id, message, reply))
         return reply
 
     def _install_tool_recorder(self) -> None:
@@ -207,8 +208,9 @@ def run_all(*, llm: bool, judge: bool, category: str | None = None,
         results.append((case, outcome, len(runs)))
 
     grammar = _grade_grammar(h, llm=llm, judge_requested=judge, judge_enabled=judge_enabled)
+    naturalness = _grade_naturalness(h, llm=llm, judge_requested=judge, judge_enabled=judge_enabled)
 
-    return _report(results, log, grammar, llm=llm, judge_requested=judge,
+    return _report(results, log, grammar, naturalness, llm=llm, judge_requested=judge,
                    judge_enabled=judge_enabled, judge_note=judge_note)
 
 
@@ -228,7 +230,7 @@ def _grade_grammar(h: "Harness", *, llm: bool, judge_requested: bool, judge_enab
 
     from evals import judge as judge_mod
     seen: set[str] = set()       # one representative reply per case (bounds cost)
-    for cid, text in h.responses:
+    for cid, _msg, text in h.responses:
         if cid in seen or not text.strip():
             continue
         seen.add(cid)
@@ -248,11 +250,49 @@ def _grade_grammar(h: "Harness", *, llm: bool, judge_requested: bool, judge_enab
     return g
 
 
+def _grade_naturalness(h: "Harness", *, llm: bool, judge_requested: bool, judge_enabled: bool) -> dict:
+    """Run the SEPARATE naturalness judge (bot-vs-human) over one representative
+    agent reply per case, using the SAME OpenAI/Anthropic judge backend as the
+    grammar grader. `score_sum`/`replies` give the mean 0-4 naturalness; `blocks`
+    the per-case templated-tell issues. Same gating + one-reply-per-case cost
+    bound as `_grade_grammar`. A per-case SKIP (judge unavailable / every N-run
+    dropped) is counted, never scored as a fake 0."""
+    n = {"status": "", "score_sum": 0, "replies": 0, "skipped": 0, "blocks": []}
+    if not llm:
+        n["status"] = "N/A (needs --llm)"
+        return n
+    if not judge_requested:
+        n["status"] = "N/A (needs --judge)"
+        return n
+    if not judge_enabled:
+        n["status"] = "JUDGE-SKIPPED (judge unavailable)"
+        return n
+
+    from evals import naturalness as naturalness_mod
+    seen: set[str] = set()       # one representative reply per case (bounds cost)
+    for cid, msg, text in h.responses:
+        if cid in seen or not text.strip():
+            continue
+        seen.add(cid)
+        result = naturalness_mod.grade_naturalness(msg, text)
+        score = result.get("score")
+        if score is None:          # explicit SKIP — never a fake 0
+            n["skipped"] += 1
+            continue
+        n["replies"] += 1
+        n["score_sum"] += score
+        if result.get("issues"):
+            lines = "\n".join(f"     • {iss}" for iss in result["issues"])
+            n["blocks"].append(f"  🤖 NATURALNESS — [{cid}] {score}/4\n{lines}")
+    n["status"] = "scored" if n["replies"] else "JUDGE-SKIPPED (all runs skipped)"
+    return n
+
+
 _INTELLIGENCE_DIMS = ("understanding", "routing", "response_quality")
 _MECHANICS_DIMS = ("extraction", "followup")
 
 
-def _report(results, log, grammar: dict, *, llm: bool, judge_requested: bool,
+def _report(results, log, grammar: dict, naturalness: dict, *, llm: bool, judge_requested: bool,
             judge_enabled: bool, judge_note: str) -> int:
     per_dim: dict[str, list[int]] = {d: [0, 0] for d in DIMENSIONS}   # [passed, total]
     total_passed = total_checks = 0
@@ -273,8 +313,8 @@ def _report(results, log, grammar: dict, *, llm: bool, judge_requested: bool,
         if bad:
             failed.append((case, bad, reps))
 
-    mode = ("full (real OpenAI" + (" + Claude judge)" if judge_enabled else ")")) if llm \
-        else ("deterministic-only — free, no LLM" + (" + Claude judge" if judge_enabled else ""))
+    mode = ("full (real OpenAI" + (" + LLM judge)" if judge_enabled else ")")) if llm \
+        else ("deterministic-only — free, no LLM" + (" + LLM judge" if judge_enabled else ""))
     pct = (100 * total_passed / total_checks) if total_checks else 0.0
 
     def grp(dims):
@@ -306,6 +346,13 @@ def _report(results, log, grammar: dict, *, llm: bool, judge_requested: bool,
               f"[6 criteria × {gr} graded replies]")
     else:
         print(f"  🇬🇪 GEORGIAN GRAMMAR     {grammar['status']}")
+    if naturalness["status"] == "scored":
+        nr = naturalness["replies"]
+        nmean = naturalness["score_sum"] / nr if nr else 0.0
+        print(f"  🤖 NATURALNESS          {nmean:.2f}/4   "
+              f"[bot-vs-human × {nr} graded replies]")
+    else:
+        print(f"  🤖 NATURALNESS          {naturalness['status']}")
 
     print("\n  By dimension:")
     for d in DIMENSIONS:
@@ -343,6 +390,16 @@ def _report(results, log, grammar: dict, *, llm: bool, judge_requested: bool,
             print("\n" + block)
     elif grammar["status"] == "scored":
         print("\n  🇬🇪 no grammar issues found in the graded replies.")
+
+    # ── naturalness templated-tells (stdout only — never written to baseline.json) ──
+    if naturalness["blocks"]:
+        print("\n" + "─" * 64)
+        print("  🤖 NATURALNESS — TEMPLATED TELLS (lower = more botlike)")
+        print("─" * 64)
+        for block in naturalness["blocks"]:
+            print("\n" + block)
+    elif naturalness["status"] == "scored":
+        print("\n  🤖 no templated tells found in the graded replies.")
 
     print("\n" + "═" * 64)
     print(safety.render_banner(log, llm_used=llm or judge_enabled, httpx_blocked=not llm))

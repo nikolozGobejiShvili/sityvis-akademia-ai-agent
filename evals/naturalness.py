@@ -1,4 +1,4 @@
-"""NATURALNESS judge (Claude / Anthropic) — Phase 1 Task 3.
+"""NATURALNESS judge (OpenAI by default; Anthropic optional) — Phase 1 Task 3.
 
 A SEPARATE strict rubric from `evals.judge.judge` (response_quality) and from
 `evals.judge.grade_grammar` (Georgian grammar) — mirrors the grammar grader's
@@ -11,22 +11,18 @@ scripted/templated bot, across 4 binary criteria (score = count met, 0-4):
   (c) varied / context-fit wording, not a stock phrase
   (d) warm consultative tone appropriate to a parent
 
-Grounding (Task 3 Step 1 — studied `evals/judge.py` before writing this):
-  * `judge_available()` is the ONE canonical availability check (anthropic SDK
-    importable + ANTHROPIC_API_KEY set) — reused here as `_judge_available`,
-    not reinvented.
-  * `judge()` / `grade_grammar()` each construct their OWN `anthropic.Anthropic()`
-    client per call (judge.py holds no shared client singleton) and share the
-    same `_JUDGE_MODEL` constant. `_judge_naturalness_once` below follows the
-    identical construction pattern + reuses `_JUDGE_MODEL`, so this module
-    never introduces a second judge model / a new dependency.
-  * confirmed by reading: NEITHER `judge()` nor `_grammar_completion()` passes
-    `temperature=` to `client.messages.create(...)` (Anthropic defaults to a
-    non-zero sampling temperature). So temp=0 is NOT already enforced by the
-    existing judge — this module passes `temperature=0` explicitly on its own
-    `client.messages.create(...)` call, and additionally runs the judge `N`
-    times (default 3) and reduces to the MEDIAN per-run score, so a single
-    run's residual stochasticity can never decide the metric (fix C1).
+Grounding:
+  * `judge_available()` is the ONE canonical availability check (selected
+    backend's SDK importable + its API key set) — reused here as
+    `_judge_available`, not reinvented.
+  * every model call in this package goes through `evals.judge._judge_completion`
+    — the single backend/model/token-param chokepoint. `_judge_naturalness_once`
+    reuses it, so this module never introduces a second backend, model, or
+    dependency.
+  * `_judge_completion` is called with `temperature=0` here for deterministic
+    per-call grading; on top of that this module runs the judge `N` times
+    (default 3) and reduces to the MEDIAN per-run score, so a single run's
+    residual stochasticity can never decide the metric (fix C1).
 
 Fail-safe, matching judge.py's contract: if the SDK/key is unavailable, OR
 every run raises, `grade_naturalness` returns `score=None` — an explicit SKIP,
@@ -39,7 +35,7 @@ import statistics
 from typing import Any
 
 from evals.judge import judge_available as _judge_available  # reuse, don't reinvent
-from evals.judge import _JUDGE_MODEL  # reuse the same judge model config
+from evals.judge import _judge_completion  # single backend/model/token chokepoint
 
 
 # (id, short label shown in issues, exact criterion sent to the judge)
@@ -76,9 +72,6 @@ def _judge_naturalness_once(context: str, response: str) -> list[tuple[str, bool
     Raises only on a hard SDK/transport/parse error — `grade_naturalness`
     treats a raised run as a dropped run and continues with the remaining
     runs (never lets one bad run corrupt or crash the whole metric)."""
-    import anthropic
-
-    client = anthropic.Anthropic()
     numbered = "\n".join(
         f"{i}. {label}: {crit}" for i, (_cid, label, crit) in enumerate(NATURALNESS_CRITERIA)
     )
@@ -88,14 +81,9 @@ def _judge_naturalness_once(context: str, response: str) -> list[tuple[str, bool
         f"CRITERIA (binary, judge each independently):\n{numbered}\n\n"
         "Return the JSON list now."
     )
-    resp = client.messages.create(
-        model=_JUDGE_MODEL,
-        max_tokens=1024,
-        temperature=0,  # deterministic per-call; N-run median in grade_naturalness
-        system=_NATURALNESS_SYSTEM,  # controls residual sampling stochasticity (fix C1)
-        messages=[{"role": "user", "content": user}],
-    )
-    text = "".join(getattr(b, "text", "") for b in resp.content).strip()
+    # deterministic per-call (temperature=0); N-run median in grade_naturalness
+    # controls residual sampling stochasticity (fix C1).
+    text = _judge_completion(_NATURALNESS_SYSTEM, user, max_tokens=1024, temperature=0)
     start, end = text.find("["), text.rfind("]")
     parsed = json.loads(text[start:end + 1]) if start != -1 and end != -1 else []
     by_index = {int(item.get("index", -1)): item for item in parsed if isinstance(item, dict)}

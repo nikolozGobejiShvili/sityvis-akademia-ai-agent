@@ -2,7 +2,8 @@
 
   python -m evals.run_evals                  # deterministic, FREE, fully offline
   python -m evals.run_evals --llm            # + full_turn cases (real OpenAI)
-  python -m evals.run_evals --llm --judge    # + Claude LLM-as-judge (needs ANTHROPIC_API_KEY)
+  python -m evals.run_evals --llm --judge    # + LLM-as-judge grammar+naturalness
+                                             #   (OpenAI by default; EVAL_JUDGE_BACKEND=anthropic optional)
   python -m evals.run_evals --category routing
   python -m evals.run_evals --case E1
 
@@ -25,7 +26,8 @@ def main() -> int:
     ap.add_argument("--llm", action="store_true",
                     help="enable full_turn cases (real OpenAI — small cost)")
     ap.add_argument("--judge", action="store_true",
-                    help="enable Claude LLM-as-judge for response quality (needs ANTHROPIC_API_KEY)")
+                    help="enable LLM-as-judge (response quality + grammar + naturalness); "
+                         "OpenAI backend by default, EVAL_JUDGE_BACKEND=anthropic optional")
     ap.add_argument("--category", choices=(
         "understanding", "extraction", "routing", "response_quality", "followup"),
         help="run only one dimension")

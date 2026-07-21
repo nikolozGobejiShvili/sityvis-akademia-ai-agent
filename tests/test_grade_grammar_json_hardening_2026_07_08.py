@@ -25,9 +25,14 @@ class _FakeResp:
 
 
 def _install_fake_anthropic(monkeypatch, responses):
-    """Stub anthropic.Anthropic so client.messages.create returns `responses`
-    in order (last one repeats). Returns a call-counter list."""
+    """Force the anthropic judge backend and stub anthropic.Anthropic so
+    client.messages.create returns `responses` in order (last one repeats).
+    Returns a call-counter list. (The default backend is now OpenAI; this test
+    validates the anthropic transport path + the backend-independent JSON-parse
+    hardening in grade_grammar.)"""
     import anthropic
+
+    monkeypatch.setattr(judge, "_JUDGE_BACKEND", "anthropic")
 
     calls: list[int] = []
 
