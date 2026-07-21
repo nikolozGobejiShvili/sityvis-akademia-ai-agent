@@ -1769,8 +1769,16 @@ _SANITIZER_WORDING_MANDATE_INDEXES: frozenset[int] = frozenset(
               #   dropping 68/69 actually lets 71/72 match the full greeting.)
         98,   # „ბუნებრივი სურვილია" → „სრულიად ბუნებრივი სურვილია": intensifier
               #   insertion, nothing else.
-        153,  # „სიამოვნებით დაგიდგებით გვერდში" → the brand manager-handoff line.
-        154,  #   Both sides are valid Georgian; this only converges the closing.
+        # 153/154 REMOVED (code review, 2026-07-21): the needle „სიამოვნებით
+        # დაგიდგებით გვერდში" is a vague warm closing that offers NOTHING
+        # concrete; the replacement injects a real manager-handoff offer.
+        # Dropping these two therefore REMOVES an offer from the reply (a
+        # warm dead-end with no next step) rather than merely rewording one —
+        # that is load-bearing under the plan's own rule ("adding/removing a
+        # manager-handoff offer" is explicitly called out as SAFETY). Kept as
+        # SAFETY. 155–157 stay dropped: their needle „თუ დაგეხმაროთ სხვა
+        # გზით" is ITSELF an indirect offer of further help, so dropping
+        # those only downgrades an offer's specificity, not remove one.
         155,  # „თუ დაგეხმაროთ სხვა გზით" → the brand manager-handoff line. Same.
         156,
         157,
@@ -1783,7 +1791,25 @@ _SANITIZER_WORDING_MANDATE_INDEXES: frozenset[int] = frozenset(
 # Positional indexes are only valid for the table they were derived from. If
 # the table is edited, fail SAFE: fall back to the full table (never silently
 # drop the wrong entry).
+#
+# A length check alone is NOT enough: this table is appended to frequently,
+# but an in-place edit or a same-length reorder would silently re-target
+# these positional indexes at *different* entries — disabling the wrong
+# guardrails with every existing test still green (the tests read phrases
+# out of the table BY INDEX too, so they'd drift in lock-step). Guard against
+# that by also pinning the exact needle text expected at each dropped index,
+# derived programmatically from the table below (never hand-retyped — a
+# transcription typo would silently defeat the guard).
 _SANITIZER_TABLE_SIZE_AT_PARTITION = 183
+
+#: (index, expected needle) pairs for every index in
+#: `_SANITIZER_WORDING_MANDATE_INDEXES`, sliced from `FORBIDDEN_PHRASE_REPLACEMENTS`
+#: at import time — i.e. a golden snapshot of what each position held when the
+#: partition was authored. Built by slicing, never retyped.
+_SANITIZER_WORDING_MANDATE_EXPECTED_NEEDLES: tuple[tuple[int, str], ...] = tuple(
+    (idx, FORBIDDEN_PHRASE_REPLACEMENTS[idx][0])
+    for idx in sorted(_SANITIZER_WORDING_MANDATE_INDEXES)
+)
 
 
 def _build_sanitizer_safety_entries(
@@ -1791,6 +1817,12 @@ def _build_sanitizer_safety_entries(
 ) -> tuple[tuple[str, str], ...]:
     if len(table) != _SANITIZER_TABLE_SIZE_AT_PARTITION:
         return table
+    for idx, expected_needle in _SANITIZER_WORDING_MANDATE_EXPECTED_NEEDLES:
+        if table[idx][0] != expected_needle:
+            # Same length, but the entry at this position no longer matches
+            # what the partition was built against (in-place edit / reorder).
+            # The positional indexes are no longer trustworthy — fail SAFE.
+            return table
     return tuple(
         entry
         for idx, entry in enumerate(table)

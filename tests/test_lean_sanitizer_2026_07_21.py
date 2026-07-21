@@ -79,10 +79,14 @@ IDX_MANDATE_DISCOVERY_QUESTION = 24  # „რას მიიჩნევთ ყ
 IDX_MANDATE_GENERIC_HELP_OFFER = 68  # „როგორ შემიძლია დაგეხმაროთ დღეს?"
 IDX_MANDATE_AGE_FIT_STYLE = 60  # „სრულად ერგება" → „შესაფერისია"
 IDX_MANDATE_INTENSIFIER = 98  # „ბუნებრივი სურვილია"
-IDX_MANDATE_SIDE_BY_SIDE = 153  # „სიამოვნებით დაგიდგებით გვერდში."
 IDX_MANDATE_SLOT_QUESTION = 161  # „რომელი დრო გჭირდებათ?"
 
 # Safety entries — must keep firing when the flag is ON.
+# 153/154 reclassified SAFETY on code review (2026-07-21): dropping them
+# removed a manager-handoff OFFER from the reply (the needle „სიამოვნებით
+# დაგიდგებით გვერდში" offers nothing concrete), not merely its wording —
+# load-bearing under the plan's own rule.
+IDX_SAFETY_SIDE_BY_SIDE_OFFER = 153  # „სიამოვნებით დაგიდგებით გვერდში."
 IDX_SAFETY_GREETING_LEAK = 71  # „მოგესალმებით! როგორ შემიძლია დაგეხმაროთ?"
 IDX_SAFETY_BOOKING_ECHO_STRIP = 145  # „ საათზე ჩამწერეთ კონსულტაცია."
 IDX_SAFETY_EMOJI_STRIP = 176  # „😊" → ""
@@ -99,7 +103,6 @@ _MANDATE_INDEXES = (
     IDX_MANDATE_GENERIC_HELP_OFFER,
     IDX_MANDATE_AGE_FIT_STYLE,
     IDX_MANDATE_INTENSIFIER,
-    IDX_MANDATE_SIDE_BY_SIDE,
     IDX_MANDATE_SLOT_QUESTION,
 )
 
@@ -107,6 +110,7 @@ _SAFETY_INDEXES = (
     # NB: IDX_SAFETY_BOOKING_ECHO_STRIP's needle starts with a space, which the
     # structural passes trim off a bare-needle input — it gets its own test with
     # a realistic carrier („15 საათზე …") below.
+    IDX_SAFETY_SIDE_BY_SIDE_OFFER,
     IDX_SAFETY_GREETING_LEAK,
     IDX_SAFETY_EMOJI_STRIP,
     IDX_SAFETY_GRAMMAR_PREFER,
@@ -187,6 +191,36 @@ def test_table_size_guard_falls_back_to_full_table_if_table_changes():
     """If someone edits the table, the indexes are stale — fail SAFE (full table)."""
     grown = FORBIDDEN_PHRASE_REPLACEMENTS + (("ტესტი", "ტესტი"),)
     assert ple._build_sanitizer_safety_entries(grown) is grown
+
+
+def test_content_guard_falls_back_to_full_table_on_same_length_reorder():
+    """A same-length REORDER (or in-place edit) is the dangerous case the size
+    check alone misses: it silently re-targets a dropped index at a different
+    entry while `len(table)` stays 183. Simulated here by swapping the entry
+    at a dropped index with a distant, unrelated entry — built entirely from
+    tuple objects already in the real table, so no Georgian is retyped."""
+    reordered = list(FORBIDDEN_PHRASE_REPLACEMENTS)
+    idx, expected_needle = ple._SANITIZER_WORDING_MANDATE_EXPECTED_NEEDLES[0]
+    assert reordered[idx][0] == expected_needle  # sanity: matches today's table
+    other_idx = len(reordered) - 1
+    assert other_idx not in ple._SANITIZER_WORDING_MANDATE_INDEXES
+    reordered[idx], reordered[other_idx] = reordered[other_idx], reordered[idx]
+    reordered_table = tuple(reordered)
+
+    assert len(reordered_table) == len(FORBIDDEN_PHRASE_REPLACEMENTS)  # size check alone would pass
+    assert reordered_table[idx][0] != expected_needle  # but the content moved
+    assert ple._build_sanitizer_safety_entries(reordered_table) is reordered_table
+
+
+def test_content_guard_expected_needles_are_sliced_not_retyped():
+    """`_SANITIZER_WORDING_MANDATE_EXPECTED_NEEDLES` must be built by slicing
+    the live table — every (index, needle) pair matches the table at that
+    exact index today."""
+    for idx, needle in ple._SANITIZER_WORDING_MANDATE_EXPECTED_NEEDLES:
+        assert FORBIDDEN_PHRASE_REPLACEMENTS[idx][0] == needle
+    assert set(idx for idx, _ in ple._SANITIZER_WORDING_MANDATE_EXPECTED_NEEDLES) == set(
+        ple._SANITIZER_WORDING_MANDATE_INDEXES
+    )
 
 
 # ---------------------------------------------------------------------------
