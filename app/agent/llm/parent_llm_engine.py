@@ -2148,6 +2148,69 @@ def _reasoning_ground_text(grounded: dict[str, str]) -> str:
         return ""
 
 
+# -- reasoning pass: REFLECT (Phase 2, USE_REASONING_PASS) -----------------
+#
+# REFLECT is the conservative money/fact reliability guard. It judges ONLY the
+# fact-classes GROUND actually populated, and uses the "correct-value-absent"
+# rule: it flags a hallucination ONLY when the grounded value is NOT present in
+# the answer yet a DIFFERENT token of that same class IS — i.e. the model stated
+# a price/phone/link but not the grounded one. If the grounded value appears
+# (even alongside others), or the class was not grounded, or no token of that
+# class is present, REFLECT does NOT flag — favouring letting a good answer
+# through (a false-positive fallback hurts both naturalness and reliability).
+# Reuses the shipped fact regex from parent_reply_composer. Never raises.
+
+_REASONING_SAFE_FALLBACK = (
+    "ამ დეტალს მენეჯერი დაგიზუსტებთ. თუ გსურთ, დაგაკავშირებთ მენეჯერთან."
+)
+
+
+def _reasoning_digits(text: str) -> str:
+    return "".join(ch for ch in str(text) if ch.isdigit())
+
+
+def _reasoning_reflect(answer: str, grounded: dict) -> tuple[str, bool]:
+    """Verify ``answer``'s facts against ``grounded`` (per-class). Returns
+    ``(final_answer, replaced)``. Replaces the answer with a safe fallback ONLY
+    on a clear contradiction on a GROUNDED class (grounded value absent but a
+    different same-class token present). Never raises → ``(answer, False)``."""
+    try:
+        if not answer or not isinstance(answer, str) or not grounded:
+            return (answer, False)
+        from app.agent.llm import parent_reply_composer as prc
+
+        # PRICE — compare numeric parts.
+        if "price" in grounded:
+            gnum = _reasoning_digits(grounded["price"])
+            ans_nums = [n for n in
+                        (_reasoning_digits(t) for t in prc._PRICE_PATTERN.findall(answer))
+                        if n]
+            if gnum and ans_nums and gnum not in ans_nums:
+                return (_REASONING_SAFE_FALLBACK, True)
+
+        # PHONE — compare digit-normalised numbers.
+        if "phone" in grounded:
+            gph = _reasoning_digits(grounded["phone"])
+            ans_ph = [p for p in
+                      (_reasoning_digits(t) for t in prc._PHONE_PATTERN.findall(answer))
+                      if p]
+            if gph and ans_ph and gph not in ans_ph:
+                return (_REASONING_SAFE_FALLBACK, True)
+
+        # REGISTRATION URL — grounded url must appear if any url is present.
+        if "registration" in grounded:
+            gurl = str(grounded["registration"]).strip().rstrip("/")
+            urls = [u.strip().rstrip(".,)").rstrip("/") for u in prc._URL_PATTERN.findall(answer)]
+            if gurl and urls and not any(gurl in u or u in gurl for u in urls):
+                return (_REASONING_SAFE_FALLBACK, True)
+
+        # dates/location intentionally not verified (fuzzy → false-positive risk).
+        return (answer, False)
+    except Exception:  # pragma: no cover - REFLECT must never break a turn
+        logger.exception("[parent_llm_engine] _reasoning_reflect raised — ignored")
+        return (answer, False)
+
+
 # -- public entry ---------------------------------------------------------
 
 

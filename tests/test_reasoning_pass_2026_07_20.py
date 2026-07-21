@@ -206,3 +206,43 @@ def test_reasoning_ground_text_formats_present_keys():
     txt = ple._reasoning_ground_text({"price": "2150", "phone": "558 67 47 33"})
     assert "ფასი: 2150" in txt and "მენეჯერი: 558 67 47 33" in txt
     assert ple._reasoning_ground_text({}) == ""
+
+
+# -- Task 4: REFLECT — verify only grounded classes, conservative fallback --
+
+def test_reflect_passes_grounded_answer():
+    from app.agent.llm import parent_llm_engine as ple
+    ans = "ბანაკის ფასია 2150 ლარი."
+    assert ple._reasoning_reflect(ans, {"price": "2150"}) == (ans, False)
+
+
+def test_reflect_replaces_contradicted_price():
+    from app.agent.llm import parent_llm_engine as ple
+    out, replaced = ple._reasoning_reflect("ფასია 9999 ლარი.", {"price": "2150"})
+    assert replaced is True and "9999" not in out
+
+
+def test_reflect_does_not_judge_ungrounded_class():
+    from app.agent.llm import parent_llm_engine as ple
+    # a price token in the answer, but price was NOT grounded → pass
+    ans = "ფორმულა1-ის ფასია 5000 ლარი."
+    assert ple._reasoning_reflect(ans, {"phone": "558 67 47 33"}) == (ans, False)
+
+
+def test_reflect_passes_when_grounded_price_present_among_others():
+    from app.agent.llm import parent_llm_engine as ple
+    # correct price IS present → do not flag even if another number appears
+    ans = "ფასია 2150 ლარი, ფასდაკლებით 1900 ლარი."
+    assert ple._reasoning_reflect(ans, {"price": "2150"}) == (ans, False)
+
+
+def test_reflect_replaces_wrong_manager_phone():
+    from app.agent.llm import parent_llm_engine as ple
+    out, replaced = ple._reasoning_reflect("დარეკეთ 599 11 22 33.", {"phone": "558 67 47 33"})
+    assert replaced is True
+
+
+def test_reflect_never_raises():
+    from app.agent.llm import parent_llm_engine as ple
+    assert ple._reasoning_reflect(None, None) == (None, False)
+    assert ple._reasoning_reflect("x", None) == ("x", False)
