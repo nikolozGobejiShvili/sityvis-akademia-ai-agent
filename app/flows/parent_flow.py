@@ -8360,7 +8360,15 @@ def _maybe_handle_decline_engine(
     # Price-objection guard: a decline phrase that co-occurs with an
     # interest/contrast signal („მაგრამ", „ძვირია", „მაინტერესებს", …) is an
     # OBJECTION, not a refusal — never cold-close it; let the engine answer.
-    if is_decline and any(m in text for m in _DECLINE_OVERRIDE_INTEREST):
+    # Objection pilot (USE_OBJECTION_ENGINE_ROUTING): a HESITATION phrase with
+    # the same objection marker is also an objection — flag-gated so OFF stays
+    # byte-identical. Only the `is_will_think` term is new; every other decline
+    # guardrail below (plain decline / manager-contact / "?" / pending-clear)
+    # is untouched.
+    _widen_objection = getattr(settings, "USE_OBJECTION_ENGINE_ROUTING", False)
+    if (is_decline or (_widen_objection and is_will_think)) and any(
+        m in text for m in _DECLINE_OVERRIDE_INTEREST
+    ):
         logger.info(
             "[parent_flow] decline phrase overridden by interest/objection "
             "marker — deferring to engine (sender=%s)", conversation.sender_id,

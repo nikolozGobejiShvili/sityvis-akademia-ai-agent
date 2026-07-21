@@ -383,6 +383,12 @@ class Settings:
     # its answer's facts (REFLECT). OFF ⇒ engine path byte-identical. Distinct
     # from USE_REASONING_LAYER (the Phase-1 deterministic router-tie-break).
     USE_REASONING_PASS: bool = False
+    # Objection pilot (Phase 3, 2026-07): route a hesitation phrase that
+    # co-occurs with an objection marker to the LLM engine (like a decline+
+    # objection already does) instead of the canned will-think reply. OFF ⇒
+    # `_maybe_handle_decline_engine` byte-identical. Only valuable atop
+    # USE_SKILLS + USE_REASONING_PASS.
+    USE_OBJECTION_ENGINE_ROUTING: bool = False
     # P3-C / COMMENT FLOW PATCH 1 — public comment reply gate.
     # When False (default), the agent SKIPS the public Facebook /
     # Instagram comment reply (`reply_to_comment`) entirely and goes
@@ -562,6 +568,9 @@ class Settings:
             USE_LEARNING=_parse_bool_optional("USE_LEARNING", False),
             USE_SKILLS=_parse_bool_optional("USE_SKILLS", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
+            USE_OBJECTION_ENGINE_ROUTING=_parse_bool_optional(
+                "USE_OBJECTION_ENGINE_ROUTING", False,
+            ),
             ENABLE_PUBLIC_COMMENT_REPLY=_parse_bool_optional(
                 "ENABLE_PUBLIC_COMMENT_REPLY", False,
             ),
