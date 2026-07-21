@@ -126,6 +126,10 @@ PROMPT_VOLATILE_FACT_ALLOWLIST = {
     "558 67 47 33": {
         "app/agent/prompts/system_parent.md",
         "app/agent/prompts/system_parent_v2.md",
+        # Phase 4 lean prompt copies the anti-fabrication/manager redirect
+        # verbatim (guardrail map rows 11/14/44) — same known phone-debt as
+        # system_parent_v2.md, behind USE_LEAN_PROMPT (default off).
+        "app/agent/prompts/parent_lean.md",
     },
     "tinyurl": {
         "app/agent/prompts/system_parent.md",
