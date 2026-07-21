@@ -246,3 +246,78 @@ def test_reflect_never_raises():
     from app.agent.llm import parent_llm_engine as ple
     assert ple._reasoning_reflect(None, None) == (None, False)
     assert ple._reasoning_reflect("x", None) == ("x", False)
+
+
+# -- Task 5: ANSWER orchestration (wired into run_parent_llm_turn) ----------
+
+import dataclasses as _dataclasses
+from types import SimpleNamespace as _NS
+
+from app import config as _config
+
+
+def _mk_engine_response(*, content="", tool_calls=None):
+    tc = [_NS(id=t["id"], function=_NS(name=t["name"], arguments=t.get("arguments", "{}")))
+          for t in (tool_calls or [])]
+    return _NS(choices=[_NS(message=_NS(content=content or None, tool_calls=tc or None))])
+
+
+_VALID_PLAN = ('{"user_goal":"price","sentiment":"neutral","needed_facts":["price"],'
+               '"missing_lead_fields":[],"suggested_tool":"get_camp_info",'
+               '"should_greet":false,"plan":"answer the price"}')
+
+
+def test_reasoning_pass_runs_analyze_when_flag_on(monkeypatch):
+    from app.agent.llm import parent_llm_engine as ple
+    from app.services import openai_service
+    swapped = _dataclasses.replace(_config.settings,
+                                   USE_PARENT_LLM_ENGINE=True, USE_REASONING_PASS=True)
+    monkeypatch.setattr(ple, "settings", swapped)
+    calls = {"n": 0}
+    def _analyze(*a, **k):
+        calls["n"] += 1
+        return _VALID_PLAN
+    monkeypatch.setattr(openai_service, "analyze_parent_turn", _analyze)
+    monkeypatch.setattr(openai_service, "chat_with_tools",
+                        lambda **k: _mk_engine_response(content="ბანაკის ფასია 2150 ლარი."))
+    out = ple.run_parent_llm_turn(
+        user_message="რა ღირს ბანაკი?", conversation=_reasoning_conversation(),
+        lead=_reasoning_lead(), sender_id="s", platform="facebook",
+    )
+    assert out  # a reply came back
+    assert calls["n"] >= 1  # the reasoning pass (ANALYZE) actually ran
+
+
+def test_reasoning_pass_skipped_when_flag_off(monkeypatch):
+    from app.agent.llm import parent_llm_engine as ple
+    from app.services import openai_service
+    swapped = _dataclasses.replace(_config.settings,
+                                   USE_PARENT_LLM_ENGINE=True, USE_REASONING_PASS=False)
+    monkeypatch.setattr(ple, "settings", swapped)
+    calls = {"n": 0}
+    def _analyze(*a, **k):
+        calls["n"] += 1
+        return _VALID_PLAN
+    monkeypatch.setattr(openai_service, "analyze_parent_turn", _analyze)
+    monkeypatch.setattr(openai_service, "chat_with_tools",
+                        lambda **k: _mk_engine_response(content="პასუხი."))
+    out = ple.run_parent_llm_turn(
+        user_message="რა ღირს ბანაკი?", conversation=_reasoning_conversation(),
+        lead=_reasoning_lead(), sender_id="s", platform="facebook",
+    )
+    assert out
+    assert calls["n"] == 0  # flag OFF → ANALYZE never called (byte-identical path)
+
+
+def test_reasoning_prepare_skips_dynamic_program_turn(monkeypatch):
+    from app.agent.llm import parent_llm_engine as ple
+    from app.services import openai_service
+    swapped = _dataclasses.replace(_config.settings, USE_REASONING_PASS=True)
+    monkeypatch.setattr(ple, "settings", swapped)
+    monkeypatch.setattr(ple, "_reasoning_is_dynamic_program_turn", lambda m: True)
+    calls = {"n": 0}
+    monkeypatch.setattr(openai_service, "analyze_parent_turn",
+                        lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), "{}")[1])
+    g, d = ple._reasoning_prepare(_reasoning_conversation(), _reasoning_lead(), "ფორმულა1")
+    assert (g, d) == ({}, None)
+    assert calls["n"] == 0  # dynamic-program turn → ANALYZE never called

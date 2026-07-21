@@ -2211,6 +2211,94 @@ def _reasoning_reflect(answer: str, grounded: dict) -> tuple[str, bool]:
         return (answer, False)
 
 
+# -- reasoning pass: ANSWER orchestration (Phase 2, USE_REASONING_PASS) ----
+#
+# Ties ANALYZE→GROUND into a (grounded_facts, plan_directive) pair consumed by
+# run_parent_llm_turn. Flag-gated; SKIPS dynamic-program turns (not camp-
+# groundable → REFLECT would false-positive on their prices); fail-safe → the
+# normal ANSWER path runs untouched on any failure. Flag OFF ⇒ ({}, None) ⇒
+# no directive appended + no REFLECT ⇒ byte-identical.
+
+_REASONING_KNOWLEDGE_KEYS = (
+    "price", "dates", "location", "age", "registration", "conditions", "phone",
+)
+
+
+def _reasoning_is_dynamic_program_turn(user_message: str) -> bool:
+    """True when the message NAMES an active NON-reserved (dynamic) program —
+    such a turn isn't camp-groundable, so the reasoning pass skips it. Safe."""
+    try:
+        from app.services import admin_config_service
+        from app.reasoning.dynamic_program_match import match_dynamic_program
+        m = match_dynamic_program(
+            user_message, admin_config_service.get_active_sections(),
+        )
+        return bool(m and m.get("program_id") not in _RESERVED_PROGRAM_IDS)
+    except Exception:
+        return False
+
+
+def _reasoning_build_directive(plan: dict, grounded: dict) -> str | None:
+    """Assemble the extra ANSWER system directive from the plan + grounded
+    facts + a SOFT suggested-tool hint. None when there's nothing useful."""
+    try:
+        parts: list[str] = []
+        p = str(plan.get("plan") or "").strip()
+        if p:
+            parts.append(p)
+        facts = _reasoning_ground_text(grounded)
+        if facts:
+            parts.append(
+                "გადამოწმებული ფაქტები — ფასზე/თარიღზე/ტელეფონზე/ბმულზე უპასუხე "
+                "მხოლოდ ამათგან; თუ საჭირო ფაქტი აქ არ არის, ჰკითხე ან შესთავაზე "
+                "მენეჯერი, ნუ იგონებ:\n" + facts
+            )
+        st = plan.get("suggested_tool")
+        if st:
+            parts.append(
+                f"ანალიზი მიუთითებს, რომ სავარაუდოდ საჭიროა ხელსაწყო `{st}` — "
+                "გამოიძახე ჯერ, თუ კითხვას ეს ფაქტები სჭირდება."
+            )
+        if not parts:
+            return None
+        return "[მსჯელობის გეგმა]\n" + "\n\n".join(parts)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _reasoning_prepare(
+    conversation: Conversation, lead: Lead, user_message: str,
+) -> tuple[dict, str | None]:
+    """Flag-gated ANALYZE + GROUND. Returns (grounded_facts, plan_directive).
+    Flag OFF / dynamic-program turn / any failure → ({}, None). Never raises."""
+    try:
+        if not getattr(settings, "USE_REASONING_PASS", False):
+            return ({}, None)
+        if _reasoning_is_dynamic_program_turn(user_message):
+            return ({}, None)
+        from app.agent.llm import parent_turn_analyzer
+        tool_names = [
+            t.get("function", {}).get("name")
+            for t in build_active_tools(
+                getattr(settings, "USE_DYNAMIC_PROGRAMS", False),
+                getattr(settings, "USE_LEARNING", False),
+            )
+        ]
+        tool_names = [t for t in tool_names if t]
+        plan = parent_turn_analyzer.analyze_for_engine(
+            user_message=user_message, lead=lead, conversation=conversation,
+            knowledge_keys=list(_REASONING_KNOWLEDGE_KEYS), tool_names=tool_names,
+        )
+        if not plan:
+            return ({}, None)
+        grounded = _reasoning_ground(plan.get("needed_facts", []))
+        directive = _reasoning_build_directive(plan, grounded)
+        return (grounded, directive)
+    except Exception:  # pragma: no cover - the pass is best-effort
+        logger.exception("[parent_llm_engine] _reasoning_prepare raised — ignored")
+        return ({}, None)
+
+
 # -- public entry ---------------------------------------------------------
 
 
@@ -2245,6 +2333,12 @@ def run_parent_llm_turn(
     # build the context, so the model never re-asks for a fact it already has.
     _capture_turn_facts(conversation, lead, user_message)
 
+    # Reasoning pass (Phase 2, USE_REASONING_PASS) — think before answering.
+    # Flag OFF ⇒ ({}, None) ⇒ no directive appended + no REFLECT ⇒ byte-identical.
+    _reason_grounded, _reason_directive = _reasoning_prepare(
+        conversation, lead, user_message,
+    )
+
     if _use_slim_prompts():
         # Slim mode: inject ONLY the planner policy + selected_state (topic-
         # scoped) instead of the full lead-context + giant sales context.
@@ -2265,6 +2359,10 @@ def run_parent_llm_turn(
         ]
         _trace_prompt_mode("giant", None)
     messages.extend(_recent_history(conversation))
+    # Reasoning directive (a SEPARATE system message — never concatenated into
+    # the giant prompt). Present only when the flag-gated pass produced a plan.
+    if _reason_directive:
+        messages.append({"role": "system", "content": _reason_directive})
     messages.append({"role": "user", "content": user_message})
 
     executor = ParentToolExecutor(
@@ -2356,6 +2454,15 @@ def run_parent_llm_turn(
             cleaned = _suppress_redundant_age_question(cleaned, lead, conversation)
             # Never greet again mid-conversation (scripted-reset guard).
             final_answer = _strip_mid_conversation_greeting(cleaned, conversation)
+            # REFLECT (Phase 2) — verify the answer's facts against the grounded
+            # ones; replace a clear hallucination with a safe fallback. No-op
+            # when the pass didn't ground anything (flag off ⇒ {} ⇒ unchanged).
+            if _reason_grounded:
+                final_answer, _reason_replaced = _reasoning_reflect(
+                    final_answer, _reason_grounded,
+                )
+                if _reason_replaced:
+                    logger.info("[parent_llm_engine] REFLECT replaced a hallucinated fact")
             _trace_parent_llm_decision(
                 route_owner="parent_llm_engine",
                 intent="parent_llm_response",
