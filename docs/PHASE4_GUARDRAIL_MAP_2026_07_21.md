@@ -101,7 +101,7 @@ correcting the steer.
 | 36 | კონსულტაცია vs ფიზიკური ვიზიტი (L342–350) | Consultation is phone/video, never "in person"; exact clarification sentence | **prompt-only-verbatim** | none | Keep verbatim: "კონსულტაცია ძირითადად ტელეფონით ან ვიდეოზარით ტარდება." and the pending-slot preservation note. |
 | 37 | აკრძალული ფრაზები — literal/რობოტული (L355–380) | ~20 banned robotic/awkward phrases with approved replacements | **prompt-only-verbatim — sanitizer-coupled (MAJOR)** | Nearly every banned phrase in this block has a matching `FORBIDDEN_PHRASE_REPLACEMENTS` entry in `parent_llm_engine.py` (L847–1254): "გაიმეორეთ ნომერი" L858, "შეკვეთოთ…" L866, "ყოველთვის მზად ვარ" L874/878, "დამიმტკიცეთ" L886, "მენეჯერის კავშირი" L912, "მენეჯერს გადასცე" L916, "გთხოვთ მომწერეთ" L922, "განვადებაში" L932, "ჩამოუყალიბეთ" L971–980, "აზრი აქვს"/"ეს გასაგები მოთხოვნაა" L999–1017, "დეტალებს ცოცხლად" L945–951, "რომ სწორად გითხრათ" L1040–1050, "გაგივლით" L1054–1068, "დაგიბაროთ/დაგიბარებთ" L1073–1102 (continues past L1102). See §5. | Keep the full banned-phrase list verbatim in the lean prompt; do not rely on the sanitizer alone. |
 | 38 | დახურვის წესი — thanks/decline close (L382–385) | Exact short closes for "მადლობა"/"არა მადლობა"/"დავფიქრდები"; never resume selling after | **backend-enforced** | Same deterministic intercepts as rows 25/26: `_maybe_handle_decline_engine` (L8312) / `_maybe_handle_thanks_farewell` (L8291–8309) | "Decline/thanks closes are handled by deterministic pre-engine intercepts in the common case; short fallback line for the LLM path." |
-| 39 | ფასის წინააღმდეგობა (L387) | 4-step price-objection script; ban on "მოტივაცია"/"იაფია" | **prompt-only-verbatim** | none (a routing guard exists — `_DECLINE_OVERRIDE_INTEREST` markers keep price objections out of the decline path — but the *content* of the reply is unguarded) | Keep verbatim: the 4-step sequence and the two banned words. |
+| 39 | ფასის წინააღმდეგობა (L387) | 4-step price-objection script; ban on "მოტივაცია"/"იაფია" | **prompt-only-behavioral** (⚠️ SUPERSEDED 2026-07-21 — was `prompt-only-verbatim`, see note below) | none (a routing guard exists — `_DECLINE_OVERRIDE_INTEREST` markers keep price objections out of the decline path — but the *content* of the reply is unguarded) | Render behaviorally, keeping every guarantee explicit: empathize before any CTA; connect price to value/what's-included; mention the 6-month TBC/BoG split; one light CTA; always state the price digit; `*არ* გამოიგონო ფასდაკლება/ფასი`; banned words "მოტივაცია"/"იაფია". Do NOT reproduce the two fixed quoted sentences. |
 | 40 | რამდენიმე შვილი — Sibling Discount (L389–399) | 10% discount mentioned only for 2+ children enrolling together; single-participant never gets it | **backend-enforced** (brief's steer said "likely prompt-only" — **corrected on verification**) | `_strip_unwarranted_sibling_discount`, `parent_flow.py` (defined ~L2898, wired into the reply pipeline at L1617–1619): strips the discount sentence whenever the conversation lacks an explicit 2+-children trigger | "Mention the 10% sibling discount only when 2+ children are explicitly enrolling together — backend deterministically scrubs any unwarranted mention regardless of what the LLM says." |
 | 41 | გაბრაზებული მომხმარებელი (L401) | Exact opening apology; never defensive; never restart menu | **prompt-only-verbatim (likely sanitizer-coupled)** | Not found in the grep of `parent_llm_engine.py` FORBIDDEN_PHRASE_REPLACEMENTS entries read directly, but the project's own change-log (CLAUDE.md) documents this as "system-prompt rule + sanitiser" — treat as sanitizer-coupled pending Task 4's own audit; classify conservatively | Keep verbatim: "ბოდიშს გიხდით. ვეცდები, სწრაფად და ზუსტად დაგეხმაროთ." plus the "never defensive / never restart menu" bans. |
 | 42 | წარსული თარიღი — exact wording ban (L403) | Never say "უკვე გასულია"; exact replacement sentence | **prompt-only-verbatim** | The underlying FACT is backend-guaranteed (`datetime_in_past`, L1159/L1968 — a past date is genuinely rejected), but the specific banned/approved WORDING was not found in the sanitizer or any guard | Keep verbatim: the banned phrase and its exact replacement sentence; note the past-date *fact* itself is backend-guaranteed separately. |
@@ -114,9 +114,38 @@ correcting the steer.
 ## 3. Summary counts
 
 - **backend-enforced: 24** (rows 0, 1, 3, 4, 7, 8, 9, 12, 13, 15, 17, 18, 19, 20, 21, 22, 23, 25, 34, 38, 40, 43, 45, 46)
-- **prompt-only-behavioral: 8** (rows 5, 10, 24, 27, 28, 32, 33, 47)
-- **prompt-only-verbatim: 16** (rows 2, 6, 11, 14, 16, 26, 29, 30, 31, 35, 36, 37, 39, 41, 42, 44)
+- **prompt-only-behavioral: 9** (rows 5, 10, 24, 27, 28, 32, 33, 39, 47) — *row 39 reclassified 2026-07-21, see §3a*
+- **prompt-only-verbatim: 15** (rows 2, 6, 11, 14, 16, 26, 29, 30, 31, 35, 36, 37, 41, 42, 44)
 - **Total guardrail blocks mapped: 48** (more than the "~39" estimate — every distinct rule-bearing heading was given its own row rather than risk dropping one by over-merging).
+
+### 3a. Row 39 supersession — price objection (2026-07-21, human decision)
+
+This map originally classified row 39 (`ფასის წინააღმდეგობა`, `system_parent_v2.md:387`)
+as **prompt-only-verbatim** and prescribed keeping the 4-step script. Task 3's brief
+(Step 1) explicitly ordered the opposite: render it behaviorally, because this is the
+block the naturalness measurement targets — the live OB1 objection reply scores
+**0.00/4** on the OpenAI judge, and the reply is so fully determined by this script
+that the Phase-2/Phase-3 machinery produced a **byte-identical** reply with the
+reasoning loop on and off (measured 2026-07-21).
+
+The Task-3 review surfaced the map-vs-brief contradiction and it was escalated. The
+**human decision-maker ruled the brief governs**, on this reasoning: the plan's global
+constraint says to keep a rule verbatim *"if that's what makes it hold"* — and what
+makes this block hold are its **guarantees** (state the price digit, never invent a
+discount, banned words, payment split), not the 1)–4) **choreography**. The choreography
+is sales sequencing, not a safety guarantee.
+
+Net guardrail coverage of the price block is **strictly better** after the change, not
+worse: `*არ* გამოიგონო ფასდაკლება/ფასი` (`system_parent_v2.md:150`) was absent from the
+lean prompt **entirely** and is now restored as an explicit bullet.
+
+Residual risk, to be watched by Task 5: with the choreography gone, objection wording
+becomes model-chosen. The conversion-proxy assertions on OB1/OB2/OB3
+(`require_any` = value/payment, `forbid_any` = pressure/invented-discount) are the gate
+that confirms the reply still sells. **If correctness drops there, revert row 39 to
+verbatim.**
+
+---
 
 Rows 15, 16, 22, 25, 26, 27, 38, 45 carry an explicit **partial/hybrid** note in their
 evidence column (some but not all of the block's sub-rules are backend-covered) —
