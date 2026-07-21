@@ -2543,6 +2543,17 @@ def _use_slim_prompts() -> bool:
     return bool(getattr(settings, "USE_SLIM_PROMPTS", False))
 
 
+def _use_lean_prompt() -> bool:
+    """Lean Prompt mode (Phase 4, Task 3). When ON, the engine loads the
+    ~120-160 line `parent_lean.md` instead of the 468-line
+    `system_parent_v2.md`. Every guardrail is preserved per the
+    executor-verified map (`docs/PHASE4_GUARDRAIL_MAP_2026_07_21.md`) —
+    short behavioral rules where a backend mechanism enforces the
+    guarantee, exact verbatim sentences where it's prompt-only. Default
+    OFF ⇒ `system_parent_v2.md` still loads, byte-identical."""
+    return bool(getattr(settings, "USE_LEAN_PROMPT", False))
+
+
 def _build_system_prompt(message: str = "", segment: str = "") -> str:
     # Canonical Admin Config age band (5A-2 migration) — runtime prompt
     # context only; the `system_parent_v2.md` file is untouched. With the
@@ -2551,9 +2562,15 @@ def _build_system_prompt(message: str = "", segment: str = "") -> str:
     age_min, age_max = admin_config_service.get_camp_age_bounds()
 
     company_name = settings.COMPANY_NAME or "სიტყვის აკადემია"
-    # Class 4: slim mode loads the short core prompt; default loads the giant
-    # prompt exactly as before (do NOT load system_parent_v2.md when slim).
-    prompt_name = "parent_core" if _use_slim_prompts() else "system_parent_v2"
+    # Class 4: slim mode loads the short core prompt; Phase 4 lean mode loads
+    # the guardrail-preserving lean prompt; default loads the giant prompt
+    # exactly as before (do NOT load system_parent_v2.md when slim/lean).
+    if _use_slim_prompts():
+        prompt_name = "parent_core"
+    elif _use_lean_prompt():
+        prompt_name = "parent_lean"
+    else:
+        prompt_name = "system_parent_v2"
     raw = load_prompt(prompt_name)
     base_prompt = raw.format(
         company_name=company_name,
@@ -2903,6 +2920,35 @@ def _build_sales_context(
 
     # --- Thank-you closing hint ---
     if _user_said_thanks(user_message):
+        # Phase 4 / Task 3 (M2): under the lean prompt, don't re-inject the
+        # full hardcoded verbatim script here — the exact mandated sentences
+        # already live in `parent_lean.md` itself (loaded fresh every turn),
+        # so a second literal script in the per-turn context would fight the
+        # lean prompt's "let the model reason/vary" goal. A short behavioral
+        # pointer is enough. Flag-OFF path below is untouched/byte-identical.
+        if _use_lean_prompt():
+            if booked:
+                lines.append(
+                    "- მომხმარებელი მადლობას ხდის დაჯავშნის შემდეგ —"
+                    " დაადასტურე თბილად, რომ კონსულტაცია ჩანიშნულია და"
+                    " მენეჯერი დაუკავშირდება."
+                )
+            elif adult_subscription_status in ("subscribed", "ok"):
+                lines.append(
+                    "- მომხმარებელი მადლობას ხდის სუბსქრიფციის შემდეგ —"
+                    " დაადასტურე თბილად მომავალი ღონისძიების შეტყობინების"
+                    " პირობა."
+                )
+            else:
+                lines.append(
+                    "- მომხმარებელი მადლობას ხდის — მოკლედ და თბილად"
+                    " უპასუხე."
+                )
+            lines.append(
+                "- *არასოდეს* გამოიყენო \"სიამოვნებით.\" მარტო — ეს"
+                " ზედმეტად ფორმალური/რობოტული ჟღერს."
+            )
+            return "\n".join(lines)
         if booked:
             lines.append(
                 "- მომხმარებელი მადლობას ხდის დაჯავშნის შემდეგ."
