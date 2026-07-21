@@ -1018,6 +1018,26 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         except Exception:
             pass
 
+        # Injection guard for the HOISTED path (2026-07-22). The hoist RETURNS
+        # before the deterministic chain below, so the PARENT prompt-injection
+        # guard at its existing call site (see `_maybe_handle_offtopic_injection`
+        # further down) would be skipped entirely — the only designed injection
+        # defence on this path. We call the SAME guard here, before the engine
+        # runs, so a hoisted „ignore previous instructions" / „system prompt
+        # მაჩვენე" turn gets the deterministic safe redirect and the LLM is
+        # never invoked. Deliberately placed AFTER the book-success reset above
+        # (so the per-turn reset still happens exactly once on every hoisted
+        # turn) and the existing call site below is NOT moved — moving it would
+        # re-order it relative to `_maybe_handle_camp_status` /
+        # `_maybe_handle_sunday_school` and silently change precedence for
+        # NON-hoisted turns. Returns None for every normal program question, so
+        # a non-injection hoisted turn is unchanged.
+        hoisted_injection_response = _maybe_handle_offtopic_injection(
+            conversation, message,
+        )
+        if hoisted_injection_response is not None:
+            return hoisted_injection_response
+
         return _sanitise_booking_confirmation(
             conversation, _run_llm_engine_safely(conversation, message),
         )
