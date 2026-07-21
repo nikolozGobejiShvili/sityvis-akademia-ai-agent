@@ -89,6 +89,7 @@ class Harness:
         self.llm_enabled = llm_enabled
         self.judge_enabled = judge_enabled
         self.last_tool_calls: list[tuple[str, dict]] = []
+        self.engine_invocations: int = 0
         self.current_case_id: str = ""
         self.responses: list[tuple[str, str, str]] = []   # (case_id, user_msg, agent reply)
         self._install_tool_recorder()
@@ -124,12 +125,36 @@ class Harness:
     def process(self, conv, message: str) -> str:
         from app.services import conversation_service
         self.last_tool_calls = []
-        reply = conversation_service.process_message(conv.sender_id, message, conv.platform)
+        self.engine_invocations = 0
+        reply = self._process_with_engine_spy(conversation_service, conv, message)
         # Capture every agent reply (+ the user turn that triggered it) for the
         # separate Georgian-grammar and naturalness evaluators.
         if reply and reply.strip():
             self.responses.append((self.current_case_id, message, reply))
         return reply
+
+    def _process_with_engine_spy(self, conversation_service, conv, message: str) -> str:
+        # Engine-reach counter (Task 1, anti-confound guard): wrap the SAME
+        # target `_install_engine_spy` in evals/interception.py patches
+        # (`parent_llm_engine.run_parent_llm_turn` on the module object) —
+        # `parent_flow.handle` re-imports it fresh on every call, so patching
+        # the module attribute is observed at call time. This wrap COUNTS then
+        # DELEGATES to the real function (never replaces it), so the engine
+        # still actually runs under `--llm`; offline (no --llm) a deterministic
+        # interceptor short-circuits before the engine is ever reached, so the
+        # real function underneath is never invoked either way in offline tests.
+        import app.agent.llm.parent_llm_engine as _ple
+        _orig_run = _ple.run_parent_llm_turn
+
+        def _counting_run(*a, **k):
+            self.engine_invocations += 1
+            return _orig_run(*a, **k)
+
+        _ple.run_parent_llm_turn = _counting_run
+        try:
+            return conversation_service.process_message(conv.sender_id, message, conv.platform)
+        finally:
+            _ple.run_parent_llm_turn = _orig_run
 
     def _install_tool_recorder(self) -> None:
         from app.agent.tools.parent_tool_executor import ParentToolExecutor
