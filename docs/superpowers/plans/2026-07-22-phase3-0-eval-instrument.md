@@ -8,6 +8,10 @@
 
 **Tech Stack:** Python 3.10, pytest. Eval judge is OpenAI `gpt-5.4-mini` (`EVAL_JUDGE_BACKEND=openai`, default). No new dependency. No agent-model change.
 
+> **Execution reconciliation (2026-07-22, post adversarial review).** An elite critique found Tasks 1–2 durable and correct, but Tasks 3–6 over-built and internally inconsistent. This plan executes as follows:
+> - **Tasks 1–2 execute as written** — engine-reach assertion + the R4 effect-not-text fix. These survive any redesign and are prerequisites for everything.
+> - **Tasks 3–6 will be REVISED before they are reached**, per the critique: (i) the metric's stated PRIMARY "responsiveness — did it answer the question?" is currently UNMEASURED — `grade_grounding` checks facts-present, not question-answered — so responsiveness needs an actual LLM-judge, not a substring check; (ii) `grade_grounding` must not be pure substring (`"480" in "არა 480"` wrongly passes) — add negation/adjacency guards or judge-assisted grounding; (iii) hardcoded per-case `forbid` word-lists (e.g. banning „ფასდაკლება" outright) re-create brittleness — a product with a real discount must be allowed to mention it; (iv) a synthetic fixture measures the mechanism in IDEAL conditions — green on it ≠ good on real messy products — so pair the automated metric with a human-in-the-loop review of ~20 real conversations once the first real capability exists, rather than over-investing in a synthetic automated score. The revised Tasks 3–6 will be re-written (and re-reviewed) after Task 2 lands.
+
 ## Global Constraints
 
 - **NO `app/` production code changes.** Phase 3.0 is instrument-only. Every file created/modified lives under `evals/` or `tests/`. If a task seems to need an `app/` change, stop and report — it belongs to Phase 3.1+, not here.
