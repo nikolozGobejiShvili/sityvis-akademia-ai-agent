@@ -69,3 +69,13 @@ def test_hard_decline_still_clears_pending_booking_both_flags(monkeypatch):
         out = parent_flow._maybe_handle_decline_engine(conv, "არ მინდა")
         assert out is not None                      # canned decline close
         assert conv.pending_booking is None         # hard decline cleared it
+
+
+# -- Task 2: objection eval coverage (>=6 cases incl. the hesitation gap) -----
+
+def test_objection_domain_has_at_least_six_cases_incl_ob3():
+    from evals import cases
+    obj = [c for c in cases.CASES if getattr(c, "domain", "") == "objection"]
+    ids = {c.id for c in obj}
+    assert len(obj) >= 6, f"objection coverage too thin: {sorted(ids)}"
+    assert "OB3" in ids, "the hesitation-routing gap case OB3 is missing"

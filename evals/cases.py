@@ -643,6 +643,18 @@ def _ob2_hesitation_no_pressure(h):
         forbid_any=("დღესვე", "ბოლო ადგილ", "აუცილებლად ახლავე"))
 
 
+def _ob3_hesitation_objection(h):
+    # Phase-3 pilot: the hesitation+objection gap the routing widening closes.
+    # Conversion-proxy require/forbid — a "natural" reply must still SELL
+    # (value/payment) and never pressure or invent a discount.
+    return _run_full_turn(h,
+        seed=dict(segment="PARENT", state="ASK_CHALLENGE", child_age="12",
+                  history=[{"role": "assistant", "content": "ბანაკის ღირებულებაა 2150 ლარი."}]),
+        message="მოვიფიქრებ, ცოტა ძვირია",
+        require_any=("განვადება", "გადახდის", "ღირებულება", "შედის", "რას შეიცავს"),
+        forbid_any=("დღესვე", "ბოლო ადგილ", "აუცილებლად ახლავე", "50%", "100%"))
+
+
 # ── camp_topic (advisory) — deterministic, same idiom as U6 / Q1 / Q4 ──
 def _ct1_safety_supervision(h):
     from app.reasoning import camp_topic_facts as ctf
@@ -873,6 +885,8 @@ CASES = [
              "Task 4 — objection domain", _ob1_budget_objection, stochastic=True),
     EvalCase("OB2", "response_quality", "soft hesitation → patient close, no pressure wording",
              "Task 4 — objection domain", _ob2_hesitation_no_pressure, stochastic=True),
+    EvalCase("OB3", "response_quality", "hesitation+objection → value/payment, no pressure",
+             "Phase-3 pilot — hesitation-routing gap", _ob3_hesitation_objection, stochastic=True),
     EvalCase("CT1", "response_quality", "night-safety/supervision concern → safety block",
              "Task 4 — camp_topic domain", _ct1_safety_supervision),
     EvalCase("CT2", "response_quality", "food allergy concern → food block, honest defer",
@@ -927,7 +941,7 @@ _DOMAIN_TAGS: dict[str, str] = {
     # -- objection (advisory) --
     "U4": "objection", "U7": "objection", "U11": "objection",
     "Q2": "objection", "Q8": "objection",
-    "OB1": "objection", "OB2": "objection",
+    "OB1": "objection", "OB2": "objection", "OB3": "objection",
     # -- camp_topic (advisory) --
     "U2": "camp_topic", "U6": "camp_topic",
     "Q1": "camp_topic", "Q4": "camp_topic", "Q9": "camp_topic",
