@@ -1716,6 +1716,103 @@ FORBIDDEN_PHRASE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
 )
 
 
+# ===========================================================================
+# Phase 4, Task 4 — USE_LEAN_SANITIZER partition of the table above.
+# ===========================================================================
+#
+# The 183-entry table is TWO different things wearing one coat:
+#
+#   * a SAFETY NET — strips, spelling/grammar/agreement fixes, stale-fact
+#     corrections, false-promise and internal-leak removals, and the
+#     „sanitizer-coupled" guardrails catalogued in
+#     `docs/PHASE4_GUARDRAIL_MAP_2026_07_21.md` §5; and
+#   * a CONVERGENCE ENGINE — entries whose only job is to force ONE approved
+#     phrasing over another equally-correct one, which is what makes every
+#     reply sound like the same script.
+#
+# `USE_LEAN_SANITIZER` (default OFF) keeps the safety net and relaxes the
+# convergence engine. Flag OFF ⇒ the FULL table is applied, in declaration
+# order, byte-identical to the pre-Task-4 behaviour.
+#
+# Classification rule (conservative — "when unsure, keep it"):
+#   An entry is SAFETY when ANY of these holds —
+#     S1  the replacement is "" (a strip);
+#     S2  it fixes a typo / wrong case / wrong verb form / animate agreement /
+#         an invalid word form, or collapses a literally duplicated fragment;
+#     S3  it removes a FALSE or STALE claim (timing promise, past-date wording,
+#         old business hours, false booking/transfer claim), an INTERNAL leak
+#         („ჩემი მეხსიერების მიხედვით"), a HARSH/defensive line, or a leaked
+#         greeting — i.e. it is traceable to a live production bug;
+#     S4  it is named in the guardrail map §5 (sanitizer-coupled), or is a
+#         documented "never remove" banned-phrase family in CLAUDE.md;
+#     S5  it produces a token a downstream deterministic path keys on (the
+#         „9-ნიშნა საკონტაქტო ნომერი" ask arms `_bot_recently_asked_for_contact`);
+#     S6  it is AMBIGUOUS between a grammar fix and a convergence mandate.
+#   Everything else — well-formed Georgian rewritten purely into the approved
+#   house phrasing — is a WORDING MANDATE and is skipped under the flag.
+#
+# NOTHING is deleted, retyped or reordered: the safety subset is built by
+# filtering the tuple above BY POSITION, so it holds references to the very
+# same tuple objects in the very same relative order (the rewrites are
+# order-dependent — see the comment in `sanitise_response_wording`).
+_SANITIZER_WORDING_MANDATE_INDEXES: frozenset[int] = frozenset(
+    {
+        24,   # „რას მიიჩნევთ ყველაზე მნიშვნელოვნად" → a different (approved)
+              #   discovery question. Needle is correct Georgian; index 23 keeps
+              #   the ungrammatical „…მნიშვნელოვანია" variant.
+        58,   # „სრულად ერგება ბანაკის ასაკობრივ ჩარჩოს" → bureaucratic-vs-natural
+        59,   #   style only. The NUMBER-bearing variant is normalised by
+        60,   #   `_AGE_SUITABILITY_BAND_RE` in the structural pass, which still runs.
+        68,   # „როგორ შემიძლია დაგეხმაროთ დღეს?" → brand ask. Generic-assistant
+        69,   # „როგორ შემიძლია დაგეხმაროთ?"      → phrasing, no guarantee attached.
+              #   (Indexes 70–72 keep the „მოგესალმებით!" greeting-leak strip;
+              #   dropping 68/69 actually lets 71/72 match the full greeting.)
+        98,   # „ბუნებრივი სურვილია" → „სრულიად ბუნებრივი სურვილია": intensifier
+              #   insertion, nothing else.
+        153,  # „სიამოვნებით დაგიდგებით გვერდში" → the brand manager-handoff line.
+        154,  #   Both sides are valid Georgian; this only converges the closing.
+        155,  # „თუ დაგეხმაროთ სხვა გზით" → the brand manager-handoff line. Same.
+        156,
+        157,
+        161,  # „რომელი დრო გჭირდებათ?" → „რომელი დროა თქვენთვის მოსახერხებელი?":
+        162,  #   correct Georgian, converged to the house slot question. (158–160
+              #   stay — „დრო გიჭერს მხარს" is a misused idiom, i.e. S2/S6.)
+    }
+)
+
+# Positional indexes are only valid for the table they were derived from. If
+# the table is edited, fail SAFE: fall back to the full table (never silently
+# drop the wrong entry).
+_SANITIZER_TABLE_SIZE_AT_PARTITION = 183
+
+
+def _build_sanitizer_safety_entries(
+    table: tuple[tuple[str, str], ...] = FORBIDDEN_PHRASE_REPLACEMENTS,
+) -> tuple[tuple[str, str], ...]:
+    if len(table) != _SANITIZER_TABLE_SIZE_AT_PARTITION:
+        return table
+    return tuple(
+        entry
+        for idx, entry in enumerate(table)
+        if idx not in _SANITIZER_WORDING_MANDATE_INDEXES
+    )
+
+
+#: The SAFETY subset — references (never copies) of the entries above, in the
+#: same relative order. Used only when `USE_LEAN_SANITIZER` is ON.
+_SANITIZER_SAFETY_ENTRIES: tuple[tuple[str, str], ...] = (
+    _build_sanitizer_safety_entries()
+)
+
+
+def _use_lean_sanitizer() -> bool:
+    """Lean Sanitizer mode (Phase 4, Task 4). When ON, `sanitise_response_wording`
+    still runs every structural pass and still applies `_SANITIZER_SAFETY_ENTRIES`,
+    but skips the pure wording-mandate entries so the model's own phrasing
+    survives. Default OFF ⇒ the full table applies, byte-identical."""
+    return bool(getattr(settings, "USE_LEAN_SANITIZER", False))
+
+
 # P3-C PATCH 7 — duplicated "თუ … თუ …" clause collapser.
 # The LLM sometimes emits TWO consecutive "თუ X გაგიჩნდებათ" clauses
 # (e.g. "თუ მომავალში რაიმე კითხვა გაგიჩნდებათ, თუ კიდევ რაიმე
@@ -1919,7 +2016,14 @@ def sanitise_response_wording(text: str) -> str:
     # so the fact-free „სრულად ერგება N–M …" rewrite precedes the generic
     # „სრულად ერგება" entry. NONE of these hardcode a camp fact.
     out = _apply_dynamic_fact_normalisations(out)
-    for needle, replacement in FORBIDDEN_PHRASE_REPLACEMENTS:
+    # Phase 4, Task 4 — flag OFF (default) applies the FULL table; flag ON
+    # applies the SAFETY subset only (same objects, same relative order).
+    table = (
+        _SANITIZER_SAFETY_ENTRIES
+        if _use_lean_sanitizer()
+        else FORBIDDEN_PHRASE_REPLACEMENTS
+    )
+    for needle, replacement in table:
         if needle in out:
             out = out.replace(needle, replacement)
     # Tidy any double spaces that the empty-replacement entries
