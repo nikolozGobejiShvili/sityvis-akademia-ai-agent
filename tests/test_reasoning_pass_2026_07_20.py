@@ -154,3 +154,55 @@ def test_analyze_for_engine_should_greet_string_false_is_false(monkeypatch):
         knowledge_keys=["camp_2026"], tool_names=["get_camp_info"],
     )
     assert result is not None and result["should_greet"] is False
+
+
+# -- Task 3: GROUND — per-class preselect (source-correct) -----------------
+
+def test_reasoning_ground_selects_only_requested_classes(monkeypatch):
+    from app.agent.llm import parent_llm_engine as ple
+    from app.services import admin_config_service as acs
+    monkeypatch.setattr(acs, "get_camp_facts", lambda: {
+        "price_gel": 2150, "price_text": "2150", "location": "ამბასადორი კაჭრეთი",
+        "age_min": 9, "age_max": 17, "registration_url": "https://reg.example",
+    })
+    monkeypatch.setattr(acs, "get_manager_phone", lambda: "558 67 47 33")
+    g = ple._reasoning_ground(["price", "phone"])
+    assert g["price"] == "2150"
+    assert g["phone"] == "558 67 47 33"        # from get_manager_phone, not camp phone
+    assert "location" not in g                 # not requested → not grounded
+
+
+def test_reasoning_ground_age_and_registration(monkeypatch):
+    from app.agent.llm import parent_llm_engine as ple
+    from app.services import admin_config_service as acs
+    monkeypatch.setattr(acs, "get_camp_facts", lambda: {
+        "age_min": 9, "age_max": 17, "registration_url": "https://reg.example"})
+    monkeypatch.setattr(acs, "get_manager_phone", lambda: "558 67 47 33")
+    g = ple._reasoning_ground(["age", "registration"])
+    assert g["age"] == "9-17" and g["registration"] == "https://reg.example"
+
+
+def test_reasoning_ground_unsourceable_class_omitted(monkeypatch):
+    from app.agent.llm import parent_llm_engine as ple
+    from app.services import admin_config_service as acs
+    monkeypatch.setattr(acs, "get_camp_facts", lambda: {"price_text": "2150"})
+    monkeypatch.setattr(acs, "get_manager_phone", lambda: "558 67 47 33")
+    # location requested but not in facts → omitted (not empty-stringed)
+    g = ple._reasoning_ground(["location"])
+    assert g == {}
+
+
+def test_reasoning_ground_empty_and_error_safe(monkeypatch):
+    from app.agent.llm import parent_llm_engine as ple
+    from app.services import admin_config_service as acs
+    assert ple._reasoning_ground([]) == {}
+    assert ple._reasoning_ground(None) == {}
+    monkeypatch.setattr(acs, "get_camp_facts", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert ple._reasoning_ground(["price"]) == {}   # never raises
+
+
+def test_reasoning_ground_text_formats_present_keys():
+    from app.agent.llm import parent_llm_engine as ple
+    txt = ple._reasoning_ground_text({"price": "2150", "phone": "558 67 47 33"})
+    assert "ფასი: 2150" in txt and "მენეჯერი: 558 67 47 33" in txt
+    assert ple._reasoning_ground_text({}) == ""

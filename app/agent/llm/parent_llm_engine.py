@@ -2058,6 +2058,96 @@ def _capture_turn_facts(
         )
 
 
+# -- reasoning pass: GROUND (Phase 2, USE_REASONING_PASS) ------------------
+#
+# GROUND preselects ONLY the facts the ANALYZE plan named, from the CORRECT
+# source, as a PER-CLASS dict. The per-class shape is load-bearing: REFLECT
+# (Task 4) judges ONLY the classes present here, so a class must appear ONLY
+# when we have a genuine trusted value for it (never an empty placeholder) —
+# that is what keeps REFLECT from flagging a correct answer it can't ground.
+# camp facts → get_camp_facts(); manager phone → get_manager_phone() (NOT the
+# camp `phone` field). Never raises.
+
+# Georgian labels for the ANSWER directive block, per grounded fact-class.
+_REASONING_FACT_LABELS: dict[str, str] = {
+    "price": "ფასი",
+    "location": "ლოკაცია",
+    "age": "ასაკი",
+    "dates": "თარიღები",
+    "registration": "რეგისტრაცია",
+    "phone": "მენეჯერი",
+}
+
+
+def _reasoning_ground(needed_facts: list[str]) -> dict[str, str]:
+    """Return {fact_class: trusted_value} for ONLY the classes in
+    ``needed_facts`` that we can genuinely source. A class we cannot cleanly
+    source is OMITTED (never guessed). ``[]``/``None`` → ``{}``. Never raises."""
+    try:
+        if not needed_facts:
+            return {}
+        wanted = {str(f).lower() for f in needed_facts if f}
+        if not wanted:
+            return {}
+        from app.services import admin_config_service
+
+        facts = admin_config_service.get_camp_facts() or {}
+        out: dict[str, str] = {}
+
+        if "price" in wanted:
+            price = str(facts.get("price_text") or "").strip() or str(
+                facts.get("price_gel") or "").strip()
+            if price:
+                out["price"] = price
+        if "location" in wanted:
+            loc = str(facts.get("location") or "").strip()
+            if loc:
+                out["location"] = loc
+        if "age" in wanted:
+            amin, amax = facts.get("age_min"), facts.get("age_max")
+            if amin is not None and amax is not None:
+                out["age"] = f"{amin}-{amax}"
+        if "registration" in wanted:
+            url = str(facts.get("registration_url") or "").strip()
+            if url:
+                out["registration"] = url
+        if "dates" in wanted:
+            streams = facts.get("streams")
+            if isinstance(streams, list):
+                parts = [
+                    str(s.get("dates_text") or s.get("name") or "").strip()
+                    for s in streams if isinstance(s, dict)
+                ]
+                joined = ", ".join(p for p in parts if p)
+                if joined:
+                    out["dates"] = joined
+        if "phone" in wanted:
+            phone = str(admin_config_service.get_manager_phone() or "").strip()
+            if phone:
+                out["phone"] = phone
+        # `conditions` is intentionally NOT grounded (no clean single source);
+        # REFLECT will therefore not judge it.
+        return out
+    except Exception:  # pragma: no cover - GROUND must never break a turn
+        logger.exception("[parent_llm_engine] _reasoning_ground raised — ignored")
+        return {}
+
+
+def _reasoning_ground_text(grounded: dict[str, str]) -> str:
+    """Compact Georgian "label: value" block of the grounded facts for the
+    ANSWER directive. ``{}`` → ``""``. Never raises."""
+    try:
+        if not grounded:
+            return ""
+        lines = [
+            f"{_REASONING_FACT_LABELS.get(k, k)}: {v}"
+            for k, v in grounded.items() if v
+        ]
+        return "\n".join(lines)
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
 # -- public entry ---------------------------------------------------------
 
 
