@@ -164,9 +164,13 @@ _RESTORED_LEAN_GUARDRAILS = (
     "გამოიგონო ფასდაკლება/ფასი",
     # I-3 — two-questions sub-rule (L128/L131)
     "ჩააგდო ერთი მათგანი",
-    # I-4 — შეშფოთების შენახვა (L298–300)
-    "save_lead_info",
-    "challenge",
+    # I-4 — შეშფოთების შენახვა (L298–300). Distinctive string (occurs exactly
+    # once in parent_lean.md) — "save_lead_info"/"challenge" were replaced
+    # here because each occurs 3x in the file for unrelated reasons, so the
+    # test could not fail even when this entire bullet was deleted
+    # (empirically verified: deleting parent_lean.md:127 still gave
+    # `1 passed` with the old sentinels).
+    "შეშფოთების შენახვა",
     # M-2 — repeated thanks must not reuse the same text (L239)
     "გამეორებულ",
     # M-3 — banned booking-error wording on a past date (L403)
