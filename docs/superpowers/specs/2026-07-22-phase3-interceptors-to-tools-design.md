@@ -134,18 +134,34 @@ semantic matching (replacing substring triggers) · closing the learning loop ·
 | 2 | "Assert effect" doesn't work for advisory domains — there, effect *is* text | **Grounding assertion** (3.0-T4): are the reply's facts traceable to a tool payload? Checkable, and targets the exact Q2 failure. |
 | 3 | "~8–10 exceptions" was invented | **3.0-T3 counts it.** Re-scope gate before 3.1. |
 | 4 | 3.1 is a high-risk refactor described in one paragraph | Flagged 🔴; gets its own risk plan and incremental landing. |
-| 5 | We author the ground truth we then optimise against | **OPEN QUESTION 2.** |
-| 6 | The camp is over — what is the agent even selling? | **OPEN QUESTION 1.** |
+| 5 | We author the ground truth we then optimise against | **RESOLVED (§6/OQ2):** ground truth = grounding-in-product-facts + responsiveness + forbid, NOT hand-written answers. Operator rejected hand-written answers as re-creating the template pathology. |
+| 6 | The camp is over — what is the agent even selling? | **RESOLVED (§6/OQ1):** whatever the operator adds to the panel — product-agnostic. This *forces* polarity inversion (no interceptor can exist for a not-yet-added product). |
 
 ---
 
-## 6. 🔴 OPEN QUESTIONS — block Phase 3.0
+## 6. OPEN QUESTIONS — RESOLVED 2026-07-22 (operator)
 
-**OQ1 — What should the agent do between seasons?**
-12 of 23 eval cases now hit "registration closed" *correctly*. Building the eval on today's state optimises for a dead season; building it on a hypothetical future stream is guesswork. **When does the next camp open, and what should the agent sell today** (Sunday School? events? lead capture for the next stream?)
+**OQ1 — RESOLVED: the product is not fixed; it is whatever the operator adds.**
+There is no single "what to sell". The camp is over; Sunday School will come; adult events; **and anything the operator adds in the admin panel later.** The requirement is therefore product-agnostic: *whatever is added in the panel must be sold correctly, and the customer's question analysed.*
 
-**OQ2 — Who defines a correct answer?**
-`require_any`/`forbid_any` were authored by us, and 3.0b found they *"under-credit both models"*. Without an authoritative reference we optimise our own guess. **Proposal:** the operator (or client) writes model answers for 15–20 real questions; that becomes ground truth for 3.0-T2/T4.
+**Design consequence (this is the strongest argument for polarity inversion in the whole spec):** you **cannot** write a deterministic interceptor for a product that does not exist yet. A hardcoded handler can only serve the products someone hand-coded (camp / Sunday School / adult events). The only mechanism that can sell an *arbitrary future admin-added product* is the LLM reasoning over that product's data via a **generic tool**. Polarity inversion is thus not a stylistic preference — it is **forced** by the operator's goal.
+- The **info-answering** half of this is already built and proven live: `USE_DYNAMIC_PROGRAMS` → `list_programs`/`get_program_info` answered "ფორმულა1" from admin data with no code change (2026-07-20).
+- The **not-yet-built** half: each product type needs its *appropriate* action + lead, generalising what camp has. Camp = consultation booking + lead. Sunday School = email handoff + lead. Adult events = subscription + lead. A new admin product today gets info-answering only. **Generalising "every product gets its own function + lead, per product type" is a Phase 3.2/3.3 goal** — partially built, not to be scoped now.
+
+**OQ2 — RESOLVED, and the original proposal was WRONG (operator corrected it).**
+The proposal was: operator hand-writes model answers for 15–20 questions. The operator rejected this with the decisive insight: *"if I write the answer to a specific question, it then works like a bot and can't understand a differently-phrased question."* **Writing per-question answers re-creates the exact template pathology we are removing.** So:
+- **Client provides PRODUCT FACTS** (price, dates, eligibility, what's included, handoff rules) — via the admin panel / data files. **Not answers.**
+- **Operator QAs grammar** on the Georgian output.
+- **Ground truth for the eval is therefore NOT a hand-written answer.** It is: *did the reply (a) answer the question that was actually asked, (b) use the correct product facts from the tool payload (**grounding** — the Q2 failure), and (c) invent nothing / apply no pressure (**forbid**).* This is checkable from the product facts alone, needs no canned reference answer, and **cannot be gamed by parroting a template** — a template that ignores the question fails (a); one that invents fails (c).
+- The existing `approved_answers.yaml` (operator-written answer for a trigger) stays only as a narrow **escape hatch**, never the primary path — using it as the mechanism is the bot behaviour the operator is rejecting.
+
+### Hard constraint added by the operator (2026-07-22): existing capabilities must NOT break
+
+These are the deterministic exception list (Layer 1) and are explicitly OUT of scope for relaxation:
+- **booking** (ჯავშანი) · **lead capture** (ლიდების ჩაწერა) · **manager-number handoff** (მენეჯერის ნომრის გადაცემა).
+
+And the product goal, stated plainly by the operator: *"the main thing is the agent be as smart and human as possible and not return memorised text templates."*
+**How the anti-template win is achieved — and how it is NOT measured:** the improvement comes **structurally**, from removing the interceptors that emit canned templates, not from optimising a naturalness score. Phase 4 proved naturalness fails as a gate (Q2 got *more natural and less correct*). So the metric (§3.0-T4) **guards against correctness/grounding regression**; the "smart and human, not templated" gain is delivered by the architecture change itself, and confirmed by the drop in canned-template firing (T1's attribution counter), not by chasing a naturalness number.
 
 ---
 
