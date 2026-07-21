@@ -347,6 +347,8 @@ class Settings:
     # prompt. The old prompt files are NOT deleted. Pinned OFF in tests so the
     # 2992-test baseline is byte-identical; the slim-prompt test file enables it.
     USE_SLIM_PROMPTS: bool = False
+    USE_LEAN_PROMPT: bool = False
+    USE_LEAN_SANITIZER: bool = False
     # ADULT LLM Engine — mirrors P3-C SAFE for the adult cultural-events
     # flow. When False (default), adult_flow.handle() runs the legacy
     # deterministic state machine + PATCH 7 global intent guard exactly
@@ -562,6 +564,8 @@ class Settings:
             CONVERSATION_PLANNER_AUTHORITATIVE=_parse_bool_optional("CONVERSATION_PLANNER_AUTHORITATIVE", False),
             CONVERSATION_TRACE_DEBUG=_parse_bool_optional("CONVERSATION_TRACE_DEBUG", False),
             USE_SLIM_PROMPTS=_parse_bool_optional("USE_SLIM_PROMPTS", False),
+            USE_LEAN_PROMPT=_parse_bool_optional("USE_LEAN_PROMPT", False),
+            USE_LEAN_SANITIZER=_parse_bool_optional("USE_LEAN_SANITIZER", False),
             USE_ADULT_LLM_ENGINE=_parse_bool_optional("USE_ADULT_LLM_ENGINE", True),
             USE_DYNAMIC_PROGRAMS=_parse_bool_optional("USE_DYNAMIC_PROGRAMS", False),
             USE_LEAD_MEMORY=_parse_bool_optional("USE_LEAD_MEMORY", False),
