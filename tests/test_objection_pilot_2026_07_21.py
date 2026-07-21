@@ -79,3 +79,18 @@ def test_objection_domain_has_at_least_six_cases_incl_ob3():
     ids = {c.id for c in obj}
     assert len(obj) >= 6, f"objection coverage too thin: {sorted(ids)}"
     assert "OB3" in ids, "the hesitation-routing gap case OB3 is missing"
+
+
+def test_pilot_objection_cases_enforce_the_conversion_proxy():
+    # review Important (plan Task 2 Step 3): the pilot's full-turn objection
+    # cases must carry BOTH require_any (still sells) AND forbid_any (no
+    # pressure / invented discount) — so "natural" can't win by dropping the
+    # sell. Legacy U4/Q2 use ad-hoc checks and are exempt; guard the OB* set so
+    # a future objection case without an anti-pressure forbid is caught.
+    import inspect
+    from evals import cases
+    by_id = {c.id: c for c in cases.CASES}
+    for cid in ("OB1", "OB2", "OB3"):
+        src = inspect.getsource(by_id[cid].run)
+        assert "require_any=" in src, f"{cid} missing require_any (conversion-proxy)"
+        assert "forbid_any=" in src, f"{cid} missing forbid_any (anti-pressure guard)"
