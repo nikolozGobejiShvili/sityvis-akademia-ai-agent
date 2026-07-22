@@ -867,6 +867,69 @@ def get_camp_age_bounds() -> tuple[int, int]:
     return (_bound("age_min", default[0]), _bound("age_max", default[1]))
 
 
+def get_program_age_bounds(program_id: str) -> tuple[int, int]:
+    """Per-product age band ``(age_min, age_max)`` for a NON-camp admin product.
+
+    Capability #2 / R1 (2026-07). Returns the section's integer
+    ``(age_min, age_max)`` for a dynamic product; **FAIL-CLOSED to the canonical
+    camp band** (``get_camp_age_bounds()``) for ``summer_camp``, an empty/unknown
+    id, or a section whose bounds are missing / blank / non-integer. This is the
+    booking GUARDRAIL zone — a bad/absent value must NEVER yield a disabled or
+    no-op age check; it falls back to the known-good camp band. Never raises.
+    """
+    if not program_id or program_id == "summer_camp":
+        return get_camp_age_bounds()
+    try:
+        section = get_section(program_id)
+    except Exception as exc:  # pragma: no cover - defensive: fail-closed to camp
+        logger.warning(
+            "[admin_config] get_program_age_bounds(%s): get_section failed: %s — "
+            "using camp band", program_id, exc,
+        )
+        return get_camp_age_bounds()
+    if not section:
+        return get_camp_age_bounds()
+    raw_min = section.get("age_min")
+    raw_max = section.get("age_max")
+    if raw_min in (None, "") or raw_max in (None, ""):
+        return get_camp_age_bounds()
+    try:
+        return (int(raw_min), int(raw_max))
+    except (TypeError, ValueError):
+        logger.warning(
+            "[admin_config] get_program_age_bounds(%s): malformed bounds "
+            "age_min=%r age_max=%r — using camp band", program_id, raw_min, raw_max,
+        )
+        return get_camp_age_bounds()
+
+
+def is_program_registration_open(program_id: str) -> bool:
+    """Per-product registration gate for a NON-camp admin product.
+
+    Capability #2 / R1 (2026-07). ``summer_camp`` / empty id delegate to
+    ``is_camp_registration_open()`` (byte-identical). For a dynamic product the
+    section's ``registration_status`` must be an explicit OPEN value; **anything
+    else — missing, blank, closed, unknown section, or an error — is CLOSED**
+    (fail-closed, so a product added without a status can never leak a booking
+    entry point). Note this differs from camp, whose *missing* value defaults
+    open for back-compat. Never raises.
+    """
+    if not program_id or program_id == "summer_camp":
+        return is_camp_registration_open()
+    try:
+        section = get_section(program_id)
+    except Exception as exc:  # pragma: no cover - registration actions fail closed
+        logger.warning(
+            "[admin_config] is_program_registration_open(%s): get_section failed: "
+            "%s — treating as closed", program_id, exc,
+        )
+        return False
+    if not section:
+        return False
+    value = str(section.get("registration_status") or "").strip().lower()
+    return value in _CAMP_REGISTRATION_OPEN_VALUES
+
+
 # -- adult events ---------------------------------------------------------
 
 

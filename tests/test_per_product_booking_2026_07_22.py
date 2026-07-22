@@ -66,3 +66,108 @@ def test_lead_from_dict_missing_program_id_defaults_empty():
         {"sender_id": "s", "platform": "messenger", "segment": "PARENT"},
     )
     assert restored.program_id == ""
+
+
+# ── Task 2: get_program_age_bounds + is_program_registration_open ──────────
+# Fail-closed to camp on any miss/blank/invalid — NEVER a disabled/no-op band.
+
+from app.services import admin_config_service as acs  # noqa: E402
+
+
+def test_age_bounds_summer_camp_is_camp_band():
+    assert acs.get_program_age_bounds("summer_camp") == acs.get_camp_age_bounds()
+
+
+def test_age_bounds_empty_id_is_camp_band():
+    assert acs.get_program_age_bounds("") == acs.get_camp_age_bounds()
+
+
+def test_age_bounds_unknown_id_is_camp_band(monkeypatch):
+    monkeypatch.setattr(acs, "get_section", lambda pid: None)
+    assert acs.get_program_age_bounds("nope") == acs.get_camp_age_bounds()
+
+
+def test_age_bounds_dynamic_product(monkeypatch):
+    monkeypatch.setattr(
+        acs, "get_section",
+        lambda pid: {"id": "disneyland_tour", "age_min": 7, "age_max": 16}
+        if pid == "disneyland_tour" else None,
+    )
+    assert acs.get_program_age_bounds("disneyland_tour") == (7, 16)
+
+
+def test_age_bounds_dynamic_string_bounds_parse(monkeypatch):
+    monkeypatch.setattr(
+        acs, "get_section",
+        lambda pid: {"id": "disneyland_tour", "age_min": "7", "age_max": "16"},
+    )
+    assert acs.get_program_age_bounds("disneyland_tour") == (7, 16)
+
+
+def test_age_bounds_dynamic_blank_min_fails_closed_to_camp(monkeypatch):
+    monkeypatch.setattr(
+        acs, "get_section",
+        lambda pid: {"id": "disneyland_tour", "age_min": "", "age_max": 16},
+    )
+    assert acs.get_program_age_bounds("disneyland_tour") == acs.get_camp_age_bounds()
+
+
+def test_age_bounds_dynamic_noninteger_fails_closed_to_camp(monkeypatch):
+    monkeypatch.setattr(
+        acs, "get_section",
+        lambda pid: {"id": "disneyland_tour", "age_min": "abc", "age_max": 16},
+    )
+    assert acs.get_program_age_bounds("disneyland_tour") == acs.get_camp_age_bounds()
+
+
+def test_age_bounds_never_raises(monkeypatch):
+    def _boom(pid):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(acs, "get_section", _boom)
+    assert acs.get_program_age_bounds("disneyland_tour") == acs.get_camp_age_bounds()
+
+
+def test_registration_summer_camp_delegates_to_camp():
+    assert acs.is_program_registration_open("summer_camp") == \
+        acs.is_camp_registration_open()
+
+
+def test_registration_empty_id_delegates_to_camp():
+    assert acs.is_program_registration_open("") == acs.is_camp_registration_open()
+
+
+def test_registration_dynamic_open(monkeypatch):
+    monkeypatch.setattr(
+        acs, "get_section",
+        lambda pid: {"id": "disneyland_tour", "registration_status": "open"},
+    )
+    assert acs.is_program_registration_open("disneyland_tour") is True
+
+
+def test_registration_dynamic_missing_fails_closed(monkeypatch):
+    # A dynamic product with NO registration_status must be CLOSED (fail-closed)
+    # — unlike camp, whose missing value defaults open for back-compat.
+    monkeypatch.setattr(
+        acs, "get_section", lambda pid: {"id": "disneyland_tour"},
+    )
+    assert acs.is_program_registration_open("disneyland_tour") is False
+
+
+def test_registration_dynamic_closed(monkeypatch):
+    monkeypatch.setattr(
+        acs, "get_section",
+        lambda pid: {"id": "disneyland_tour", "registration_status": "closed"},
+    )
+    assert acs.is_program_registration_open("disneyland_tour") is False
+
+
+def test_registration_unknown_section_fails_closed(monkeypatch):
+    monkeypatch.setattr(acs, "get_section", lambda pid: None)
+    assert acs.is_program_registration_open("nope") is False
+
+
+def test_registration_never_raises(monkeypatch):
+    def _boom(pid):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(acs, "get_section", _boom)
+    assert acs.is_program_registration_open("disneyland_tour") is False
