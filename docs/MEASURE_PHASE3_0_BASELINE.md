@@ -183,26 +183,34 @@ dynamic programs well" without that human review sitting alongside it.
 
 Ran in this order, each command's output captured verbatim:
 
-**(a) Full offline pytest suite:**
+**(a) Full offline pytest suite (run 2026-07-22, after all 5 Phase 3.0 commits):**
 ```
 .venv/Scripts/python.exe -m pytest tests/ -q
 ```
-Result: **`<FULL_SUITE_RESULT>`**
-The only failure is the ONE pre-existing, out-of-scope failure declared by
-the plan: `tests/test_approved_copy_service_2026_07_11.py::test_parent_flow_start_book_intent_uses_fast_track_and_advances_state`.
-No Phase 3.0 file caused any other failure.
+Result: **`1 failed, 5270 passed, 28 skipped, 3 warnings in 376.06s`**
+The one failure is exactly the ONE pre-existing, declared-out-of-scope
+failure: `tests/test_approved_copy_service_2026_07_11.py::test_parent_flow_start_book_intent_uses_fast_track_and_advances_state`
+(a fast-track/booking wording assertion unrelated to Phase 3.0 — it fails
+the same way with or without this phase's changes). No Phase 3.0 file
+(`evals/reach.py`, `evals/fixtures_product.py`, `evals/grounding.py`,
+`evals/cases_v2.py`, the `evals/harness.py` / `evals/run_evals.py` edits, or
+their tests) caused any other failure.
 
 **(b) Offline READ-ONLY eval (no `--llm`, no cost):**
 ```
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m evals.run_evals
 ```
-Result: **`<OFFLINE_EVAL_RESULT>`** — `✅ READ-ONLY VERIFIED — 0 live external
-writes/sends` (tripwires httpx.post=0, httpx.get=0, SMTP=0; OpenAI not
-called). This run's non-zero exit / sub-100 score reflects the CURRENT
-deterministic case set's pre-existing condition (e.g. the camp registration
-link case failing because the season is closed — see §2) — it is unrelated
-to any Phase 3.0 file, all of which are additive and never executed by the
-deterministic `CASES` list.
+Result: **`93/100 checks (93%) · 40 cases run, 22 skipped`** —
+`✅ READ-ONLY VERIFIED — 0 live external writes/sends` (tripwires
+httpx.post=0, httpx.get=0, SMTP=0; OpenAI not called — "OpenAI NOT called
+(deterministic-only mode — fully offline)"). The one deterministic failure
+in this run (`R3` — camp registration link) reflects the CURRENT
+deterministic case set's pre-existing condition (the camp registration link
+case fails because the season is closed — see §2), which is unrelated to
+any Phase 3.0 file: all of Task 3–5's additions are either new modules never
+imported by the default `CASES` list, or an `evals/harness.py` change whose
+default behaviour (`include_v2=False`) is provably byte-identical (see
+`tests/test_cases_v2_2026_07_22.py::test_collect_cases_include_v2_default_off_is_byte_identical`).
 
 **(c) `evals/baseline.json` protected throughout:**
 ```
