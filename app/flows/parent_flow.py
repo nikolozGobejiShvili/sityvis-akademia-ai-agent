@@ -336,6 +336,20 @@ def _maybe_handle_final_camp_public_policy(
         return _render_sunday_school_answer()
     if category == _FINAL_CAMP_POLICY_FUTURE_INFO_PENDING:
         return _camp_future_information_not_announced_answer()
+    if (
+        category == _FINAL_CAMP_POLICY_CURRENT_DETAILS_LIMITED
+        and getattr(settings, "USE_REGISTRATION_CLOSED_NARROWING", False)
+    ):
+        # Registration-closed narrowing: `current_details_limited` is the
+        # CATCH-ALL fallthrough — a camp-context turn during closed registration
+        # that is NOT a genuine registration/booking action (e.g. a price
+        # objection „ცოტა ძვირია" or „ბანაკის გარდა კიდევ რა პროგრამები გაქვთ?").
+        # Answering those with the blanket „რეგისტრაცია დასრულებულია" is a
+        # wrong-answer-to-the-question bleed (eval OB3/PI2). Defer to the engine
+        # so the actual question is answered. A genuine registration action is
+        # the REGISTRATION_CLOSED category below and is untouched. OFF ⇒ the
+        # catch-all falls through to the closed answer exactly as before.
+        return None
     if category == _FINAL_CAMP_POLICY_REGISTRATION_CLOSED:
         conversation.pending_booking = None
     return _camp_registration_closed_answer()
@@ -558,6 +572,35 @@ def _apply_client_emoji_policy(
     if _user_is_pure_thanks(message) or _user_is_farewell(message):
         return _strip_period_after_heart(_add_heart_after_first_sentence(response))
     # 3. First assistant reply AND the user greeted.
+    if not _bot_has_replied(conversation) and _user_greeted(message):
+        return _strip_period_after_heart(_add_heart_after_greeting(response))
+    return response
+
+
+def apply_greeting_farewell_heart(
+    conversation: Conversation, message: str, response: str,
+) -> str:
+    """Universal blue-heart (💙) for the OPENING greeting (first reply) and the
+    FAREWELL / thank-you close — for the flows that have NO emoji policy of their
+    own (the ADULT engine and the UNCLEAR routing menu). The PARENT engine keeps
+    its richer :func:`_apply_client_emoji_policy` (which also hearts a confirmed
+    booking and honors the unknown-detail defer contract) and is deliberately
+    NOT routed through this function.
+
+    Reuses the exact same heart primitives AND the same ``_CLIENT_EMOJI_ENABLED``
+    flag as PARENT, so the heart looks identical everywhere and every test that
+    pins the flag OFF (tests/conftest.py) stays byte-identical. Adds AT MOST one
+    💙; a no-op when the flag is off, the response already carries a heart, or the
+    turn is neither a first-greeting nor a bare farewell/thank-you.
+    """
+    if not _CLIENT_EMOJI_ENABLED:
+        return response
+    if not response or _HEART in response:
+        return response
+    # Close: a bare thank-you / farewell → warm one-heart close.
+    if _user_is_pure_thanks(message) or _user_is_farewell(message):
+        return _strip_period_after_heart(_add_heart_after_first_sentence(response))
+    # Open: the FIRST assistant reply AND the user greeted.
     if not _bot_has_replied(conversation) and _user_greeted(message):
         return _strip_period_after_heart(_add_heart_after_greeting(response))
     return response
@@ -988,6 +1031,29 @@ def _is_active_per_product_booking(conversation: Conversation) -> bool:
     return bool(pid) and pid not in _HARDCODED_PROGRAM_IDS
 
 
+def _safety_spine(conversation: Conversation, message: str) -> str | None:
+    """Layer-0 safety spine (Phase 3.1) — the program-AGNOSTIC sole-enforcer
+    guards run as ONE unit, in a fixed order: prompt-injection → political →
+    memory-info (PII). Returns the first guard's safe redirect, or None to
+    continue. Pure — the SAME call can run on every path; the first increment
+    calls it on the dynamic-program hoist (which today runs only the injection
+    guard, so political/PII turns there bypass their safe redirects).
+
+    Injection is FIRST so an injection turn is caught identically to today's
+    lone hoist call (byte-identity when swapped in). The guard names resolve at
+    CALL time (they are defined later in this module).
+    """
+    for guard in (
+        _maybe_handle_offtopic_injection,
+        _maybe_handle_political,
+        _maybe_memory_info_reply,
+    ):
+        response = guard(conversation, message)
+        if response is not None:
+            return response
+    return None
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1087,9 +1153,20 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         # `_maybe_handle_sunday_school` and silently change precedence for
         # NON-hoisted turns. Returns None for every normal program question, so
         # a non-injection hoisted turn is unchanged.
-        hoisted_injection_response = _maybe_handle_offtopic_injection(
-            conversation, message,
-        )
+        # Safety spine (Phase 3.1, hoist-first increment): when USE_SAFETY_SPINE
+        # is on, run the full program-agnostic Layer-0 spine here (injection →
+        # political → memory-info) instead of only the injection guard — so a
+        # political / „what do you know about me?" turn on the HOIST path gets
+        # its safe redirect too (today only injection is caught here, and the
+        # audit found political/PII bypassed on this path). Injection is the
+        # spine's FIRST guard, so with the flag OFF this is byte-identical to the
+        # lone injection call below.
+        if getattr(settings, "USE_SAFETY_SPINE", False):
+            hoisted_injection_response = _safety_spine(conversation, message)
+        else:
+            hoisted_injection_response = _maybe_handle_offtopic_injection(
+                conversation, message,
+            )
         if hoisted_injection_response is not None:
             return hoisted_injection_response
 

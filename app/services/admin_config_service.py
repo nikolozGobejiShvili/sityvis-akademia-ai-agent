@@ -246,6 +246,23 @@ def get_active_sections() -> list[dict[str, Any]]:
     ]
 
 
+def is_section_active(section_id: str) -> bool:
+    """True when the section's ``status`` is "active" (case/whitespace-insensitive).
+
+    Mirrors :func:`get_active_sections` for a single section, EXCEPT the default:
+    a MISSING or empty ``status`` counts as active (like :func:`is_camp_active`),
+    so a reserved program is never disabled by accident when the operator has not
+    set a status. Only an EXPLICIT non-active status (``ended`` / ``hidden`` /
+    ``full`` / ``coming_soon``) returns False. Never raises.
+    """
+    try:
+        section = get_section(section_id) or {}
+        raw = str(section.get("status") or "").strip().casefold()
+    except Exception:  # pragma: no cover - defensive: never disable on error
+        return True
+    return raw in ("", "active")
+
+
 def get_camp_status() -> str:
     """Return the operator-configured ``summer_camp.status``, normalised to
     lower-case and validated against :data:`CAMP_STATUSES`.
@@ -1540,6 +1557,15 @@ def get_active_adult_events(
     past-event tag and answer „this event has ended" rather than silently
     miss). ``now`` is injectable for deterministic tests.
     """
+    from app.config import settings as _settings
+    if _settings.USE_SECTION_STATUS_GATE and not is_section_active("adult_events"):
+        # Section-level status gate (2026-07): an operator who sets the
+        # adult_events section to ended/hidden in the admin panel fully turns the
+        # program off — no events offered, listed, or resolved. Gated here (the
+        # single user-facing chokepoint) rather than in get_adult_events so the
+        # admin panel can still list an ended section's events for editing.
+        # OFF ⇒ this block is skipped, byte-identical.
+        return []
     events = [e for e in get_adult_events() if e.get("active")]
     if not include_past:
         events = [

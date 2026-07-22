@@ -399,6 +399,34 @@ class Settings:
     # OFF ⇒ byte-identical: camp band, camp registration, 17-col lead row (no
     # Program column), camp facts. Every booking validation gate is preserved.
     USE_PER_PRODUCT_BOOKING: bool = False
+    # Section status gate (R3 increment, 2026-07): make the RESERVED programs'
+    # user-facing readers honor the section-level ``status`` the same way the
+    # dynamic path already does via get_active_sections — so setting a reserved
+    # program to ``ended``/``hidden`` in the admin panel actually stops the agent
+    # offering/answering it. First increment gates get_active_adult_events on the
+    # adult_events section status (today it checks only per-event ``active``, so
+    # an ``ended`` section is ignored — a live "disabled program still used" bug).
+    # A MISSING/empty status still counts as active (never disable by accident).
+    # OFF ⇒ get_active_adult_events ignores section status, byte-identical.
+    USE_SECTION_STATUS_GATE: bool = False
+    # Registration-closed narrowing (R4 increment, 2026-07): when camp
+    # registration is closed, _maybe_handle_final_camp_public_policy used a
+    # catch-all default that answered "registration closed" to ANY camp-context
+    # turn that didn't match a specific category — including a price objection
+    # ("it's a bit expensive") and "what OTHER programs do you have?" — a
+    # wrong-answer-to-the-question bleed (eval OB3/PI2). When ON, that catch-all
+    # (`current_details_limited` only) DEFERS to the engine so the real question
+    # is answered; a genuine registration/booking action still gets the closed
+    # answer. OFF ⇒ the catch-all returns the closed answer as before, byte-identical.
+    USE_REGISTRATION_CLOSED_NARROWING: bool = False
+    # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
+    # guards (injection · political · memory-info/PII) as ONE unit on every path.
+    # First increment: on the dynamic-program HOIST (which today runs only the
+    # injection guard, so political/PII turns bypass their safe redirects there).
+    # OFF ⇒ the hoist runs exactly _maybe_handle_offtopic_injection as today
+    # (byte-identical). Distinct from USE_REASONING_* — this is pure safety
+    # routing, no LLM.
+    USE_SAFETY_SPINE: bool = False
     # Reasoning loop (Phase 2, 2026-07): analyze→ground→answer→reflect in the
     # PARENT engine — the model plans, grounds only needed facts, then verifies
     # its answer's facts (REFLECT). OFF ⇒ engine path byte-identical. Distinct
@@ -595,6 +623,13 @@ class Settings:
             USE_PER_PRODUCT_BOOKING=_parse_bool_optional(
                 "USE_PER_PRODUCT_BOOKING", False,
             ),
+            USE_SECTION_STATUS_GATE=_parse_bool_optional(
+                "USE_SECTION_STATUS_GATE", False,
+            ),
+            USE_REGISTRATION_CLOSED_NARROWING=_parse_bool_optional(
+                "USE_REGISTRATION_CLOSED_NARROWING", False,
+            ),
+            USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
             USE_OBJECTION_ENGINE_ROUTING=_parse_bool_optional(
                 "USE_OBJECTION_ENGINE_ROUTING", False,

@@ -1129,6 +1129,17 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
     # (a different, intentionally-disclosed number) is untouched.
     response = _mask_user_phone_in_response(conversation, response)
 
+    # Universal blue-heart (💙) on the greeting (first reply) and the
+    # farewell/thank-you close, for the flows that lack PARENT's own emoji policy
+    # (the ADULT engine + the UNCLEAR routing menu). PARENT already applied its
+    # richer policy inside parent_flow.handle (and honors the unknown-detail
+    # defer contract there), so it is deliberately excluded. Reuses the same
+    # `_CLIENT_EMOJI_ENABLED` flag (pinned OFF in tests → byte-identical).
+    if route_segment != "PARENT":
+        response = parent_flow.apply_greeting_farewell_heart(
+            conversation, message_text, response,
+        )
+
     conversation.history.append({"role": "assistant", "content": response})
     # P3-C PATCH 3 — capture post-response follow-up markers. Knowing
     # when the bot last spoke lets the scheduler decide whether the
