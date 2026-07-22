@@ -179,13 +179,22 @@ def _r3_camp_registration_link(h):
 def _r4_overage_adult_switch(h):
     if not h.llm_enabled:
         return CaseOutcome(skipped=True, skip_reason="needs --llm (real engine turn + tool-call)")
+    from evals.reach import tool_ran
     conv = h.seed(segment="PARENT", state="ASK_AGE")
     out = h.process(conv, "ჩემი 20 წლის ბავშვი მაინტერესებს")
     tools = [t for t, _ in h.last_tool_calls]
-    suggested = ("ზრდასრულ" in out) or ("კულტურულ" in out) or ("switch_to_adult_flow" in tools)
+    # EFFECT, not text (3.0b fix, 2026-07-22): an over-age parent must actually be
+    # ROUTED to the adult flow — the `switch_to_adult_flow` tool must run so the
+    # segment truly switches. A verbal "adult events exist" with zero tool call
+    # leaves the conversation in the camp segment; 3.0b showed the old `OR` on a
+    # text mention scored that broken reply 3/3. The verbal mention is retained
+    # ONLY as diagnostic, never as an alternative pass condition.
+    switched = tool_ran(h, "switch_to_adult_flow")
+    mentioned = ("ზრდასრულ" in out) or ("კულტურულ" in out)
     return CaseOutcome([
-        chk("age>17 → adult switch / suggestion (not camp-eligible)", suggested,
-            "switch_to_adult_flow OR adult suggestion", f"tools={tools}; out={out[:70]}"),
+        chk("age>17 → adult switch actually ran (effect, not text)", switched,
+            "switch_to_adult_flow in tool_calls",
+            f"switched={switched} verbal_mention={mentioned} tools={tools}; out={out[:70]}"),
     ])
 
 
