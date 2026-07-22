@@ -380,6 +380,12 @@ class Settings:
     # capability packs by situation and inject them into the PARENT system
     # prompt. OFF ⇒ no selection, suffix "", system prompt byte-identical.
     USE_SKILLS: bool = False
+    # Topic-facts tool (Capability #1, 2026-07): expose camp_topic_facts.yaml
+    # (safety/food/gadgets/medical/schedule/communication) to the PARENT engine
+    # as the get_program_topic tool, and YIELD the deterministic topic
+    # interceptor so the model reasons over the facts instead of returning a
+    # canned block. OFF ⇒ interceptor + tool-surface + prompt byte-identical.
+    USE_PROGRAM_TOPICS: bool = False
     # Reasoning loop (Phase 2, 2026-07): analyze→ground→answer→reflect in the
     # PARENT engine — the model plans, grounds only needed facts, then verifies
     # its answer's facts (REFLECT). OFF ⇒ engine path byte-identical. Distinct
@@ -571,6 +577,7 @@ class Settings:
             USE_LEAD_MEMORY=_parse_bool_optional("USE_LEAD_MEMORY", False),
             USE_LEARNING=_parse_bool_optional("USE_LEARNING", False),
             USE_SKILLS=_parse_bool_optional("USE_SKILLS", False),
+            USE_PROGRAM_TOPICS=_parse_bool_optional("USE_PROGRAM_TOPICS", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
             USE_OBJECTION_ENGINE_ROUTING=_parse_bool_optional(
                 "USE_OBJECTION_ENGINE_ROUTING", False,

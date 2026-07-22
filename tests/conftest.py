@@ -127,6 +127,7 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_OBJECTION_ENGINE_ROUTING=False,
         USE_LEAN_PROMPT=False,
         USE_LEAN_SANITIZER=False,
+        USE_PROGRAM_TOPICS=False,
     )
     # Pin the config singleton too, so tests that rebuild settings from
     # `config_module.settings` (rather than the already-pinned module copies) do
