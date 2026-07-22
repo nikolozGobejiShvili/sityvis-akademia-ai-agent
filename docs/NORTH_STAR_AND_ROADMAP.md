@@ -60,7 +60,7 @@ Each piece is flag-gated and follows the **discipline** in §5. Nothing here is 
 A new product (Disneyland) gets camp's booking function: a parent books a consultation using THAT product's age band + registration; the lead is tagged with the program's name (a per-program identity on the Sheet). Surgical change to `book_consultation`, every booking guardrail preserved.
 **Delivers:** "same functions as camp" for any new product.
 
-### R2 — `status` lifecycle for every program  *(the piece you just added)*
+### R2 — `status` lifecycle for every program  ✅ **DONE — live-confirmed 2026-07-22** *(flag `USE_DYNAMIC_WELCOME`, on the test Page)*
 The admin `status` field (`active` / `ended` / `coming_soon` / `hidden`) is the single switch that governs whether the agent offers, answers, and books a program — uniformly for EVERY program, camp included. Mark camp `ended` → the agent stops offering/booking it, cleanly. Replaces camp's bespoke registration/date special-casing with the one status rule.
 **Delivers:** the operator fully controls each program's on/off from the panel.
 
@@ -76,14 +76,14 @@ With the structure product-agnostic, make the agent reliably **understand the cu
 
 | # | Function | Delivered by | Today |
 |---|---|---|---|
-| 1 | Greeting → offer ACTIVE programs | R2 (status drives the live menu) | camp-only static menu |
+| 1 | Greeting → offer ACTIVE programs | ✅ R2 done (status drives the live menu) | camp-only static menu |
 | 2 | Smart info answering | R3 (all programs) | ✅ dynamic products; reserved=canned |
 | 3 | Topic reasoning | done for dynamic; R3 for reserved | ✅ per-product verified |
 | 4 | Consultation booking | **R1** | camp-only |
 | 5 | Lead, named per program | **R1** | camp lead, unnamed |
 | 6 | Follow-ups, every program | R1/R3 (rides the per-product lead) | PARENT/camp only |
 | 7 | Comment #hashtag → DM, per program | R3 (generalise existing flow) | exists camp/adult |
-| 8 | Lifecycle `status` (`ended`=off) | **R2** | camp bespoke dates |
+| 8 | Lifecycle `status` (`ended`=off) | ✅ **R2 done** | camp bespoke dates |
 | 9 | Never re-ask known info | R4 | partial (lead memory) |
 | 10 | Never mix programs | R3 + R4 (routing precision) | partial |
 | 11 | Right knowledge/skill | R4 (skills) | built, off |
@@ -105,4 +105,4 @@ This project's three prior negative phases were all "built behind a flag, never 
 
 ---
 
-**Immediate next:** execute **R1** (per-product booking + lead — plan ready), then fold in **R2** (the `status`/`ended` lifecycle). R3 and R4 follow. Each enabled + seen working on the Disneyland test product before moving on.
+**Immediate next:** ~~R2~~ ✅ **DONE (live-confirmed 2026-07-22).** Next is **R1** (per-product booking + lead — plan ready), then **R3** (un-gate reserved products incl. Sunday School), then **R4** (the core reasoning problem, §1a). Each enabled + seen working on the Disneyland test product before moving on.
