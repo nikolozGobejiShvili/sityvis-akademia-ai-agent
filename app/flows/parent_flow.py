@@ -11274,6 +11274,51 @@ def _classify_done_event(message: str, history: list[dict[str, str]]) -> str:
     return "other_after_booking"
 
 
+def _program_section_facts(program_id: str) -> dict:
+    """Post-booking facts sourced from a NON-camp admin product's section
+    (Per-Product Booking, Cap #2 / R1).
+
+    Mirrors the camp fact keys the post-booking composer expects, sourced from
+    the product's `sections.yaml` entry; a key is omitted when the section does
+    not provide it. `phone` is the canonical manager phone — dynamic products
+    have no own phone. Never raises.
+    """
+    from app.services import admin_config_service
+    try:
+        section = admin_config_service.get_section(program_id) or {}
+    except Exception:
+        section = {}
+    facts: dict = {}
+    if not section:
+        return facts
+    price = section.get("price_gel")
+    if price in (None, ""):
+        price = section.get("price_text")
+    if price not in (None, ""):
+        facts["price_gel"] = price
+    for src_key, dst_key in (
+        ("location", "location"),
+        ("registration_url", "registration_url"),
+        ("duration_text", "duration_days"),
+        ("schedule_text", "schedule"),
+    ):
+        value = section.get(src_key)
+        if value not in (None, ""):
+            facts[dst_key] = value
+    included = section.get("included_items") or []
+    if included:
+        facts["includes"] = ", ".join(str(x) for x in included)
+    if section.get("name"):
+        facts["program_name"] = section.get("name")
+    try:
+        phone = admin_config_service.get_manager_phone()
+        if phone:
+            facts["phone"] = phone
+    except Exception:  # pragma: no cover - phone is best-effort
+        pass
+    return facts
+
+
 def _facts_for_post_booking(lead: Lead) -> dict:
     """ALLOWED_FACTS dict for the post-booking composer.
 
@@ -11281,18 +11326,22 @@ def _facts_for_post_booking(lead: Lead) -> dict:
     registration URL, phone) plus the user's confirmed booking time so
     the composer can answer "ჩავეწერე?" naturally without re-querying
     Calendar.
+
+    Per-Product Booking (Cap #2 / R1): when the booking is tagged with a
+    non-camp admin product (`lead.program_id`), the facts are sourced from THAT
+    product's section instead of camp. Flag off / camp / no product ⇒ camp
+    facts, byte-identical.
     """
     from app.services import admin_config_service
 
-    # Canonical Admin Config camp facts (source-of-truth migration 5A-3,
-    # 2026-06-22): was a direct camp_2026.yaml read; `get_camp_facts()` is
-    # admin-first with its own camp_2026 fallback, returns the same shape
-    # (incl. `includes` and the canonical `phone` unified in Task 4), and the
-    # RAW streams are still date-filtered below by `get_visible_camp_streams`.
+    program_id = ""
     try:
-        camp = admin_config_service.get_camp_facts()
-    except Exception:
-        camp = {}
+        if getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
+            pid = (getattr(lead, "program_id", "") or "").strip()
+            if pid and pid not in _HARDCODED_PROGRAM_IDS:
+                program_id = pid
+    except Exception:  # pragma: no cover - defensive → camp
+        program_id = ""
 
     booked_iso = (lead.booked_datetime_iso or "").strip()
     booked_date_text = ""
@@ -11306,22 +11355,34 @@ def _facts_for_post_booking(lead: Lead) -> dict:
             pass
 
     facts: dict = {}
-    if camp:
-        facts.update({
-            "price_gel": camp.get("price_gel"),
-            "location": camp.get("location"),
-            "duration_days": camp.get("duration_days"),
-            "registration_url": camp.get("registration_url"),
-            "phone": camp.get("phone"),
-            "includes": ", ".join(camp.get("includes") or []),
-            # Camp Stream Date Filter — only expose still-upcoming streams.
-            "streams": ", ".join(
-                f"{s.get('name')} {s.get('dates_text')}"
-                for s in admin_config_service.get_visible_camp_streams(
-                    camp.get("streams") or [], year=camp.get("year"),
-                )
-            ),
-        })
+    if program_id:
+        facts.update(_program_section_facts(program_id))
+    else:
+        # Canonical Admin Config camp facts (source-of-truth migration 5A-3,
+        # 2026-06-22): was a direct camp_2026.yaml read; `get_camp_facts()` is
+        # admin-first with its own camp_2026 fallback, returns the same shape
+        # (incl. `includes` and the canonical `phone` unified in Task 4), and
+        # the RAW streams are still date-filtered by `get_visible_camp_streams`.
+        try:
+            camp = admin_config_service.get_camp_facts()
+        except Exception:
+            camp = {}
+        if camp:
+            facts.update({
+                "price_gel": camp.get("price_gel"),
+                "location": camp.get("location"),
+                "duration_days": camp.get("duration_days"),
+                "registration_url": camp.get("registration_url"),
+                "phone": camp.get("phone"),
+                "includes": ", ".join(camp.get("includes") or []),
+                # Camp Stream Date Filter — only expose still-upcoming streams.
+                "streams": ", ".join(
+                    f"{s.get('name')} {s.get('dates_text')}"
+                    for s in admin_config_service.get_visible_camp_streams(
+                        camp.get("streams") or [], year=camp.get("year"),
+                    )
+                ),
+            })
     if booked_date_text:
         facts["booked_date"] = booked_date_text
     if booked_time_text:

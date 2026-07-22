@@ -536,6 +536,21 @@ class ParentToolExecutor:
     # -- get_camp_info -----------------------------------------------------
 
     def _get_camp_info(self, args: dict[str, Any]) -> dict[str, Any]:
+        # Per-Product Booking (Cap #2 / R1) — a camp-info fetch means the
+        # conversation is (now) about CAMP, so clear any dynamic-product sticky
+        # tag on the lead. This is the reliable per-turn camp signal (mirror of
+        # `_get_program_info`'s flag-gated tag-SET) that keeps `lead.program_id`
+        # accurate across topic pivots, so a stale tag from an earlier
+        # get_program_info can never apply a dynamic product's WIDER age band to
+        # a camp booking and let an under-min child pass camp's age gate. Flag
+        # off ⇒ no-op (byte-identical).
+        try:
+            from app.config import settings as _pp_settings
+            if getattr(_pp_settings, "USE_PER_PRODUCT_BOOKING", False):
+                if (getattr(self.lead, "program_id", "") or "").strip():
+                    self.lead.program_id = ""
+        except Exception:  # pragma: no cover - defensive: best-effort clear
+            pass
         topic = str(args.get("topic") or "").strip().lower()
         if topic not in CAMP_INFO_TOPICS:
             return {
@@ -1062,7 +1077,11 @@ class ParentToolExecutor:
                 return ""
         except Exception:  # pragma: no cover - defensive
             pass
-        # 3. sticky product from earlier this conversation
+        # 3. sticky product from earlier this conversation. The tag is kept
+        #    ACCURATE by two camp signals that clear it: explicit camp intent
+        #    (step 2, this turn) and any `get_camp_info` fetch (on ANY turn) —
+        #    so a stale dynamic tag cannot survive a pivot to camp and widen the
+        #    camp age gate. (get_program_info sets it; get_camp_info clears it.)
         stuck = (getattr(self.lead, "program_id", "") or "").strip()
         if stuck and stuck not in self._HARDCODED_PROGRAM_IDS:
             return stuck

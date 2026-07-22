@@ -398,6 +398,43 @@ def test_get_program_info_does_not_tag_flag_off(monkeypatch):
     assert conv.lead.program_id == ""  # not tagged when flag off
 
 
+def test_get_camp_info_clears_sticky_tag_flag_on(monkeypatch, camp_registration_open):
+    """Reviewer finding fix: a get_camp_info fetch (the reliable per-turn camp
+    signal) clears a stale dynamic sticky tag so a subsequent camp booking uses
+    the CAMP band — a Disneyland tag can never widen camp's age gate."""
+    _flag_on(monkeypatch)
+    from app.agent.tools.parent_tools import TOOL_GET_CAMP_INFO
+    conv = _conv(program_id="disneyland_tour")  # stale tag from earlier browsing
+    ex = _mk(conv, user_message="ბანაკის ფასი რა ღირს?")
+    ex.execute(TOOL_GET_CAMP_INFO, {"topic": "price"})
+    assert conv.lead.program_id == ""  # cleared by the camp signal
+
+
+def test_get_camp_info_does_not_clear_flag_off(monkeypatch, camp_registration_open):
+    from app.agent.tools.parent_tools import TOOL_GET_CAMP_INFO
+    conv = _conv(program_id="disneyland_tour")
+    ex = _mk(conv, user_message="ბანაკის ფასი")
+    ex.execute(TOOL_GET_CAMP_INFO, {"topic": "price"})
+    assert conv.lead.program_id == "disneyland_tour"  # untouched when flag off
+
+
+def test_book_after_camp_info_pivot_uses_camp_band(monkeypatch, camp_registration_open):
+    """End-to-end of the reviewer's contamination scenario, now CLOSED: browse
+    Disneyland (sticky), then get_camp_info (camp pivot) clears it, then a 7yo
+    camp booking is correctly age_not_eligible under camp's [9,17]."""
+    _flag_on(monkeypatch)
+    from app.agent.tools.parent_tools import TOOL_GET_CAMP_INFO
+    monkeypatch.setattr(acs, "get_active_sections", lambda: [])
+    conv = _conv(program_id="disneyland_tour")  # was browsing disneyland
+    ex_camp = _mk(conv, user_message="ბანაკი მაინტერესებს")
+    ex_camp.execute(TOOL_GET_CAMP_INFO, {"topic": "price"})  # camp pivot ⇒ clears
+    assert conv.lead.program_id == ""
+    ex_book = _mk(conv, user_message="კი ჩამწერე")  # bare confirm, no camp intent
+    r = ex_book.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
+    assert r["reason"] == "age_not_eligible"
+    assert r["age_min"] == 9  # camp band, not disneyland's (7,16)
+
+
 # ── Task 4: flag-gated Sheets "Program" column ────────────────────────────
 # Flag OFF ⇒ 17-col A–Q row (byte-identical). Flag ON ⇒ 18 cols (A–R) with the
 # program id last. The append range must match the width actually written.
@@ -507,3 +544,85 @@ def test_ensure_headers_flag_off_unchanged_when_canonical():
     ws._header = list(_sheets.HEADERS)  # already canonical ⇒ no write
     _sheets._ensure_headers(ws)
     assert ws.updates == []  # byte-identical: no header rewrite
+
+
+# ── Task 5: per-product post-booking facts ────────────────────────────────
+# Flag OFF ⇒ camp facts (byte-identical). Flag ON + dynamic program_id ⇒ facts
+# sourced from that product's section (price/location NOT camp).
+
+from app.flows import parent_flow as _pf  # noqa: E402
+
+_CAMP_FACTS = {
+    "price_gel": 2150, "location": "ამბასადორი კაჭრეთი", "duration_days": 7,
+    "registration_url": "camp_url", "phone": "558674733",
+    "includes": ["კვება"], "streams": [], "year": 2026,
+}
+_DISNEY_SEC = {
+    "id": "disneyland_tour", "name": "დისნეილენდის ტური",
+    "price_gel": 3500, "price_text": "3500", "location": "პარიზი",
+    "registration_url": "disney_url", "included_items": ["ბილეთი", "სასტუმრო"],
+    "duration_text": "7 დღე",
+}
+
+
+def _pf_flag_on(monkeypatch):
+    monkeypatch.setattr(
+        _pf, "settings",
+        dataclasses.replace(_pf.settings, USE_PER_PRODUCT_BOOKING=True),
+    )
+
+
+def _pb_lead(program_id: str = ""):
+    return Lead(
+        sender_id="u1", platform="messenger", segment="PARENT",
+        name="ნიკა", program_id=program_id,
+    )
+
+
+def test_post_booking_facts_flag_off_disney_lead_uses_camp(monkeypatch):
+    monkeypatch.setattr(acs, "get_camp_facts", lambda: _CAMP_FACTS)
+    monkeypatch.setattr(acs, "get_visible_camp_streams", lambda s, year=None: [])
+    monkeypatch.setattr(
+        acs, "get_section",
+        lambda pid: _DISNEY_SEC if pid == "disneyland_tour" else None,
+    )
+    facts = _pf._facts_for_post_booking(_pb_lead(program_id="disneyland_tour"))
+    assert facts["location"] == "ამბასადორი კაჭრეთი"  # camp, flag off
+    assert facts["price_gel"] == 2150
+
+
+def test_post_booking_facts_flag_on_disney_uses_section(monkeypatch):
+    _pf_flag_on(monkeypatch)
+
+    def _fail_camp():
+        raise AssertionError("get_camp_facts must not be used for a dynamic product")
+
+    monkeypatch.setattr(acs, "get_camp_facts", _fail_camp)
+    monkeypatch.setattr(
+        acs, "get_section",
+        lambda pid: _DISNEY_SEC if pid == "disneyland_tour" else None,
+    )
+    monkeypatch.setattr(acs, "get_manager_phone", lambda: "558674733")
+    facts = _pf._facts_for_post_booking(_pb_lead(program_id="disneyland_tour"))
+    assert facts["location"] == "პარიზი"       # disneyland, NOT camp
+    assert facts["price_gel"] == 3500
+    assert facts["lead_name"] == "ნიკა"
+
+
+def test_post_booking_facts_flag_on_empty_program_uses_camp(monkeypatch):
+    _pf_flag_on(monkeypatch)
+    monkeypatch.setattr(acs, "get_camp_facts", lambda: _CAMP_FACTS)
+    monkeypatch.setattr(acs, "get_visible_camp_streams", lambda s, year=None: [])
+    facts = _pf._facts_for_post_booking(_pb_lead(program_id=""))
+    assert facts["location"] == "ამბასადორი კაჭრეთი"  # camp band
+    assert facts["price_gel"] == 2150
+
+
+def test_post_booking_facts_flag_on_reserved_program_uses_camp(monkeypatch):
+    # A hardcoded/reserved id (e.g. summer_camp) is never treated as a dynamic
+    # product ⇒ camp facts.
+    _pf_flag_on(monkeypatch)
+    monkeypatch.setattr(acs, "get_camp_facts", lambda: _CAMP_FACTS)
+    monkeypatch.setattr(acs, "get_visible_camp_streams", lambda s, year=None: [])
+    facts = _pf._facts_for_post_booking(_pb_lead(program_id="summer_camp"))
+    assert facts["location"] == "ამბასადორი კაჭრეთი"
