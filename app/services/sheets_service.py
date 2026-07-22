@@ -175,12 +175,6 @@ def _active_leads_headers() -> list[str]:
     return HEADERS
 
 
-def _leads_last_col_a1() -> str:
-    """A1 column letter of the final Leads header (``Q`` for 17 cols, ``R`` for
-    18 when the per-product Program column is active)."""
-    return chr(ord("A") + len(_active_leads_headers()) - 1)
-
-
 def _append_lead_row_aligned(worksheet: Any, row: list[Any]) -> None:
     """Append a Leads row to an EXPLICIT, A-anchored full-row range.
 

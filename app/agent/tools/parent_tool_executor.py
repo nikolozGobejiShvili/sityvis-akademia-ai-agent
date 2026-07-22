@@ -1077,11 +1077,14 @@ class ParentToolExecutor:
                 return ""
         except Exception:  # pragma: no cover - defensive
             pass
-        # 3. sticky product from earlier this conversation. The tag is kept
-        #    ACCURATE by two camp signals that clear it: explicit camp intent
-        #    (step 2, this turn) and any `get_camp_info` fetch (on ANY turn) —
-        #    so a stale dynamic tag cannot survive a pivot to camp and widen the
-        #    camp age gate. (get_program_info sets it; get_camp_info clears it.)
+        # 3. sticky product from earlier this conversation. Two camp signals
+        #    clear the tag so it stays accurate across the NORMAL flow: explicit
+        #    camp intent (step 2, this turn) and any `get_camp_info` fetch (on
+        #    ANY turn). (get_program_info sets it; get_camp_info clears it.) The
+        #    residual gap — a browse-dynamic-then-book-camp conversation whose
+        #    booking turn is a bare confirm AND never fetched get_camp_info — is
+        #    the documented single-product-conversation scope limitation (see
+        #    docs/ENABLEMENT_USE_PER_PRODUCT_BOOKING.md).
         stuck = (getattr(self.lead, "program_id", "") or "").strip()
         if stuck and stuck not in self._HARDCODED_PROGRAM_IDS:
             return stuck
