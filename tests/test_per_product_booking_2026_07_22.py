@@ -171,3 +171,228 @@ def test_registration_never_raises(monkeypatch):
         raise RuntimeError("boom")
     monkeypatch.setattr(acs, "get_section", _boom)
     assert acs.is_program_registration_open("disneyland_tour") is False
+
+
+# ── Task 3: per-product eligibility + registration in _book_consultation ───
+# GUARDRAIL-PRESERVING. Every booking gate untouched (asserted flag ON below):
+# user_confirmed gate, verification-phrase guard, empty-event_id rollback.
+
+import pytest  # noqa: E402
+from datetime import datetime, timedelta  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+from app.models.conversation import Conversation  # noqa: E402
+from app.agent.tools.parent_tool_executor import ParentToolExecutor  # noqa: E402
+from app.agent.tools.parent_tools import (  # noqa: E402
+    TOOL_BOOK_CONSULTATION,
+    TOOL_GET_PROGRAM_INFO,
+)
+
+_TBILISI = ZoneInfo("Asia/Tbilisi")
+_FUTURE_BUSINESS_ISO = "2030-06-03T12:00:00+04:00"  # Mon, within 10:00–21:00
+_DISNEY = {
+    "id": "disneyland_tour", "name": "დისნეილენდის ტური", "type": "tour",
+    "status": "active", "age_min": 7, "age_max": 16,
+    "registration_status": "open", "price_text": "3500",
+}
+
+
+def _flag_on(monkeypatch):
+    monkeypatch.setattr(
+        config_module, "settings",
+        dataclasses.replace(config_module.settings, USE_PER_PRODUCT_BOOKING=True),
+    )
+
+
+def _seed_disney(monkeypatch, section=None):
+    section = section if section is not None else _DISNEY
+    monkeypatch.setattr(
+        acs, "get_section",
+        lambda pid: section if pid == "disneyland_tour" else None,
+    )
+    monkeypatch.setattr(acs, "get_active_sections", lambda: [section])
+
+
+def _conv(program_id: str = ""):
+    c = Conversation(sender_id="u1", platform="messenger", segment="PARENT")
+    c.lead = Lead(
+        sender_id="u1", platform="messenger", segment="PARENT",
+        program_id=program_id,
+    )
+    return c
+
+
+def _mk(conv, user_message=""):
+    return ParentToolExecutor(
+        conversation=conv, lead=conv.lead,
+        sender_id=conv.sender_id, platform=conv.platform,
+        user_message=user_message,
+    )
+
+
+def _book_args(**over):
+    args = {
+        "name": "ნიკა", "phone": "599112233",
+        "datetime_iso": _FUTURE_BUSINESS_ISO, "child_age": "7",
+        "user_confirmed_datetime": True,
+    }
+    args.update(over)
+    return args
+
+
+def test_book_flag_off_disneyland_uses_camp_band(monkeypatch, camp_registration_open):
+    """Flag OFF: even with a Disneyland-tagged lead, the age band is CAMP's
+    (byte-identical). A 7-year-old is age_not_eligible under camp's [9,17]."""
+    conv = _conv(program_id="disneyland_tour")  # sticky, but flag OFF ignores it
+    ex = _mk(conv, user_message="კი ჩამწერე")
+    r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
+    assert r["success"] is False
+    assert r["reason"] == "age_not_eligible"
+    assert r["age_min"] == 9  # camp band, flag off
+
+
+def test_book_flag_on_disneyland_age7_eligible(monkeypatch):
+    """Flag ON + resolved disneyland: eligibility uses (7,16) ⇒ a 7yo is
+    ELIGIBLE (past the age gate; today it would be age_not_eligible)."""
+    _flag_on(monkeypatch)
+    _seed_disney(monkeypatch)
+    from app.services import calendar_service
+    monkeypatch.setattr(calendar_service, "check_slot_available", lambda dt: False)
+    conv = _conv(program_id="disneyland_tour")  # sticky; confirm turn re-uses it
+    ex = _mk(conv, user_message="კი ჩამწერე")
+    r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
+    assert r["reason"] != "age_not_eligible"     # (7,16) ⇒ eligible
+    assert r["reason"] == "slot_unavailable"     # got past the age gate
+
+
+def test_book_flag_on_no_product_uses_camp_band(monkeypatch, camp_registration_open):
+    """Flag ON but no product context ⇒ camp band (fail-safe)."""
+    _flag_on(monkeypatch)
+    monkeypatch.setattr(acs, "get_active_sections", lambda: [])
+    conv = _conv()  # program_id empty
+    ex = _mk(conv, user_message="კი ჩამწერე")
+    r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
+    assert r["reason"] == "age_not_eligible"
+    assert r["age_min"] == 9  # camp band
+
+
+def test_book_flag_on_disneyland_missing_agemin_fails_closed(monkeypatch):
+    """Flag ON + disneyland section MISSING age_min ⇒ fail-closed to camp band
+    (never a disabled check): a 7yo is age_not_eligible under camp's [9,17]."""
+    _flag_on(monkeypatch)
+    _seed_disney(monkeypatch, section={
+        "id": "disneyland_tour", "name": "დისნეილენდის ტური",
+        "status": "active", "registration_status": "open",
+    })
+    conv = _conv(program_id="disneyland_tour")
+    ex = _mk(conv, user_message="კი ჩამწერე")
+    r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
+    assert r["reason"] == "age_not_eligible"
+    assert r["age_min"] == 9  # fail-closed to camp band
+
+
+def test_book_flag_on_message_names_disneyland_resolves_and_tags(monkeypatch):
+    """Flag ON + the booking turn NAMES disneyland ⇒ resolved from the message,
+    tagged onto the lead, and eligibility uses the disneyland band."""
+    _flag_on(monkeypatch)
+    _seed_disney(monkeypatch)
+    from app.services import calendar_service
+    monkeypatch.setattr(calendar_service, "check_slot_available", lambda dt: False)
+    conv = _conv()  # program_id empty; message carries the product name
+    ex = _mk(conv, user_message="დისნეილენდის ტურში ჩამწერე")
+    r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
+    assert r["reason"] == "slot_unavailable"          # eligible via (7,16)
+    assert conv.lead.program_id == "disneyland_tour"  # tagged from message
+
+
+def test_book_flag_on_explicit_camp_intent_clears_sticky(monkeypatch, camp_registration_open):
+    """Flag ON + a sticky disneyland tag but the booking turn shows EXPLICIT camp
+    intent ⇒ the sticky tag is CLEARED and the camp band applies (no
+    contamination of the camp age gate)."""
+    _flag_on(monkeypatch)
+    monkeypatch.setattr(acs, "get_active_sections", lambda: [])
+    conv = _conv(program_id="disneyland_tour")  # was browsing disneyland
+    ex = _mk(conv, user_message="საზაფხულო ბანაკში ჩავწერო 7 წლის")
+    r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
+    assert r["reason"] == "age_not_eligible"
+    assert r["age_min"] == 9          # camp band applied
+    assert conv.lead.program_id == ""  # sticky cleared by the camp signal
+
+
+# -- Guardrail regression: every gate holds with the flag ON --------------
+
+
+def test_guardrail_user_confirmed_gate_holds_flag_on(monkeypatch, camp_registration_open):
+    _flag_on(monkeypatch)
+    from app.services import calendar_service
+    monkeypatch.setattr(
+        calendar_service, "book_slot",
+        lambda **k: pytest.fail("book_slot must not be called"),
+    )
+    conv = _conv()
+    ex = _mk(conv, user_message="14 წლისაა")
+    r = ex.execute(
+        TOOL_BOOK_CONSULTATION,
+        _book_args(child_age="14", user_confirmed_datetime=False),
+    )
+    assert r["success"] is False
+    assert r["reason"] == "datetime_not_confirmed"
+
+
+def test_guardrail_verification_phrase_holds_flag_on(monkeypatch, camp_registration_open):
+    _flag_on(monkeypatch)
+    conv = _conv()
+    ex = _mk(conv, user_message="ნამდვილად თავისუფალია?")
+    r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="14"))
+    assert r["success"] is False
+    assert r["reason"] == "verification_requested"
+
+
+def test_guardrail_empty_event_id_rollback_holds_flag_on(monkeypatch):
+    """The empty-event_id silent-failure rollback still fires on the per-product
+    path: a Disneyland booking whose Calendar write returns no event_id rolls
+    the lead back and refuses the confirmation."""
+    _flag_on(monkeypatch)
+    _seed_disney(monkeypatch)
+    from app.services import calendar_service
+    from app.flows import parent_flow
+    monkeypatch.setattr(calendar_service, "check_slot_available", lambda dt: True)
+
+    def _fake_book(conv, lead, slot):
+        lead.calendly_booked = True
+        lead.booked_datetime_iso = slot["datetime_iso"]
+        lead.calendar_event_id = ""  # empty ⇒ silent failure ⇒ must roll back
+        lead.status = "Booked"
+        return True
+
+    monkeypatch.setattr(parent_flow, "_book_selected_slot", _fake_book)
+    conv = _conv(program_id="disneyland_tour")
+    ex = _mk(conv, user_message="კი ჩამწერე")
+    r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
+    assert r["success"] is False
+    assert r["reason"] == "calendar_booking_failed"
+    assert r["manager_handoff_required"] is True
+    assert conv.lead.calendly_booked is False   # rolled back
+    assert conv.lead.calendar_event_id == ""
+
+
+# -- get_program_info sticky tagging (flag-gated) --------------------------
+
+
+def test_get_program_info_tags_lead_flag_on(monkeypatch):
+    _flag_on(monkeypatch)
+    _seed_disney(monkeypatch)
+    conv = _conv()
+    ex = _mk(conv, user_message="დისნეილენდი")
+    r = ex.execute(TOOL_GET_PROGRAM_INFO, {"program_id": "disneyland_tour"})
+    assert r["success"] is True
+    assert conv.lead.program_id == "disneyland_tour"
+
+
+def test_get_program_info_does_not_tag_flag_off(monkeypatch):
+    _seed_disney(monkeypatch)  # flag OFF via conftest
+    conv = _conv()
+    ex = _mk(conv, user_message="დისნეილენდი")
+    r = ex.execute(TOOL_GET_PROGRAM_INFO, {"program_id": "disneyland_tour"})
+    assert r["success"] is True
+    assert conv.lead.program_id == ""  # not tagged when flag off

@@ -459,6 +459,17 @@ class ParentToolExecutor:
             "[parent_tool] get_program_info program_id=%s status=%s reg_open=%s fields=%d",
             program_id, status, reg_open, len(facts),
         )
+        # Per-Product Booking (Cap #2 / R1) — tag the lead with the dynamic
+        # product the LLM is fetching so a later booking in THIS conversation
+        # resolves to the right age band + registration even when the
+        # booking-confirmation turn does not re-name the product. Flag-gated;
+        # a no-op when off. Best-effort (never blocks the info answer).
+        try:
+            from app.config import settings as _pp_settings
+            if getattr(_pp_settings, "USE_PER_PRODUCT_BOOKING", False):
+                self.lead.program_id = program_id
+        except Exception:  # pragma: no cover - defensive: tagging is best-effort
+            pass
         return {
             "success": True, "program_id": program_id,
             "topic": str(args.get("topic") or "all"),
@@ -1005,9 +1016,62 @@ class ParentToolExecutor:
 
     # -- book_consultation ------------------------------------------------
 
+    def _resolve_booking_program_id(self) -> str:
+        """Effective admin product id for THIS consultation booking (Cap #2 / R1).
+
+        Booking is the GUARDRAIL zone, so this FAILS CLOSED to camp on any doubt.
+        Returns ``""`` (⇒ camp age band + camp registration, byte-identical) when
+        ``USE_PER_PRODUCT_BOOKING`` is off. When on, resolution order:
+          1. the CURRENT message NAMES a dynamic product → that id (and stick it
+             to the lead so a multi-turn confirmation „კი"/„16:00" — which does
+             NOT re-name the product — keeps the right band);
+          2. the CURRENT message shows explicit CAMP intent → clear any sticky
+             tag and return ``""`` (an explicit camp pivot reverts to the camp
+             band; the fuzzy matcher never returns ``summer_camp`` because its
+             name tokens are ambiguous, so this deterministic camp detector is
+             the reliable clear signal);
+          3. the product already stuck to this lead (from ``get_program_info`` or
+             an earlier book turn this conversation) → that id;
+          4. else ``""`` → camp.
+        Never a hardcoded/reserved id. Never raises.
+        """
+        try:
+            from app.config import settings
+            if not getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
+                return ""
+        except Exception:  # pragma: no cover - defensive → camp
+            return ""
+        # 1. current message names a dynamic product → stick it
+        try:
+            from app.reasoning.dynamic_program_match import match_dynamic_program
+            from app.services import admin_config_service
+            m = match_dynamic_program(
+                self.user_message or "", admin_config_service.get_active_sections(),
+            )
+            pid = (m or {}).get("program_id") or ""
+            if pid and pid not in self._HARDCODED_PROGRAM_IDS:
+                self.lead.program_id = pid
+                return pid
+        except Exception:  # pragma: no cover - defensive → fall through to camp
+            pass
+        # 2. explicit camp intent → revert to camp, clear a stale sticky tag
+        try:
+            from app.flows import parent_flow
+            if parent_flow._has_explicit_georgian_camp_intent(self.user_message or ""):
+                self.lead.program_id = ""
+                return ""
+        except Exception:  # pragma: no cover - defensive
+            pass
+        # 3. sticky product from earlier this conversation
+        stuck = (getattr(self.lead, "program_id", "") or "").strip()
+        if stuck and stuck not in self._HARDCODED_PROGRAM_IDS:
+            return stuck
+        # 4. camp
+        return ""
+
     def _book_consultation(self, args: dict[str, Any]) -> dict[str, Any]:
         from app.flows import parent_flow
-        from app.services import calendar_service
+        from app.services import admin_config_service, calendar_service
 
         name = (args.get("name") or "").strip()
         # Live Bug 2 (2026-06-11) — a month / date / time / booking word
@@ -1060,8 +1124,22 @@ class ParentToolExecutor:
         # only set True at the very end on a confirmed Calendar+state write.
         book_consultation_success_for_conversation[self.cache_key] = False
 
-        if not _is_camp_registration_open():
-            logger.warning("[book_consultation] BLOCKED reason=camp_registration_closed")
+        # Per-Product Booking (Cap #2 / R1) — resolve the admin product for this
+        # booking. "" ⇒ camp (flag off, or no product context) ⇒ registration +
+        # age band below are byte-identical to today. A non-empty id swaps ONLY
+        # the registration source and the age-band source (below) to that
+        # product's section; every other gate is unchanged.
+        program_id = self._resolve_booking_program_id()
+
+        registration_open = (
+            admin_config_service.is_program_registration_open(program_id)
+            if program_id else _is_camp_registration_open()
+        )
+        if not registration_open:
+            logger.warning(
+                "[book_consultation] BLOCKED reason=registration_closed program_id=%s",
+                program_id or "summer_camp",
+            )
             return _registration_closed_tool_result()
 
         # 1. Required fields ------------------------------------------------
@@ -1127,8 +1205,14 @@ class ParentToolExecutor:
         # Canonical Admin Config age band (5A-2 migration) — was a direct
         # camp_2026.yaml read; an operator age-range edit now reaches this
         # path. Default stays 9–17, so today's behaviour is identical.
-        from app.services import admin_config_service
-        age_min, age_max = admin_config_service.get_camp_age_bounds()
+        # Per-Product Booking (Cap #2 / R1): a non-empty program_id swaps the
+        # band SOURCE to that product's section (fail-closed to camp on any
+        # missing/blank/invalid bound — never a disabled check). program_id=""
+        # (flag off / camp / no product) ⇒ camp band, byte-identical.
+        if program_id:
+            age_min, age_max = admin_config_service.get_program_age_bounds(program_id)
+        else:
+            age_min, age_max = admin_config_service.get_camp_age_bounds()
 
         candidate_age = child_age_raw or (self.lead.child_age or "")
         age_int = _extract_age(candidate_age)
