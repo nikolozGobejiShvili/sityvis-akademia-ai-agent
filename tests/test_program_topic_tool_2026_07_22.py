@@ -123,3 +123,66 @@ def test_prompt_suffix_empty_under_conftest_default():
 def test_prompt_suffix_present_when_flag_on(monkeypatch):
     _on(monkeypatch)
     assert "get_program_topic" in ple._topic_tool_prompt_suffix()
+
+
+# -- Task 3: interceptor bypass gate (flag-gated yield) ----------------------
+
+
+def test_flag_off_interceptor_still_answers_topic():
+    # Flag OFF (conftest default): the deterministic interceptor still returns a
+    # canned topic block — byte-identical to today, engine not consulted.
+    from app.flows import parent_flow
+    conv = Conversation(sender_id="t", platform="messenger")
+    out = parent_flow._maybe_handle_camp_topic_facts(conv, "უსაფრთხოება როგორ არის ბანაკში?")
+    assert out and out.strip()
+
+
+def test_flag_on_interceptor_yields(monkeypatch):
+    # Flag ON + engine available: the interceptor YIELDS (returns None) so the
+    # turn falls through to the LLM engine + the get_program_topic tool.
+    from app.flows import parent_flow
+    swapped = dataclasses.replace(
+        config_module.settings, USE_PROGRAM_TOPICS=True, USE_PARENT_LLM_ENGINE=True,
+    )
+    monkeypatch.setattr(parent_flow, "settings", swapped)
+    conv = Conversation(sender_id="t", platform="messenger")
+    out = parent_flow._maybe_handle_camp_topic_facts(conv, "უსაფრთხოება როგორ არის ბანაკში?")
+    assert out is None
+
+
+def test_flag_on_but_engine_off_does_not_yield(monkeypatch):
+    # Guard: the bypass requires BOTH flags. Topic flag on but engine OFF ⇒ the
+    # interceptor still answers (no point yielding to an engine that won't run).
+    from app.flows import parent_flow
+    swapped = dataclasses.replace(
+        config_module.settings, USE_PROGRAM_TOPICS=True, USE_PARENT_LLM_ENGINE=False,
+    )
+    monkeypatch.setattr(parent_flow, "settings", swapped)
+    conv = Conversation(sender_id="t", platform="messenger")
+    out = parent_flow._maybe_handle_camp_topic_facts(conv, "უსაფრთხოება როგორ არის ბანაკში?")
+    assert out and out.strip()
+
+
+def test_topic_tool_available_to_engine_when_flag_on():
+    tools = ple.build_active_tools(use_dynamic=False, use_learning=False, use_topics=True)
+    assert pt.TOOL_GET_PROGRAM_TOPIC in [t["function"]["name"] for t in tools]
+
+
+def test_e2e_topic_question_reaches_engine_when_flag_on(monkeypatch):
+    # End-to-end: both flags on → the deterministic topic interceptor yields and
+    # a topic question reaches the LLM engine (replaced by a fake, no OpenAI
+    # call). Registration reopened so no dead-season interceptor pre-empts it.
+    from app.flows import parent_flow
+    swapped = dataclasses.replace(
+        config_module.settings, USE_PROGRAM_TOPICS=True, USE_PARENT_LLM_ENGINE=True,
+    )
+    monkeypatch.setattr(parent_flow, "settings", swapped)
+    monkeypatch.setattr(ple, "run_parent_llm_turn", lambda *a, **k: "ENGINE_REPLY")
+    monkeypatch.setattr(
+        "app.services.admin_config_service.get_camp_registration_status",
+        lambda: "open",
+    )
+    conv = Conversation(sender_id="t", platform="messenger")
+    conv.history.append({"role": "assistant", "content": "_prior"})  # skip first-turn welcome
+    out = parent_flow.handle(conv, "უსაფრთხოება როგორ არის ბანაკში?")
+    assert out == "ENGINE_REPLY"

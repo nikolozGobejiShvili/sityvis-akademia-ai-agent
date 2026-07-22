@@ -5043,6 +5043,15 @@ def _maybe_handle_camp_topic_facts(
     # ADULT segment owns its own flow — never answer camp topics there.
     if getattr(conversation, "segment", "") == "ADULT":
         return None
+    # Topic-tool pilot (Capability #1, flag-gated): when USE_PROGRAM_TOPICS is on
+    # AND the engine is available, YIELD so the turn reaches the LLM, which
+    # reasons over the get_program_topic tool instead of returning this canned
+    # block. Flag OFF ⇒ this branch is never taken ⇒ the body below runs
+    # unchanged (byte-identical). Requires BOTH flags: yielding to an engine that
+    # won't run would drop the answer entirely.
+    if (getattr(settings, "USE_PROGRAM_TOPICS", False)
+            and getattr(settings, "USE_PARENT_LLM_ENGINE", False)):
+        return None
     try:
         from app.reasoning import camp_topic_facts as _ctf
 
