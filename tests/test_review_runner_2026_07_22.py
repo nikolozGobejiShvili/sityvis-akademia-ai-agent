@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
+
+import pytest
 
 import app.config as config_module
 import app.agent.llm.parent_llm_engine as ple
@@ -23,6 +26,51 @@ from app.flows import parent_flow
 from app.services import conversation_service
 
 import tools.review_topic_capability as runner
+
+
+@pytest.fixture(autouse=True)
+def _restore_runner_side_effects():
+    """The runner (via ``evals.safety.install_readonly``) permanently stubs the
+    messenger/calendar/sheets/notification service functions AND mutates
+    ``os.environ`` — correct for the CLI (a fresh process), but with NO restore
+    path. Driven in-process, that leaks into the rest of the full-suite run and
+    pollutes unrelated tests (e.g. the sunday-school email-failure tests see the
+    ``send_manager_notification`` stub that always returns True). Snapshot+restore
+    every attribute the guard touches so this file is fully self-contained."""
+    import importlib
+
+    env_keys = ("USE_PROGRAM_TOPICS", "USE_PARENT_LLM_ENGINE")
+    env_saved = {k: os.environ.get(k) for k in env_keys}
+    targets = {
+        "app.services.messenger_service": ("send_message", "send_private_reply", "get_user_profile"),
+        "app.services.calendar_service": ("book_slot", "create_event", "cancel_calendar_event"),
+        "app.services.sheets_service": ("create_lead", "update_lead", "save_lead", "save_comment",
+                                        "log_sunday_school_lead", "save_event_subscriber",
+                                        "mark_old_booking_rescheduled"),
+        "app.services.notification_service": ("notify_manager", "send_manager_notification",
+                                              "notify_manager_handoff", "notify_sunday_school_handoff",
+                                              "_send_email", "_send_whatsapp"),
+    }
+    fn_saved = {}
+    for mod_name, names in targets.items():
+        try:
+            m = importlib.import_module(mod_name)
+        except Exception:
+            continue
+        for n in names:
+            if hasattr(m, n):
+                fn_saved[(mod_name, n)] = getattr(m, n)
+    yield
+    for k, v in env_saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    for (mod_name, n), fn in fn_saved.items():
+        try:
+            setattr(importlib.import_module(mod_name), n, fn)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
