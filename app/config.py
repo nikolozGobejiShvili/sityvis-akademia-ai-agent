@@ -391,6 +391,14 @@ class Settings:
     # two-option menu — so a newly-added program appears and an ended/hidden one
     # drops, uniformly. OFF ⇒ the static PARENT_WELCOME menu, byte-identical.
     USE_DYNAMIC_WELCOME: bool = False
+    # Per-product consultation booking + lead (Capability #2 / R1, 2026-07): when
+    # ON, book_consultation resolves the turn's admin product and swaps ONLY the
+    # age-band + registration SOURCE to that product's section, tags the lead with
+    # program_id, and sources post-booking facts per-product — so a non-camp admin
+    # product (e.g. "Disneyland tour") gets the same booking+lead function as camp.
+    # OFF ⇒ byte-identical: camp band, camp registration, 17-col lead row (no
+    # Program column), camp facts. Every booking validation gate is preserved.
+    USE_PER_PRODUCT_BOOKING: bool = False
     # Reasoning loop (Phase 2, 2026-07): analyze→ground→answer→reflect in the
     # PARENT engine — the model plans, grounds only needed facts, then verifies
     # its answer's facts (REFLECT). OFF ⇒ engine path byte-identical. Distinct
@@ -584,6 +592,9 @@ class Settings:
             USE_SKILLS=_parse_bool_optional("USE_SKILLS", False),
             USE_PROGRAM_TOPICS=_parse_bool_optional("USE_PROGRAM_TOPICS", False),
             USE_DYNAMIC_WELCOME=_parse_bool_optional("USE_DYNAMIC_WELCOME", False),
+            USE_PER_PRODUCT_BOOKING=_parse_bool_optional(
+                "USE_PER_PRODUCT_BOOKING", False,
+            ),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
             USE_OBJECTION_ENGINE_ROUTING=_parse_bool_optional(
                 "USE_OBJECTION_ENGINE_ROUTING", False,

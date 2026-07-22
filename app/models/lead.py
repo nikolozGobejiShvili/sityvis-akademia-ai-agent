@@ -87,6 +87,12 @@ class Lead:
     # separation invariant.
     adult_target_relation: str = ""
     adult_target_age: str = ""
+    # Per-Product Booking (Capability #2 / R1, 2026-07). When a consultation is
+    # booked for a NON-camp admin product (e.g. "disneyland_tour"), the booking
+    # commit tags the lead with that product's id so the Sheets "Program" column
+    # (flag-gated) and per-product post-booking facts know which product this
+    # lead belongs to. Empty ⇒ legacy/camp (the default, byte-identical).
+    program_id: str = ""
 
     def model_dump(self, mode: str | None = None) -> dict[str, Any]:
         data = asdict(self)
@@ -128,6 +134,7 @@ class Lead:
             adult_age=str(data.get("adult_age", "") or ""),
             adult_target_relation=str(data.get("adult_target_relation", "") or ""),
             adult_target_age=str(data.get("adult_target_age", "") or ""),
+            program_id=str(data.get("program_id", "") or ""),
         )
 
     def to_sheet_row(self, reply: str) -> list[Any]:
