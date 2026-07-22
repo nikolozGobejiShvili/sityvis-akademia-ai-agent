@@ -5583,6 +5583,9 @@ def _bot_in_sunday_school_collection(conversation: Conversation) -> bool:
     return False
 
 
+_SUNDAY_SCHOOL_NOT_OFFERED: str = "საკვირაო სკოლა ამ ეტაპზე აქტიური არ არის."
+
+
 def _render_sunday_school_answer() -> str:
     """Build the Sunday-School status answer from Admin Config (operator-
     editable), never from a hardcoded month. `availability_text` +
@@ -5600,8 +5603,17 @@ def _render_sunday_school_answer() -> str:
         st = admin_config_service.get_sunday_school_status() or {}
     except Exception:  # pragma: no cover — defensive
         st = {}
-    if (st.get("status") or "").strip() == "coming_soon":
+    status_val = (st.get("status") or "").strip().lower()
+    if status_val == "coming_soon":
         return _SUNDAY_SCHOOL_COMING_SOON
+    # Section status gate (USE_SECTION_STATUS_GATE) — an operator who sets Sunday
+    # School to ended/hidden/full has turned it OFF: say it is not offered, reveal
+    # NO availability/details, ask for no contact — uniform with camp/adult_events.
+    # OFF ⇒ falls through to the availability answer as before (byte-identical).
+    if status_val in ("ended", "hidden", "full") and getattr(
+        settings, "USE_SECTION_STATUS_GATE", False
+    ):
+        return _SUNDAY_SCHOOL_NOT_OFFERED
     avail = (st.get("availability_text") or "").strip() or _SUNDAY_SCHOOL_FALLBACK_AVAILABILITY
     details = (st.get("details_text") or "").strip()
     handoff = bool(st.get("handoff_enabled", True))
