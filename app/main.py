@@ -55,6 +55,10 @@ async def startup():
     # doesn't print at all, an OLD container is still serving pre-deploy code).
     print(f"⚙️ USE_DYNAMIC_WELCOME={getattr(settings, 'USE_DYNAMIC_WELCOME', False)}")
     print(f"⚙️ USE_PROGRAM_TOPICS={getattr(settings, 'USE_PROGRAM_TOPICS', False)}")
+    print(
+        "⚙️ USE_PER_PRODUCT_BOOKING="
+        f"{getattr(settings, 'USE_PER_PRODUCT_BOOKING', False)}"
+    )
     # Phase 0b (2026-07-20) — boot-log the resolved admin-config directory so
     # operators can see at a glance whether config is being read/written from
     # the repo-default path (ephemeral on Railway) or an operator-mounted
