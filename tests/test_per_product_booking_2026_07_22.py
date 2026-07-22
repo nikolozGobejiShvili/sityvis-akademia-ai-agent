@@ -626,3 +626,89 @@ def test_post_booking_facts_flag_on_reserved_program_uses_camp(monkeypatch):
     monkeypatch.setattr(acs, "get_visible_camp_streams", lambda s, year=None: [])
     facts = _pf._facts_for_post_booking(_pb_lead(program_id="summer_camp"))
     assert facts["location"] == "ამბასადორი კაჭრეთი"
+
+
+# ── Routing fix: keep a multi-turn dynamic-product booking on the engine ───
+# Live test found the age/name/phone/confirm turns (which don't re-name the
+# product) fell out of the engine into the camp deterministic chain and got
+# camp's age band. Fix: tag on a naming turn + hoist while the tag is set.
+
+
+def _pf_engine_and_pp_on(monkeypatch):
+    monkeypatch.setattr(
+        _pf, "settings",
+        dataclasses.replace(
+            _pf.settings,
+            USE_PARENT_LLM_ENGINE=True,
+            USE_PER_PRODUCT_BOOKING=True,
+            USE_DYNAMIC_PROGRAMS=True,
+        ),
+    )
+
+
+def test_is_active_per_product_booking_flag_off_is_false():
+    conv = _conv(program_id="disneyland_tour")
+    assert _pf._is_active_per_product_booking(conv) is False  # flag off (conftest)
+
+
+def test_is_active_per_product_booking_flag_on_tagged_is_true(monkeypatch):
+    _pf_flag_on(monkeypatch)
+    conv = _conv(program_id="disneyland_tour")
+    assert _pf._is_active_per_product_booking(conv) is True
+
+
+def test_is_active_per_product_booking_flag_on_camp_is_false(monkeypatch):
+    _pf_flag_on(monkeypatch)
+    assert _pf._is_active_per_product_booking(_conv(program_id="summer_camp")) is False
+    assert _pf._is_active_per_product_booking(_conv(program_id="")) is False
+
+
+def test_tag_per_product_booking_sets_on_naming_turn(monkeypatch):
+    _pf_flag_on(monkeypatch)
+    monkeypatch.setattr(acs, "get_active_sections", lambda: [_DISNEY])
+    conv = _conv()  # untagged
+    _pf._tag_per_product_booking(conv, "დისნეილენდის ტური მაინტერესებს")
+    assert conv.lead.program_id == "disneyland_tour"
+
+
+def test_tag_per_product_booking_noop_flag_off(monkeypatch):
+    monkeypatch.setattr(acs, "get_active_sections", lambda: [_DISNEY])  # flag off
+    conv = _conv()
+    _pf._tag_per_product_booking(conv, "დისნეილენდის ტური მაინტერესებს")
+    assert conv.lead.program_id == ""
+
+
+def test_tag_per_product_booking_noop_on_continuation_turn(monkeypatch):
+    _pf_flag_on(monkeypatch)
+    monkeypatch.setattr(acs, "get_active_sections", lambda: [_DISNEY])
+    conv = _conv(program_id="disneyland_tour")
+    _pf._tag_per_product_booking(conv, "7 წლისაა, ნიკა, 599112233")  # names nothing
+    assert conv.lead.program_id == "disneyland_tour"  # unchanged
+
+
+def test_dynamic_booking_continuation_stays_on_engine(monkeypatch):
+    """The core routing fix: a sticky-tagged conversation routes a bare
+    continuation turn („7 წლისაა, name, phone" — no product name) to the LLM
+    engine, NOT the camp deterministic chain (which would apply camp's band)."""
+    _pf_engine_and_pp_on(monkeypatch)
+    monkeypatch.setattr(_pf, "_run_llm_engine_safely", lambda conv, msg: "ENGINE_REACHED")
+    monkeypatch.setattr(_pf, "_sanitise_booking_confirmation", lambda conv, resp: resp)
+    conv = _conv(program_id="disneyland_tour")
+    out = _pf._handle_core(conv, "7 წლისაა, ნიკა, 599112233")
+    assert out == "ENGINE_REACHED"  # reached the engine, not camp under-age
+
+
+def test_dynamic_booking_off_continuation_does_not_hoist(monkeypatch):
+    """Flag OFF: the same tagged conversation + continuation turn does NOT hoist
+    (byte-identical routing) — the engine sentinel must NOT be returned."""
+    monkeypatch.setattr(
+        _pf, "settings",
+        dataclasses.replace(_pf.settings, USE_PARENT_LLM_ENGINE=True),
+    )  # USE_PER_PRODUCT_BOOKING off (conftest)
+    monkeypatch.setattr(
+        _pf, "_run_llm_engine_safely",
+        lambda conv, msg: pytest.fail("must not hoist to engine when flag off"),
+    )
+    conv = _conv(program_id="disneyland_tour")
+    # Should fall through to the deterministic chain without hitting the hoist.
+    _pf._handle_core(conv, "7 წლისაა, ნიკა, 599112233")

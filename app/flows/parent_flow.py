@@ -941,6 +941,53 @@ def _is_dynamic_program_turn(message: str) -> bool:
     return bool(match) and match.get("program_id") not in _HARDCODED_PROGRAM_IDS
 
 
+def _tag_per_product_booking(conversation: Conversation, message: str) -> None:
+    """Tag the lead with the dynamic admin product NAMED this turn (Cap #2 / R1).
+
+    A consultation booking is MULTI-TURN, but `_is_dynamic_program_turn` only
+    fires on the turn that NAMES the product — so the age/name/phone/confirm
+    turns (which don't re-name it) would fall out of the engine back into the
+    camp deterministic chain and get camp's age band. Setting `lead.program_id`
+    the moment the product is named lets `_is_active_per_product_booking` keep
+    the WHOLE booking on the engine. Flag-gated on `USE_PER_PRODUCT_BOOKING`
+    (no-op when off / no lead / no product named / camp). Never raises.
+    """
+    if not getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
+        return
+    lead = getattr(conversation, "lead", None)
+    if lead is None:
+        return
+    try:
+        from app.reasoning.dynamic_program_match import match_dynamic_program
+        from app.services import admin_config_service
+        match = match_dynamic_program(
+            message or "", admin_config_service.get_active_sections(),
+        )
+    except Exception:  # pragma: no cover - defensive
+        return
+    if not match:
+        return
+    pid = (match.get("program_id") or "").strip()
+    if pid and pid not in _HARDCODED_PROGRAM_IDS:
+        lead.program_id = pid
+
+
+def _is_active_per_product_booking(conversation: Conversation) -> bool:
+    """True when this conversation is tagged to a dynamic admin product (Cap #2
+    / R1) — so its multi-turn booking stays on the LLM engine instead of the
+    camp deterministic chain. Flag off / no lead / untagged / camp ⇒ False ⇒
+    routing unchanged. The tag is set by `_tag_per_product_booking` /
+    `get_program_info` and cleared by `get_camp_info` / explicit camp intent.
+    """
+    if not getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
+        return False
+    lead = getattr(conversation, "lead", None)
+    if lead is None:
+        return False
+    pid = (getattr(lead, "program_id", "") or "").strip()
+    return bool(pid) and pid not in _HARDCODED_PROGRAM_IDS
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -999,7 +1046,15 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # registration) are answered from the program's own data instead of camp
     # handlers. Gated on the engine being available. Flag off / camp / adult /
     # no-program-named ⇒ _is_dynamic_program_turn is False ⇒ chain unchanged.
-    if getattr(settings, "USE_PARENT_LLM_ENGINE", False) and _is_dynamic_program_turn(message):
+    # Per-Product Booking (Cap #2 / R1) — tag the lead the moment a dynamic
+    # product is NAMED, so the multi-turn booking that follows (whose age/name/
+    # phone/confirm turns don't re-name it) stays on the engine below via
+    # `_is_active_per_product_booking`. Flag-gated ⇒ no-op when off.
+    _tag_per_product_booking(conversation, message)
+    if getattr(settings, "USE_PARENT_LLM_ENGINE", False) and (
+        _is_dynamic_program_turn(message)
+        or _is_active_per_product_booking(conversation)
+    ):
         # Reset per-turn book-success flag so the guard cannot leak a
         # success bit from the previous turn into this one (review fix,
         # 2026-07-19). This branch RETURNS before the identical reset
