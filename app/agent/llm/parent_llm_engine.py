@@ -29,7 +29,12 @@ from app.agent.services.timestamps import (
     resolve_relative_datetime,
 )
 from app.agent.tools.parent_tool_executor import ParentToolExecutor, serialize_result
-from app.agent.tools.parent_tools import DYNAMIC_PROGRAM_TOOLS, LEARNING_TOOLS, PARENT_TOOLS
+from app.agent.tools.parent_tools import (
+    DYNAMIC_PROGRAM_TOOLS,
+    LEARNING_TOOLS,
+    PARENT_TOOLS,
+    TOPIC_TOOLS,
+)
 from app.config import settings
 from app.domain.decision.models import ProgramId
 from app.models.conversation import Conversation
@@ -44,17 +49,22 @@ from app.services import openai_service
 logger = logging.getLogger(__name__)
 
 
-def build_active_tools(use_dynamic: bool, use_learning: bool = False) -> list[dict]:
+def build_active_tools(
+    use_dynamic: bool, use_learning: bool = False, use_topics: bool = False,
+) -> list[dict]:
     """Flag-off ⇒ exactly PARENT_TOOLS (byte-identical). Flag-on ⇒ + generic
     program tools (`use_dynamic`) and/or the operator-approved-answer tool
-    (`use_learning`). The two flags compose independently. `use_learning`
-    defaults to False so existing callers (e.g. the Phase-1 test's
-    `build_active_tools(False)` / `build_active_tools(True)`) stay valid."""
+    (`use_learning`) and/or the program-topic facts tool (`use_topics`). The
+    three flags compose independently. `use_learning`/`use_topics` default to
+    False so existing callers (e.g. the Phase-1 test's `build_active_tools(False)`
+    / `build_active_tools(True)`) stay valid."""
     tools = list(PARENT_TOOLS)
     if use_dynamic:
         tools = tools + DYNAMIC_PROGRAM_TOOLS
     if use_learning:
         tools = tools + LEARNING_TOOLS
+    if use_topics:
+        tools = tools + TOPIC_TOOLS
     return tools
 
 
@@ -105,6 +115,19 @@ def _approved_answer_prompt_suffix() -> str:
         "გამოიძახე get_approved_answer(question). თუ დაბრუნდა ოპერატორის "
         "დამტკიცებული პასუხი (success:true), გამოიყენე ის. თუ არა "
         "(success:false), უპასუხე ჩვეულებრივ."
+    )
+
+
+def _topic_tool_prompt_suffix() -> str:
+    """Tell the LLM the program-topic facts tool exists. Empty string when the
+    flag is off (so flag-off prompt is unchanged) — mirrors
+    `_approved_answer_prompt_suffix`."""
+    if not getattr(settings, "USE_PROGRAM_TOPICS", False):
+        return ""
+    return (
+        "\n\nროცა მშობელი კითხულობს ბანაკის კონკრეტულ თემაზე (უსაფრთხოება, კვება, "
+        "გაჯეტები, სამედიცინო, დღის განრიგი, მშობელთან კომუნიკაცია), გამოიძახე "
+        "get_program_topic და უპასუხე დაბრუნებული ფაქტებით — ბუნებრივად, არ გამოიგონო."
     )
 
 
@@ -2534,7 +2557,11 @@ def run_parent_llm_turn(
         try:
             response = openai_service.chat_with_tools(
                 messages=messages,
-                tools=build_active_tools(settings.USE_DYNAMIC_PROGRAMS, settings.USE_LEARNING),
+                tools=build_active_tools(
+                    settings.USE_DYNAMIC_PROGRAMS,
+                    settings.USE_LEARNING,
+                    getattr(settings, "USE_PROGRAM_TOPICS", False),
+                ),
                 tool_choice="auto",
                 max_tokens=DEFAULT_MAX_TOKENS,
                 temperature=DEFAULT_TEMPERATURE,
@@ -2717,6 +2744,7 @@ def _build_system_prompt(message: str = "", segment: str = "") -> str:
         base_prompt
         + _dynamic_programs_prompt_suffix()
         + _approved_answer_prompt_suffix()
+        + _topic_tool_prompt_suffix()
         + _skills_prompt_suffix(message, segment)
     )
 

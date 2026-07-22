@@ -48,6 +48,10 @@ TOOL_GET_PROGRAM_INFO = "get_program_info"
 # deliberately kept OUT of PARENT_TOOLS/DYNAMIC_PROGRAM_TOOLS so the
 # flag-off tool surface is unchanged (see LEARNING_TOOLS below).
 TOOL_GET_APPROVED_ANSWER = "get_approved_answer"
+# Capability #1 / Task 2 — program-topic facts lookup. Gated by
+# USE_PROGRAM_TOPICS; deliberately kept OUT of PARENT_TOOLS so the flag-off
+# tool surface is unchanged (see TOPIC_TOOLS below).
+TOOL_GET_PROGRAM_TOPIC = "get_program_topic"
 
 ALLOWED_TOOL_NAMES: frozenset[str] = frozenset({
     TOOL_GET_CAMP_INFO,
@@ -61,6 +65,7 @@ ALLOWED_TOOL_NAMES: frozenset[str] = frozenset({
     TOOL_LIST_PROGRAMS,
     TOOL_GET_PROGRAM_INFO,
     TOOL_GET_APPROVED_ANSWER,
+    TOOL_GET_PROGRAM_TOPIC,
 })
 
 # ``get_camp_info`` accepts only this closed set of topics. Anything else
@@ -471,5 +476,24 @@ LEARNING_TOOLS: list[dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {
             "question": {"type": "string", "description": "the parent's question, verbatim"},
         }, "required": ["question"]},
+    }},
+]
+
+
+# Capability #1 / Task 2 — program-topic facts lookup (data only). Gated by
+# USE_PROGRAM_TOPICS; deliberately kept OUT of PARENT_TOOLS so the flag-off
+# tool surface is unchanged. Consumed by the executor/engine in this task.
+TOPIC_TOOLS: list[dict[str, Any]] = [
+    {"type": "function", "function": {
+        "name": TOOL_GET_PROGRAM_TOPIC,
+        "description": (
+            "დააბრუნებს პროგრამის კონკრეტული თემის ფაქტებს (უსაფრთხოება, კვება, "
+            "გაჯეტები, სამედიცინო, დღის განრიგი, მშობელთან კომუნიკაცია და სხვ.). "
+            "გამოიძახე, როცა მშობელი ამ თემებზე კითხულობს — უპასუხე დაბრუნებული "
+            "ფაქტებით, ბუნებრივად, არ გამოიგონო."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "topic": {"type": "string", "description": "თემის სახელი (safety/food/gadgets/medical/…)."},
+        }, "required": ["topic"]},
     }},
 ]

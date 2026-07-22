@@ -48,6 +48,7 @@ from app.agent.tools.parent_tools import (
     TOOL_GET_AVAILABLE_SLOTS,
     TOOL_GET_CAMP_INFO,
     TOOL_GET_PROGRAM_INFO,
+    TOOL_GET_PROGRAM_TOPIC,
     TOOL_LIST_PROGRAMS,
     TOOL_MANAGE_CONSULTATION_BOOKING,
     TOOL_REQUEST_MANAGER_CALLBACK,
@@ -361,6 +362,8 @@ class ParentToolExecutor:
                 result = self._get_program_info(args)
             elif tool_name == TOOL_GET_APPROVED_ANSWER:
                 result = self._get_approved_answer(args)
+            elif tool_name == TOOL_GET_PROGRAM_TOPIC:
+                result = self._get_program_topic(args)
             else:
                 result = {
                     "success": False,
@@ -480,6 +483,27 @@ class ParentToolExecutor:
         if match:
             return {"success": True, "id": match["id"], "answer": match["answer"]}
         return {"success": False, "reason": "no_approved_answer"}
+
+    # -- get_program_topic (Capability #1 / Task 2, USE_PROGRAM_TOPICS) ----
+
+    def _get_program_topic(self, args: dict) -> dict:
+        """Surface a single camp topic's backend-sourced facts to the LLM.
+
+        Reuses the existing LLM-free readers in `camp_topic_facts` — never
+        reimplements topic logic. `medical` routes through `medical_answer()`
+        (which layers the operator-approved copy service); every other topic
+        routes through `answer_for_topic(topic)`. Never raises: unknown/empty
+        topic or a missing answer both surface as `success=False`.
+        """
+        from app.reasoning import camp_topic_facts as _ctf
+
+        topic = (args or {}).get("topic", "").strip()
+        if not topic:
+            return {"success": False, "topic": "", "facts": ""}
+        text = _ctf.medical_answer() if topic == "medical" else _ctf.answer_for_topic(topic)
+        if not text:
+            return {"success": False, "topic": topic, "facts": ""}
+        return {"success": True, "topic": topic, "facts": text}
 
     # -- get_camp_info -----------------------------------------------------
 
