@@ -34,6 +34,16 @@ The flag-OFF safety is proven. What is NOT yet proven is the **behavioral win**:
 
 **Open honest caveat (in the YAML):** the live corpus is mostly price/booking, not deep topic questions — so *how often parents actually ask these* is itself something the review must judge. The capability is low-risk (flag-gated, byte-identical off) and directly attacks the largest short-circuited knowledge body; whether it earns enablement is the review's call.
 
+### ⚠️ Review-protocol fidelity note (decide together before running)
+
+The runner's `baseline` mode blocks OpenAI to stay free. That is faithful for `straight` questions (the interceptor catches them → canned block, no engine). It is **NOT** faithful for `varied` questions: today (flag off) a varied question the interceptor *misses* falls through to the **engine** (real OpenAI, *without* the topic tool) — but with OpenAI blocked the runner instead records the free **legacy fallback**, which is not what production does. So `baseline`-varied **understates** the true "today" answer, and `varied` is exactly the bucket where the capability should win.
+
+For a fair `varied` comparison, BOTH sides must call the engine (flag OFF = engine-without-tool, flag ON = engine-with-tool) — i.e. baseline is also paid for the varied bucket. Options to settle when we run it:
+1. **Straight bucket only, free** — fully faithful (canned vs tool) and costs nothing; a real but partial signal.
+2. **Both buckets, both paid** — run baseline AND capability with OpenAI live (external SENDS stubbed), so `varied` compares engine-without-tool vs engine-with-tool faithfully. Needs a small runner change (allow OpenAI, stub Meta/Calendar/Sheets sends) — do NOT run the current `baseline` as-is for a varied verdict.
+
+The capability code is unaffected either way; this is only about how we MEASURE it.
+
 ## Files
 
 Flag `app/config.py`; tool `app/agent/tools/parent_tools.py` (`TOPIC_TOOLS`) + `parent_tool_executor.py` (`_get_program_topic`); wiring `app/agent/llm/parent_llm_engine.py` (`build_active_tools(..., use_topics)`, `_topic_tool_prompt_suffix`); bypass `app/flows/parent_flow.py` (`_maybe_handle_camp_topic_facts` gate). Plan: `docs/superpowers/plans/2026-07-22-capability-topic-facts-tool.md`.
