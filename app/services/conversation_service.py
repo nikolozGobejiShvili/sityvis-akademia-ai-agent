@@ -18,6 +18,22 @@ from data.prompts import UNCLEAR_ROUTING
 
 logger = logging.getLogger(__name__)
 
+
+def _maybe_dynamic_welcome(fallback: str) -> str:
+    """R2: when USE_DYNAMIC_WELCOME is on, replace the hardcoded UNCLEAR_ROUTING
+    menu (the „გვითხარით, რა გაინტერესებთ" list a bare greeting produces) with
+    the data-driven active-programs menu; otherwise return `fallback` unchanged
+    (flag OFF ⇒ byte-identical). Late import avoids a circular dependency; any
+    failure or empty active list falls back to the hardcoded menu."""
+    if not getattr(settings, "USE_DYNAMIC_WELCOME", False):
+        return fallback
+    try:
+        from app.flows.parent_flow import _build_active_programs_welcome
+        dynamic = _build_active_programs_welcome()
+        return dynamic or fallback
+    except Exception:  # pragma: no cover - defensive, never break the greeting
+        return fallback
+
 class _ConversationStore(dict):
     """In-memory store keyed by canonical session key.
 
@@ -1042,7 +1058,8 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
             else:
                 response = _REGISTRATION_LINK_CLARIFICATION
         else:
-            response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
+            response = _maybe_dynamic_welcome(
+            UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip())
     elif route_segment == "PARENT":
         _trace.set(route="parent_flow", segment="PARENT")
         _trace.set_route_decision(
@@ -1080,7 +1097,8 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
             answer_source="unclear_menu",
             deterministic_reason="top_level_segment_route",
         )
-        response = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
+        response = _maybe_dynamic_welcome(
+            UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip())
 
     # Response composer policy (Stage 3) — consultant-quality refinement of the
     # FINAL answer based on the planner intent + selected_state (eligible-age

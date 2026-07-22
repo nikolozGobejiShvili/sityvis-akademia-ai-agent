@@ -81,3 +81,22 @@ def test_explicit_camp_intent_still_yields_both_flag_states(monkeypatch):
     assert parent_flow._maybe_static_welcome(_fresh(), "საზაფხულო ბანაკი მაინტერესებს") is None
     _on(monkeypatch)
     assert parent_flow._maybe_static_welcome(_fresh(), "საზაფხულო ბანაკი მაინტერესებს") is None
+
+
+# -- the UNCLEAR_ROUTING greeting path (the one a bare „გამარჯობა" actually hits) --
+def test_conversation_service_unclear_gate_flag_off_byte_identical():
+    import app.services.conversation_service as cs
+    from data.prompts import UNCLEAR_ROUTING
+    fb = UNCLEAR_ROUTING.format(company_name=config_module.settings.COMPANY_NAME).strip()
+    assert cs._maybe_dynamic_welcome(fb) == fb  # flag off (conftest) ⇒ unchanged
+
+
+def test_conversation_service_unclear_gate_flag_on_dynamic(monkeypatch):
+    import app.services.conversation_service as cs
+    from data.prompts import UNCLEAR_ROUTING
+    monkeypatch.setattr(cs, "settings",
+                        dataclasses.replace(config_module.settings, USE_DYNAMIC_WELCOME=True))
+    _seed(monkeypatch, _TWO)
+    fb = UNCLEAR_ROUTING.format(company_name=config_module.settings.COMPANY_NAME).strip()
+    out = cs._maybe_dynamic_welcome(fb)
+    assert "დისნეილენდის ტური" in out and out != fb
