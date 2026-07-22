@@ -90,6 +90,45 @@ def test_executor_unknown_topic_fails_safely():
     assert res["success"] is False
 
 
+def test_executor_accepts_georgian_topic_names():
+    # The prompt suffix lists topics in Georgian; the model may pass them
+    # verbatim. The executor must resolve them (via the fuzzy matcher) rather
+    # than fail — else the model invents (the whole point is facts-from-backend).
+    ex = _executor()
+    for georgian, expected_key in [
+        ("უსაფრთხოება", "safety"),
+        ("კვება", "food"),
+        ("გაჯეტები", "gadgets"),
+        ("მშობელთან კომუნიკაცია", "parent_communication"),
+    ]:
+        res = ex._get_program_topic({"topic": georgian})
+        assert res["success"] is True, georgian
+        assert res["topic"] == expected_key
+        assert res["facts"]
+
+
+def test_executor_accepts_georgian_medical_alias():
+    ex = _executor()
+    res = ex._get_program_topic({"topic": "სამედიცინო"})
+    assert res["topic"] == "medical"
+    assert res["success"] == bool(res["facts"])
+
+
+def test_executor_non_string_topic_is_safe():
+    # Malformed tool-call JSON could pass a non-string; must not raise.
+    ex = _executor()
+    for bad in (123, None, {"x": 1}):
+        res = ex._get_program_topic({"topic": bad})
+        assert res["success"] is False
+
+
+def test_suffix_recovery_line_present_when_flag_on(monkeypatch):
+    _on(monkeypatch)
+    suffix = ple._topic_tool_prompt_suffix()
+    assert "success=false" in suffix  # tells the model to answer normally on a miss
+    assert "დღის განრიგი" not in suffix  # the dead topic (no backing key) is dropped
+
+
 def test_executor_empty_topic_fails_safely():
     ex = _executor()
     res = ex._get_program_topic({"topic": ""})

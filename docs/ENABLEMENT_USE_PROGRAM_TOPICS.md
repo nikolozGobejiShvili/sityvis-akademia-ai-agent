@@ -18,7 +18,17 @@ With `USE_PROGRAM_TOPICS=false`: **byte-identical to today.** Proven three ways 
 
 1. Railway env: set **`USE_PROGRAM_TOPICS=true`** AND ensure **`USE_PARENT_LLM_ENGINE=true`** (the bypass requires BOTH — yielding to an engine that won't run would drop the answer).
 2. Full restart (settings are `@lru_cache`d).
-3. Camp-topic questions now reach the engine + `get_program_topic`. (Topic answers are **not** camp-season-gated — they work regardless of whether a stream is open; only camp price/registration answers depend on the season.)
+3. Camp-topic questions reach the engine + `get_program_topic` — **BUT see the dead-season caveat below.**
+
+### 🔴 Dead-season pre-emption — the capability does NOT fully fire when registration is closed (verified 2026-07-22)
+
+**Correction of an earlier false claim in this doc:** topic answers ARE effectively season-gated. Verified by trace against the current shipped `sections.yaml` (`summer_camp.registration_status: closed`): a camp-topic question that contains a camp keyword — the *most natural* phrasing, e.g. `„უსაფრთხოება როგორ არის ბანაკში?"`, `„ბანაკში კვება როგორია?"` — is **pre-empted** by `_maybe_handle_final_camp_public_policy` (`parent_flow.py:1086`, ~480 lines BEFORE the topic gate) and returns the registration-closed block; it **never reaches `get_program_topic`.** Only a topic question with **no camp keyword** (e.g. `„ჩემს შვილს ლაქტოზა არ გადააქვს…"`) reaches the tool.
+
+So in the current dead season the capability fires only partially. **This is an enablement decision for you (must-fix before a fair review / enablement):**
+- **(a)** Accept it: the capability is meaningful once a camp stream reopens (registration open); document that and review it in that state; OR
+- **(b)** If topic answers *should* work in dead season too, add a flag-gated topic yield inside `_maybe_handle_final_camp_public_policy` mirroring the one added to `_maybe_handle_camp_topic_facts` (a code change that does NOT exist yet, and touches the deliberate registration-closed logic — do it supervised).
+
+This gap only appears end-to-end (a whole-branch view); the per-task tests reopen registration, so they pass while masking it.
 
 ## Rollback
 

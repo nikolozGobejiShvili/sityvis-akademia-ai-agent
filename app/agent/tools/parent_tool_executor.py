@@ -490,20 +490,37 @@ class ParentToolExecutor:
         """Surface a single camp topic's backend-sourced facts to the LLM.
 
         Reuses the existing LLM-free readers in `camp_topic_facts` — never
-        reimplements topic logic. `medical` routes through `medical_answer()`
-        (which layers the operator-approved copy service); every other topic
-        routes through `answer_for_topic(topic)`. Never raises: unknown/empty
-        topic or a missing answer both surface as `success=False`.
+        reimplements topic logic. Accepts BOTH the English YAML keys AND the
+        Georgian topic names the prompt actually lists: `medical`/`სამედიცინო`
+        route through `medical_answer()` (which layers the operator-approved
+        copy service); an English key routes through `answer_for_topic(topic)`;
+        anything else (a Georgian name, a loose phrasing) falls back to the
+        fuzzy `detect_camp_topic` matcher → key → `answer_for_topic`. Never
+        raises: a non-string / empty / unresolvable topic surfaces as
+        `success=False`.
         """
         from app.reasoning import camp_topic_facts as _ctf
 
-        topic = (args or {}).get("topic", "").strip()
+        raw = (args or {}).get("topic", "")
+        topic = raw.strip() if isinstance(raw, str) else ""
         if not topic:
             return {"success": False, "topic": "", "facts": ""}
-        text = _ctf.medical_answer() if topic == "medical" else _ctf.answer_for_topic(topic)
+        # Medical is a separate block; accept the English key and the Georgian name.
+        if topic in ("medical", "სამედიცინო"):
+            text = _ctf.medical_answer()
+            return {"success": bool(text), "topic": "medical", "facts": text or ""}
+        # Exact English key first; then the fuzzy Georgian→key matcher so the
+        # model can pass the Georgian topic names the prompt suffix lists.
+        resolved = topic
+        text = _ctf.answer_for_topic(topic)
+        if not text:
+            key = _ctf.detect_camp_topic(topic)
+            if key:
+                resolved = key
+                text = _ctf.answer_for_topic(key)
         if not text:
             return {"success": False, "topic": topic, "facts": ""}
-        return {"success": True, "topic": topic, "facts": text}
+        return {"success": True, "topic": resolved, "facts": text}
 
     # -- get_camp_info -----------------------------------------------------
 
