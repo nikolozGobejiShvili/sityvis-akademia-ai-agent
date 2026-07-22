@@ -399,6 +399,14 @@ class Settings:
     # OFF ⇒ byte-identical: camp band, camp registration, 17-col lead row (no
     # Program column), camp facts. Every booking validation gate is preserved.
     USE_PER_PRODUCT_BOOKING: bool = False
+    # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
+    # guards (injection · political · memory-info/PII) as ONE unit on every path.
+    # First increment: on the dynamic-program HOIST (which today runs only the
+    # injection guard, so political/PII turns bypass their safe redirects there).
+    # OFF ⇒ the hoist runs exactly _maybe_handle_offtopic_injection as today
+    # (byte-identical). Distinct from USE_REASONING_* — this is pure safety
+    # routing, no LLM.
+    USE_SAFETY_SPINE: bool = False
     # Reasoning loop (Phase 2, 2026-07): analyze→ground→answer→reflect in the
     # PARENT engine — the model plans, grounds only needed facts, then verifies
     # its answer's facts (REFLECT). OFF ⇒ engine path byte-identical. Distinct
@@ -595,6 +603,7 @@ class Settings:
             USE_PER_PRODUCT_BOOKING=_parse_bool_optional(
                 "USE_PER_PRODUCT_BOOKING", False,
             ),
+            USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
             USE_OBJECTION_ENGINE_ROUTING=_parse_bool_optional(
                 "USE_OBJECTION_ENGINE_ROUTING", False,

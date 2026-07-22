@@ -988,6 +988,29 @@ def _is_active_per_product_booking(conversation: Conversation) -> bool:
     return bool(pid) and pid not in _HARDCODED_PROGRAM_IDS
 
 
+def _safety_spine(conversation: Conversation, message: str) -> str | None:
+    """Layer-0 safety spine (Phase 3.1) — the program-AGNOSTIC sole-enforcer
+    guards run as ONE unit, in a fixed order: prompt-injection → political →
+    memory-info (PII). Returns the first guard's safe redirect, or None to
+    continue. Pure — the SAME call can run on every path; the first increment
+    calls it on the dynamic-program hoist (which today runs only the injection
+    guard, so political/PII turns there bypass their safe redirects).
+
+    Injection is FIRST so an injection turn is caught identically to today's
+    lone hoist call (byte-identity when swapped in). The guard names resolve at
+    CALL time (they are defined later in this module).
+    """
+    for guard in (
+        _maybe_handle_offtopic_injection,
+        _maybe_handle_political,
+        _maybe_memory_info_reply,
+    ):
+        response = guard(conversation, message)
+        if response is not None:
+            return response
+    return None
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1087,9 +1110,20 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         # `_maybe_handle_sunday_school` and silently change precedence for
         # NON-hoisted turns. Returns None for every normal program question, so
         # a non-injection hoisted turn is unchanged.
-        hoisted_injection_response = _maybe_handle_offtopic_injection(
-            conversation, message,
-        )
+        # Safety spine (Phase 3.1, hoist-first increment): when USE_SAFETY_SPINE
+        # is on, run the full program-agnostic Layer-0 spine here (injection →
+        # political → memory-info) instead of only the injection guard — so a
+        # political / „what do you know about me?" turn on the HOIST path gets
+        # its safe redirect too (today only injection is caught here, and the
+        # audit found political/PII bypassed on this path). Injection is the
+        # spine's FIRST guard, so with the flag OFF this is byte-identical to the
+        # lone injection call below.
+        if getattr(settings, "USE_SAFETY_SPINE", False):
+            hoisted_injection_response = _safety_spine(conversation, message)
+        else:
+            hoisted_injection_response = _maybe_handle_offtopic_injection(
+                conversation, message,
+            )
         if hoisted_injection_response is not None:
             return hoisted_injection_response
 

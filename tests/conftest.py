@@ -130,6 +130,7 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_PROGRAM_TOPICS=False,
         USE_DYNAMIC_WELCOME=False,
         USE_PER_PRODUCT_BOOKING=False,
+        USE_SAFETY_SPINE=False,
     )
     # Pin the config singleton too, so tests that rebuild settings from
     # `config_module.settings` (rather than the already-pinned module copies) do
