@@ -32,11 +32,19 @@ def main() -> int:
         "understanding", "extraction", "routing", "response_quality", "followup"),
         help="run only one dimension")
     ap.add_argument("--case", help="run only one case id (e.g. E1)")
+    ap.add_argument("--v2", action="store_true",
+                    help="include cases_v2 (Phase 3.0 Task 5 — multi-turn, "
+                         "engine-reaching, synthetic-product cases). Opt-in, "
+                         "default OFF; combine with --llm to actually run them "
+                         "(they self-skip otherwise). See "
+                         "docs/MEASURE_PHASE3_0_BASELINE.md before using --llm --v2 "
+                         "— it is a paid, operator-approved capture.")
     args = ap.parse_args()
 
     from evals.harness import run_all
     return run_all(llm=args.llm, judge=args.judge,
-                   category=args.category, case_id=args.case)
+                   category=args.category, case_id=args.case,
+                   include_v2=args.v2)
 
 
 if __name__ == "__main__":

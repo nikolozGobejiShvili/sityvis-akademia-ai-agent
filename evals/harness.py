@@ -190,10 +190,32 @@ class Harness:
 
 
 # ── runner + scoring + report ────────────────────────────────────────────────
-def run_all(*, llm: bool, judge: bool, category: str | None = None,
-            case_id: str | None = None) -> int:
+def _collect_cases(*, category: str | None, case_id: str | None,
+                    include_v2: bool) -> list[EvalCase]:
+    """Pure case-collection + filtering (no side effects) — kept separate
+    from `run_all` so the Phase 3.0 Task 5 `include_v2` wiring is unit-
+    testable without invoking `safety.install_readonly` (which installs
+    process-wide, non-reentrant stubs meant for a single standalone script
+    run, not something to trigger from inside a shared pytest process).
+
+    `include_v2` is OPT-IN, default OFF: with it False (the `run_all()`
+    default), this returns exactly the same list `CASES` always did —
+    byte-identical — so `baseline.json` is untouched unless a caller
+    explicitly asks for the v2 set (paid `--llm --v2` runbook, see
+    docs/MEASURE_PHASE3_0_BASELINE.md).
+    """
     from evals.cases import CASES
 
+    all_cases = list(CASES)
+    if include_v2:
+        from evals.cases_v2 import CASES_V2
+        all_cases = all_cases + CASES_V2
+    return [c for c in all_cases if (not category or c.dimension == category)
+            and (not case_id or c.id == case_id)]
+
+
+def run_all(*, llm: bool, judge: bool, category: str | None = None,
+            case_id: str | None = None, include_v2: bool = False) -> int:
     log = safety.SideEffectLog()
     safety.install_readonly(log, block_httpx=not llm)
 
@@ -208,8 +230,7 @@ def run_all(*, llm: bool, judge: bool, category: str | None = None,
 
     h = Harness(log, llm_enabled=llm, judge_enabled=judge_enabled)
 
-    cases = [c for c in CASES if (not category or c.dimension == category)
-             and (not case_id or c.id == case_id)]
+    cases = _collect_cases(category=category, case_id=case_id, include_v2=include_v2)
 
     repeat_llm = (llm or judge_enabled)
     results: list[tuple[EvalCase, CaseOutcome, int]] = []
