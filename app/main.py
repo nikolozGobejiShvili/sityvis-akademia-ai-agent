@@ -49,6 +49,12 @@ async def startup():
     print(f"⚙️ USE_LEAD_MEMORY={getattr(settings, 'USE_LEAD_MEMORY', False)}")
     print(f"⚙️ USE_SKILLS={getattr(settings, 'USE_SKILLS', False)}")
     print(f"⚙️ USE_LEARNING={getattr(settings, 'USE_LEARNING', False)}")
+    # R2 / Cap#1 / R1 flags (2026-07-22) — boot visibility so an operator can
+    # confirm from the deploy log whether the flag is actually read (the
+    # dynamic-welcome debug: if this prints False, the env isn't set/read; if it
+    # doesn't print at all, an OLD container is still serving pre-deploy code).
+    print(f"⚙️ USE_DYNAMIC_WELCOME={getattr(settings, 'USE_DYNAMIC_WELCOME', False)}")
+    print(f"⚙️ USE_PROGRAM_TOPICS={getattr(settings, 'USE_PROGRAM_TOPICS', False)}")
     # Phase 0b (2026-07-20) — boot-log the resolved admin-config directory so
     # operators can see at a glance whether config is being read/written from
     # the repo-default path (ephemeral on Railway) or an operator-mounted
