@@ -83,23 +83,26 @@ CAPABILITY_WARNING = (
 def set_env_for_config(config: str) -> None:
     import os
 
-    if config == "baseline":
+    if config in ("baseline", "baseline-live"):
         os.environ["USE_PROGRAM_TOPICS"] = "false"
         # Engine ON is production-faithful (live default) and is what lets
         # the turn actually reach the camp-topic interceptor at all — the
         # interceptor call site only exists inside the USE_PARENT_LLM_ENGINE
-        # branch of app/flows/parent_flow.py. With USE_PROGRAM_TOPICS=false
-        # the interceptor still answers directly (no OpenAI call); a miss
-        # would otherwise fall through to the real engine, but real httpx is
-        # blocked for this config (see install_review_guard), so it can never
-        # actually spend money — a miss just falls back to the free legacy
-        # state machine.
+        # branch of app/flows/parent_flow.py. `baseline` blocks real httpx so a
+        # varied-bucket interceptor MISS falls to the free legacy state machine
+        # (understates the true "today" answer). `baseline-live` allows OpenAI
+        # (sends still stubbed) so a MISS reaches the real engine-WITHOUT-tool —
+        # the faithful "today" comparison for the varied bucket (PAID, --yes).
         os.environ["USE_PARENT_LLM_ENGINE"] = "true"
     elif config == "capability":
         os.environ["USE_PROGRAM_TOPICS"] = "true"
         os.environ["USE_PARENT_LLM_ENGINE"] = "true"
     else:
         raise ValueError(f"unknown config: {config!r}")
+
+
+# Configs that make real (paid) OpenAI calls and need the --yes gate.
+_PAID_CONFIGS = ("capability", "baseline-live")
 
 
 def install_review_guard(config: str):
@@ -110,7 +113,7 @@ def install_review_guard(config: str):
     from evals import safety
 
     log = safety.SideEffectLog()
-    safety.install_readonly(log, block_httpx=(config != "capability"))
+    safety.install_readonly(log, block_httpx=(config not in _PAID_CONFIGS))
     return log
 
 
@@ -186,7 +189,11 @@ def _result_row(question: dict, reply: str) -> dict:
 
 def write_results_json(config: str, results: list[dict]) -> Path:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = REPORTS_DIR / f"topic_review_{config}.json"
+    # `baseline-live` IS the baseline for the report — write it to the baseline
+    # path so `--compare` (which reads topic_review_baseline.json) uses the
+    # faithful, engine-live baseline replies.
+    file_config = "baseline" if config == "baseline-live" else config
+    out_path = REPORTS_DIR / f"topic_review_{file_config}.json"
     out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     return out_path
 
@@ -206,7 +213,7 @@ def run_config(config: str) -> Path:
 
     print(f"\n[{config}] drove {len(results)} question(s) → {out_path}")
     print(safety.render_banner(
-        log, llm_used=(config == "capability"), httpx_blocked=(config != "capability"),
+        log, llm_used=(config in _PAID_CONFIGS), httpx_blocked=(config not in _PAID_CONFIGS),
     ))
     return out_path
 
@@ -221,15 +228,15 @@ def _md5_of(path: Path) -> str:
 
 
 def run_and_report(config: str, *, yes: bool) -> int:
-    if config == "capability":
+    if config in _PAID_CONFIGS:
         print(CAPABILITY_WARNING)
         if not yes:
             print(
-                "Refusing to run --config capability without --yes "
+                f"Refusing to run --config {config} without --yes "
                 "(this makes REAL, PAID OpenAI calls). Re-run with --yes to proceed.",
             )
             return 1
-        print("Proceeding with --config capability (--yes given) — real OpenAI calls will be made.\n")
+        print(f"Proceeding with --config {config} (--yes given) — real OpenAI calls will be made.\n")
 
     md5_before = _md5_of(BASELINE_JSON_PATH)
     snapshot = BASELINE_JSON_PATH.read_bytes() if BASELINE_JSON_PATH.exists() else None
@@ -351,10 +358,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     ap.add_argument(
-        "--config", choices=("baseline", "capability"),
+        "--config", choices=("baseline", "baseline-live", "capability"),
         help=(
             "drive every question in this config once and write "
-            "tools/reports/topic_review_<config>.json"
+            "tools/reports/topic_review_<config>.json. baseline = flag off, free "
+            "(varied misses fall to the free legacy path — understates 'today'). "
+            "baseline-live = flag off but OpenAI ALLOWED so varied misses reach "
+            "the real engine-without-tool (faithful 'today', PAID --yes; writes "
+            "the baseline report). capability = flag on, PAID --yes."
         ),
     )
     ap.add_argument(
