@@ -6368,6 +6368,13 @@ def _camp_stream_dates_answer() -> str | None:
 
 def _is_camp_stream_lifecycle_question(message: str) -> bool:
     low = (message or "").lower()
+    # A parent asking how they'll know their CHILD is doing well during the camp
+    # is a parent-communication question, NOT a stream-timing one — even though
+    # „მიმდინარეობისას" (locative "during") shares the „მიმდინარე" stem with
+    # „is the stream ongoing?". Without this guard it misroutes to the stream-
+    # dates answer (V5 review bug, 2026-07-22).
+    if "შვილ" in low and any(m in low for m in ("კარგად", "გავიგებ", "მდგომარეობ", "როგორ არის")):
+        return False
     has_stream = "ნაკად" in low
     has_camp = "ბანაკ" in low
     asks_started = any(marker in low for marker in _CAMP_STREAM_STARTED_QUESTION_MARKERS)
