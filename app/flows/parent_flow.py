@@ -336,6 +336,20 @@ def _maybe_handle_final_camp_public_policy(
         return _render_sunday_school_answer()
     if category == _FINAL_CAMP_POLICY_FUTURE_INFO_PENDING:
         return _camp_future_information_not_announced_answer()
+    if (
+        category == _FINAL_CAMP_POLICY_CURRENT_DETAILS_LIMITED
+        and getattr(settings, "USE_REGISTRATION_CLOSED_NARROWING", False)
+    ):
+        # Registration-closed narrowing: `current_details_limited` is the
+        # CATCH-ALL fallthrough — a camp-context turn during closed registration
+        # that is NOT a genuine registration/booking action (e.g. a price
+        # objection „ცოტა ძვირია" or „ბანაკის გარდა კიდევ რა პროგრამები გაქვთ?").
+        # Answering those with the blanket „რეგისტრაცია დასრულებულია" is a
+        # wrong-answer-to-the-question bleed (eval OB3/PI2). Defer to the engine
+        # so the actual question is answered. A genuine registration action is
+        # the REGISTRATION_CLOSED category below and is untouched. OFF ⇒ the
+        # catch-all falls through to the closed answer exactly as before.
+        return None
     if category == _FINAL_CAMP_POLICY_REGISTRATION_CLOSED:
         conversation.pending_booking = None
     return _camp_registration_closed_answer()
@@ -558,6 +572,35 @@ def _apply_client_emoji_policy(
     if _user_is_pure_thanks(message) or _user_is_farewell(message):
         return _strip_period_after_heart(_add_heart_after_first_sentence(response))
     # 3. First assistant reply AND the user greeted.
+    if not _bot_has_replied(conversation) and _user_greeted(message):
+        return _strip_period_after_heart(_add_heart_after_greeting(response))
+    return response
+
+
+def apply_greeting_farewell_heart(
+    conversation: Conversation, message: str, response: str,
+) -> str:
+    """Universal blue-heart (💙) for the OPENING greeting (first reply) and the
+    FAREWELL / thank-you close — for the flows that have NO emoji policy of their
+    own (the ADULT engine and the UNCLEAR routing menu). The PARENT engine keeps
+    its richer :func:`_apply_client_emoji_policy` (which also hearts a confirmed
+    booking and honors the unknown-detail defer contract) and is deliberately
+    NOT routed through this function.
+
+    Reuses the exact same heart primitives AND the same ``_CLIENT_EMOJI_ENABLED``
+    flag as PARENT, so the heart looks identical everywhere and every test that
+    pins the flag OFF (tests/conftest.py) stays byte-identical. Adds AT MOST one
+    💙; a no-op when the flag is off, the response already carries a heart, or the
+    turn is neither a first-greeting nor a bare farewell/thank-you.
+    """
+    if not _CLIENT_EMOJI_ENABLED:
+        return response
+    if not response or _HEART in response:
+        return response
+    # Close: a bare thank-you / farewell → warm one-heart close.
+    if _user_is_pure_thanks(message) or _user_is_farewell(message):
+        return _strip_period_after_heart(_add_heart_after_first_sentence(response))
+    # Open: the FIRST assistant reply AND the user greeted.
     if not _bot_has_replied(conversation) and _user_greeted(message):
         return _strip_period_after_heart(_add_heart_after_greeting(response))
     return response
