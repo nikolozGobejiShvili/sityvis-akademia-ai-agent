@@ -1,0 +1,51 @@
+# 20-conversation review set for Capability #1 (topic-facts tool).
+#
+# PURPOSE: the operator judges, side by side, the CANNED interceptor reply
+# (flag OFF) vs the LLM-reasoned-over-tool reply (flag ON) for each question,
+# and decides which is better — more natural, correct, grounded, human.
+#
+# HOW THE SET IS BUILT (honest labelling):
+#   - The camp-topic interceptor matches SUBSTRING trigger stems. So:
+#     * bucket=straight  → the exact stem is present; the interceptor DOES catch
+#       it. These check the capability does NOT regress on the easy cases.
+#     * bucket=varied    → phrased WITHOUT the trigger stem (a real parent's
+#       oblique wording); the interceptor likely MISSES or mis-scores. These are
+#       where the LLM+tool should win — the whole point of the capability.
+#   - source=real     → drawn from the live corpus / real-client transcripts.
+#   - source=crafted  → realistic parent phrasings we authored to probe the
+#     miss-cases. NOT literal past conversations; labelled honestly so the
+#     operator weighs them as probes, not evidence of real demand.
+#
+# CAVEAT FOR THE OPERATOR TO JUDGE: the live corpus is mostly price/booking, not
+# deep topic questions — so it is an open question how often parents actually ask
+# these. Part of what this review answers: is the topic capability worth enabling
+# at all, and does it beat the canned block where it matters.
+#
+# The runner (built after the capability lands) drives each question through the
+# agent twice (flag OFF vs ON), captures both replies, and presents them for
+# judgement. Running it makes REAL OpenAI calls → operator-approved step.
+
+questions:
+  # ── STRAIGHT (interceptor catches; no-regression checks) ──────────────────
+  - {id: S1,  topic: safety,               bucket: straight, source: crafted, q: "ბანაკში უსაფრთხოება როგორ არის უზრუნველყოფილი?"}
+  - {id: S2,  topic: food,                 bucket: straight, source: crafted, q: "კვება როგორია, მენიუში რა შედის?"}
+  - {id: S3,  topic: gadgets,              bucket: straight, source: crafted, q: "ტელეფონის გამოყენება შეიძლება ბანაკში?"}
+  - {id: S4,  topic: medical,              bucket: straight, source: crafted, q: "თუ ბავშვი ავად გახდა, ექიმი ჰყავთ ადგილზე?"}
+  - {id: S5,  topic: parent_communication, bucket: straight, source: crafted, q: "მშობლებს ფოტოებს გვიგზავნით ბანაკის განმავლობაში?"}
+  - {id: S6,  topic: accommodation,        bucket: straight, source: crafted, q: "სად ცხოვრობენ ბავშვები, როგორია განთავსება?"}
+  - {id: S7,  topic: sports_health,        bucket: straight, source: crafted, q: "სპორტული აქტივობები აქვთ ბანაკში?"}
+  - {id: S8,  topic: general_overview,     bucket: straight, source: crafted, q: "ზოგადად რას მოიცავს ბანაკი, რა ხდება იქ?"}
+
+  # ── VARIED (oblique phrasing; interceptor likely misses → capability wins) ──
+  - {id: V1,  topic: safety,               bucket: varied, source: crafted, q: "ჩემი შვილი პატარაა, მარტო დარჩენა მაწუხებს — ღამით ვინმე ეყოლება გვერდით?"}
+  - {id: V2,  topic: food,                 bucket: varied, source: crafted, q: "ჩემს შვილს ლაქტოზა არ გადააქვს, ამას როგორ აგვარებთ?"}
+  - {id: V3,  topic: gadgets,              bucket: varied, source: real,    q: "სახლში ეკრანთან ბევრ დროს ატარებს — ბანაკში ამას შეზღუდავთ?"}
+  - {id: V4,  topic: medical,              bucket: varied, source: crafted, q: "ყოველდღე წამლის მიცემა სჭირდება — ვინ მიხედავს ამას?"}
+  - {id: V5,  topic: parent_communication, bucket: varied, source: crafted, q: "როგორ გავიგებ ბანაკის მიმდინარეობისას ჩემი შვილი კარგადაა თუ არა?"}
+  - {id: V6,  topic: accommodation,        bucket: varied, source: crafted, q: "ერთ ოთახში რამდენი ბავშვი იქნება ერთად?"}
+  - {id: V7,  topic: rest_environment,     bucket: varied, source: crafted, q: "ბავშვს დასვენების დროც ექნება თუ მთელი დღე დატვირთულია?"}
+  - {id: V8,  topic: safety,               bucket: varied, source: crafted, q: "თუ რამე მოხდა, სასწრაფოდ როგორ დამიკავშირდებით?"}
+  - {id: V9,  topic: food,                 bucket: varied, source: crafted, q: "ჩემი შვილი ძალიან ირჩევს საჭმელს, შიმშილით ხომ არ დარჩება?"}
+  - {id: V10, topic: general_overview,     bucket: varied, source: crafted, q: "დღე როგორ არის გაწერილი, დილიდან საღამომდე რას აკეთებენ?"}
+  - {id: V11, topic: gadgets,              bucket: varied, source: crafted, q: "თუ ტელეფონი ჩამოერთმევა, მე როგორ დავუკავშირდები მას?"}
+  - {id: V12, topic: communication_socialization, bucket: varied, source: crafted, q: "ჩემი შვილი მორცხვია, ახალ ბავშვებთან გაუჭირდება — ამაში დაეხმარებიან?"}
