@@ -419,6 +419,14 @@ class Settings:
     # is answered; a genuine registration/booking action still gets the closed
     # answer. OFF ⇒ the catch-all returns the closed answer as before, byte-identical.
     USE_REGISTRATION_CLOSED_NARROWING: bool = False
+    # Self-overage → adult redirect (R4 increment, 2026-07): when the sender asks
+    # about CAMP for THEMSELVES at an adult age (>17) — „ჩემთვის მინდა ბანაკი, 25
+    # წლის ვარ" — the child-focused camp intro used to fire (camp is 9–17, so this
+    # is a mismatch: an adult gets a pitch about a kids' camp). When ON, that turn
+    # is answered with the camp age band + an adult-events pointer instead (no
+    # booking). Narrow: self-reference AND a stated age >17. OFF ⇒ camp intro fires
+    # exactly as before, byte-identical.
+    USE_SELF_OVERAGE_ADULT_REDIRECT: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -628,6 +636,9 @@ class Settings:
             ),
             USE_REGISTRATION_CLOSED_NARROWING=_parse_bool_optional(
                 "USE_REGISTRATION_CLOSED_NARROWING", False,
+            ),
+            USE_SELF_OVERAGE_ADULT_REDIRECT=_parse_bool_optional(
+                "USE_SELF_OVERAGE_ADULT_REDIRECT", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

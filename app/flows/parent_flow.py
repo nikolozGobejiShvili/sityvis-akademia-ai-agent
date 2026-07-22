@@ -722,6 +722,9 @@ _CAMP_ENDED_DIRECT: str = (
 )
 _CAMP_OFF_CHILD_PREFIX: str = "ამ ეტაპზე ბანაკის მიმდინარე ნაკადები აქტიური არ არის."
 _CAMP_OFF_ADULT_POINTER: str = "რაც შეეხება ზრდასრულთა ღონისძიებებს — რომელი გაინტერესებთ?"
+_CAMP_OVERAGE_ADULT_REDIRECT: str = (
+    "ბანაკი 9–17 წლის ბავშვებისთვისაა. " + _CAMP_OFF_ADULT_POINTER
+)
 
 _CAMP_STATUS_KEYWORDS: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ", "ნაკად")
 _CAMP_ENDED_Q_MARKERS: tuple[str, ...] = (
@@ -6812,6 +6815,30 @@ _CAMP_INTRO_INTENT_MARKERS: tuple[str, ...] = (
 )
 
 
+def _is_self_overage_camp_request(message: str) -> bool:
+    """True when the sender asks about CAMP for THEMSELVES at an adult age (>17)
+    („ჩემთვის მინდა ბანაკი, 25 წლის ვარ"). Camp is 9–17, so the child-focused
+    intro must not fire — the caller points to adult events instead. Narrow: a
+    self-reference AND a stated age strictly greater than 17. A third-person child
+    age („შვილი 25 წლისაა") has neither the self-reference nor first-person „ვარ",
+    so it never matches."""
+    low = (message or "").lower()
+    self_ref = (
+        "ჩემთვის" in low
+        or "ჩემი თავის" in low
+        or (("მე " in low or low.startswith("მე")) and "ვარ" in low)
+    )
+    if not self_ref:
+        return False
+    for m in re.findall(r"(\d{1,3})\s*წლ", low):
+        try:
+            if int(m) > 17:
+                return True
+        except ValueError:  # pragma: no cover — defensive
+            pass
+    return False
+
+
 def _maybe_handle_camp_intro(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -6836,6 +6863,12 @@ def _maybe_handle_camp_intro(
     # read as an intro turn (those have their own handlers / reach the engine).
     if not any(kw in low for kw in _CAMP_INTENT_KEYWORDS):
         return None
+    if getattr(settings, "USE_SELF_OVERAGE_ADULT_REDIRECT", False) and \
+            _is_self_overage_camp_request(message):
+        # An adult (>17) asking about CAMP for THEMSELVES: camp is 9–17, so give
+        # the age band + an adult-events pointer, not the child-focused intro
+        # (eval R7). OFF ⇒ this block is skipped, camp intro fires as before.
+        return _CAMP_OVERAGE_ADULT_REDIRECT
     if not any(m in low for m in _CAMP_INTRO_INTENT_MARKERS):
         return None
     if _is_camp_price_intent(message):
