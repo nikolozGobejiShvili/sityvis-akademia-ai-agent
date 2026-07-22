@@ -396,3 +396,114 @@ def test_get_program_info_does_not_tag_flag_off(monkeypatch):
     r = ex.execute(TOOL_GET_PROGRAM_INFO, {"program_id": "disneyland_tour"})
     assert r["success"] is True
     assert conv.lead.program_id == ""  # not tagged when flag off
+
+
+# ── Task 4: flag-gated Sheets "Program" column ────────────────────────────
+# Flag OFF ⇒ 17-col A–Q row (byte-identical). Flag ON ⇒ 18 cols (A–R) with the
+# program id last. The append range must match the width actually written.
+
+from app.services import sheets_service as _sheets  # noqa: E402
+
+
+def _sheets_flag_on(monkeypatch):
+    monkeypatch.setattr(
+        _sheets, "settings",
+        dataclasses.replace(_sheets.settings, USE_PER_PRODUCT_BOOKING=True),
+    )
+
+
+def _booked_lead(program_id: str = ""):
+    return Lead(
+        sender_id="u1", platform="messenger", segment="PARENT",
+        name="ნიკა", phone="599112233", child_age="7",
+        calendly_booked=True, status="Booked", program_id=program_id,
+    )
+
+
+def test_lead_to_row_flag_off_is_17_cols():
+    row = _sheets._lead_to_row(_booked_lead(program_id="disneyland_tour"), 1)
+    assert len(row) == 17  # byte-identical, no Program cell
+
+
+def test_lead_to_row_flag_on_is_18_cols_with_program_last(monkeypatch):
+    _sheets_flag_on(monkeypatch)
+    row = _sheets._lead_to_row(_booked_lead(program_id="disneyland_tour"), 1)
+    assert len(row) == 18
+    assert row[-1] == "disneyland_tour"
+
+
+def test_lead_to_row_flag_on_empty_program_still_18_cols(monkeypatch):
+    _sheets_flag_on(monkeypatch)
+    row = _sheets._lead_to_row(_booked_lead(program_id=""), 1)
+    assert len(row) == 18
+    assert row[-1] == ""  # camp/legacy lead ⇒ empty Program cell, still 18-wide
+
+
+def test_active_headers_flag_off_is_canonical():
+    assert _sheets._active_leads_headers() == _sheets.HEADERS
+    assert len(_sheets._active_leads_headers()) == 17
+
+
+def test_active_headers_flag_on_appends_program(monkeypatch):
+    _sheets_flag_on(monkeypatch)
+    headers = _sheets._active_leads_headers()
+    assert headers == _sheets.HEADERS + ["Program"]
+    assert headers[-1] == "Program"
+
+
+class _FakeWorksheet:
+    """Minimal worksheet capturing the update() range + values."""
+
+    def __init__(self, existing_rows=1):
+        self._rows = existing_rows
+        self.updates = []  # list of (range_name, values)
+        self._header = []
+
+    def get_all_values(self):
+        return [["x"]] * self._rows
+
+    def row_values(self, n):
+        return self._header
+
+    def resize(self, cols):
+        self._resized_cols = cols
+
+    def update(self, *args, **kwargs):
+        range_name = kwargs.get("range_name") or (args[0] if args else "")
+        values = kwargs.get("values") or (args[1] if len(args) > 1 else None)
+        self.updates.append((range_name, values))
+
+
+def test_append_range_matches_row_width_flag_off():
+    ws = _FakeWorksheet(existing_rows=5)
+    row = _sheets._lead_to_row(_booked_lead(), 1)  # 17 cols flag off
+    _sheets._append_lead_row_aligned(ws, row)
+    range_name, _ = ws.updates[-1]
+    assert range_name == "A6:Q6"  # 17 cols ⇒ A..Q, byte-identical
+
+
+def test_append_range_matches_row_width_flag_on(monkeypatch):
+    _sheets_flag_on(monkeypatch)
+    ws = _FakeWorksheet(existing_rows=5)
+    row = _sheets._lead_to_row(_booked_lead(program_id="disneyland_tour"), 1)  # 18
+    _sheets._append_lead_row_aligned(ws, row)
+    range_name, values = ws.updates[-1]
+    assert range_name == "A6:R6"  # 18 cols ⇒ A..R
+    assert values[0][-1] == "disneyland_tour"
+
+
+def test_ensure_headers_flag_on_writes_program_header(monkeypatch):
+    _sheets_flag_on(monkeypatch)
+    ws = _FakeWorksheet()
+    ws._header = list(_sheets.HEADERS)  # sheet currently has the 17 legacy headers
+    _sheets._ensure_headers(ws)
+    range_name, values = ws.updates[-1]
+    assert range_name == "A1:R1"
+    assert values[0] == _sheets.HEADERS + ["Program"]
+
+
+def test_ensure_headers_flag_off_unchanged_when_canonical():
+    ws = _FakeWorksheet()
+    ws._header = list(_sheets.HEADERS)  # already canonical ⇒ no write
+    _sheets._ensure_headers(ws)
+    assert ws.updates == []  # byte-identical: no header rewrite

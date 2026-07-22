@@ -161,9 +161,24 @@ UPDATE_COLUMNS = {
 }
 
 
+def _active_leads_headers() -> list[str]:
+    """The Leads header row for the CURRENT flag state.
+
+    Per-Product Booking (Cap #2 / R1): with ``USE_PER_PRODUCT_BOOKING`` ON a
+    trailing ``"Program"`` column is appended so a booking lead can carry its
+    admin product id. OFF ⇒ the canonical 17-column ``HEADERS`` unchanged
+    (byte-identical). Adding a trailing column never shifts an existing column,
+    so every existing reader (``_row_to_lead``, ``COLUMN_INDEX``) is unaffected.
+    """
+    if getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
+        return HEADERS + ["Program"]
+    return HEADERS
+
+
 def _leads_last_col_a1() -> str:
-    """A1 column letter of the final Leads header (e.g. ``Q`` for 17 cols)."""
-    return chr(ord("A") + len(HEADERS) - 1)
+    """A1 column letter of the final Leads header (``Q`` for 17 cols, ``R`` for
+    18 when the per-product Program column is active)."""
+    return chr(ord("A") + len(_active_leads_headers()) - 1)
 
 
 def _append_lead_row_aligned(worksheet: Any, row: list[Any]) -> None:
@@ -189,7 +204,11 @@ def _append_lead_row_aligned(worksheet: Any, row: list[Any]) -> None:
     byte-for-byte. The Leads schema (headers / order / count) is unchanged.
     """
     next_row = len(worksheet.get_all_values()) + 1
-    last_col = _leads_last_col_a1()
+    # Anchor the range to the ACTUAL row width so the flag-gated 18th "Program"
+    # column (Cap #2 / R1) lands in R while a legacy 17-col row still writes
+    # A..Q byte-identically. Deriving from len(row) keeps range and payload in
+    # lock-step regardless of flag state.
+    last_col = chr(ord("A") + len(row) - 1)
     worksheet.update(
         range_name=f"A{next_row}:{last_col}{next_row}",
         values=[row],
@@ -437,7 +456,7 @@ def _worksheet() -> Any:
         worksheet = spreadsheet.add_worksheet(
             title=settings.GOOGLE_SHEETS_LEADS_TAB,
             rows=1000,
-            cols=len(HEADERS),
+            cols=len(_active_leads_headers()),
         )
         logger.info("[SHEETS] Worksheet created: %s", settings.GOOGLE_SHEETS_LEADS_TAB)
 
@@ -446,11 +465,12 @@ def _worksheet() -> Any:
 
 
 def _ensure_headers(worksheet: Any) -> None:
+    headers = _active_leads_headers()
     current_headers = worksheet.row_values(1)
-    if current_headers != HEADERS:
-        last_col = chr(ord("A") + len(HEADERS) - 1)
-        worksheet.resize(cols=len(HEADERS))
-        worksheet.update(f"A1:{last_col}1", [HEADERS])
+    if current_headers != headers:
+        last_col = chr(ord("A") + len(headers) - 1)
+        worksheet.resize(cols=len(headers))
+        worksheet.update(f"A1:{last_col}1", [headers])
         logger.info("[SHEETS] Header row updated (cols=A1:%s1)", last_col)
 
 
@@ -522,7 +542,7 @@ def _scrub_event_interest_for_segment(lead: Lead) -> str:
 
 def _lead_to_row(lead: Lead, lead_id: int) -> list[Any]:
     event_interest_cell = _scrub_event_interest_for_segment(lead)
-    return [
+    row = [
         lead_id,
         lead.sender_id,
         lead.platform,
@@ -541,6 +561,13 @@ def _lead_to_row(lead: Lead, lead_id: int) -> list[Any]:
         _datetime_text(lead.last_message_at),
         _bool_text(lead.followup_sent),
     ]
+    # Per-Product Booking (Cap #2 / R1) — flag-gated trailing "Program" column.
+    # OFF ⇒ the 17-col A–Q row above, byte-identical. ON ⇒ append the lead's
+    # admin product id (empty for a camp/legacy lead) so the width matches
+    # `_active_leads_headers()`.
+    if getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
+        row.append(getattr(lead, "program_id", "") or "")
+    return row
 
 
 def _row_to_lead(row: dict[str, Any]) -> Lead:
