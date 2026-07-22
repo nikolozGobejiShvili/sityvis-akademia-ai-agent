@@ -6554,6 +6554,28 @@ def _first_turn_adult_events_intent(message: str) -> bool:
     return any(m in low for m in _FIRST_TURN_ADULT_EVENT_MARKERS)
 
 
+def _build_active_programs_welcome() -> str | None:
+    """R2: build the first-turn greeting from the programs ACTIVE in the admin
+    panel — the brand opener + one „— {name}" bullet per active section, in
+    section order. Returns None when there are no active sections OR on any
+    failure, so the caller falls back to the static PARENT_WELCOME (never an
+    empty menu). Consumes `get_active_sections()` (already status==active only),
+    so ended/hidden/coming_soon programs are excluded automatically."""
+    try:
+        from app.services import admin_config_service
+
+        sections = admin_config_service.get_active_sections() or []
+        names = [str(s.get("name") or "").strip() for s in sections]
+        names = [n for n in names if n]
+        if not names:
+            return None
+        bullets = "\n".join(f"— {n}" for n in names)
+        return f"გამარჯობა.\n\nგვითხარით, რა გაინტერესებთ:\n{bullets}"
+    except Exception as exc:  # pragma: no cover - defensive, never break the welcome
+        logger.warning("[parent_flow] dynamic welcome build failed (%s)", exc)
+        return None
+
+
 def _maybe_static_welcome(conversation: Conversation, message: str) -> str | None:
     """Return the static PARENT_WELCOME menu on the bot's first reply
     at ``state == "START"``; otherwise None so the normal flow runs.
@@ -6598,6 +6620,14 @@ def _maybe_static_welcome(conversation: Conversation, message: str) -> str | Non
     if _first_turn_adult_events_intent(message):
         return None
     try:
+        # R2 data-driven welcome (flag-gated): list the programs ACTIVE in the
+        # admin panel by name, so a newly-added program appears and an
+        # ended/hidden one drops. Flag OFF, or no active sections, or any
+        # failure ⇒ the static PARENT_WELCOME below (byte-identical / fail-safe).
+        if getattr(settings, "USE_DYNAMIC_WELCOME", False):
+            dynamic_welcome = _build_active_programs_welcome()
+            if dynamic_welcome:
+                return dynamic_welcome
         return PARENT_WELCOME.strip()
     except Exception as exc:
         logger.warning(

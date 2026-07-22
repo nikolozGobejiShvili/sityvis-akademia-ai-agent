@@ -386,6 +386,11 @@ class Settings:
     # interceptor so the model reasons over the facts instead of returning a
     # canned block. OFF ⇒ interceptor + tool-surface + prompt byte-identical.
     USE_PROGRAM_TOPICS: bool = False
+    # Data-driven welcome (R2, 2026-07): the first-turn greeting lists the
+    # programs ACTIVE in the admin panel (by name) instead of a hardcoded
+    # two-option menu — so a newly-added program appears and an ended/hidden one
+    # drops, uniformly. OFF ⇒ the static PARENT_WELCOME menu, byte-identical.
+    USE_DYNAMIC_WELCOME: bool = False
     # Reasoning loop (Phase 2, 2026-07): analyze→ground→answer→reflect in the
     # PARENT engine — the model plans, grounds only needed facts, then verifies
     # its answer's facts (REFLECT). OFF ⇒ engine path byte-identical. Distinct
@@ -578,6 +583,7 @@ class Settings:
             USE_LEARNING=_parse_bool_optional("USE_LEARNING", False),
             USE_SKILLS=_parse_bool_optional("USE_SKILLS", False),
             USE_PROGRAM_TOPICS=_parse_bool_optional("USE_PROGRAM_TOPICS", False),
+            USE_DYNAMIC_WELCOME=_parse_bool_optional("USE_DYNAMIC_WELCOME", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
             USE_OBJECTION_ENGINE_ROUTING=_parse_bool_optional(
                 "USE_OBJECTION_ENGINE_ROUTING", False,
