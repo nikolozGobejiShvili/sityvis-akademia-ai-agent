@@ -728,7 +728,7 @@ class ParentToolExecutor:
             date_iso or "", days_raw, self.sender_id,
         )
 
-        if not _is_camp_registration_open():
+        if not self._registration_open_for_booking():
             return _registration_closed_tool_result(slots=[])
         if date_iso:
             from datetime import date as _date_cls
@@ -819,7 +819,7 @@ class ParentToolExecutor:
             datetime_iso, self.sender_id,
         )
 
-        if not _is_camp_registration_open():
+        if not self._registration_open_for_booking():
             return _registration_closed_tool_result(
                 datetime_iso=datetime_iso,
                 inside_business_hours=False,
@@ -1091,6 +1091,25 @@ class ParentToolExecutor:
             return stuck
         # 4. camp
         return ""
+
+    def _registration_open_for_booking(self) -> bool:
+        """Registration-open check for the CONSULTATION booking flow, PER-PRODUCT.
+
+        Live bug (2026-07-23): the slot-check / slot-listing / reschedule paths
+        hard-coded `_is_camp_registration_open()`, so once the camp ended EVERY
+        consultation was blocked with „registration closed" — even for a dynamic
+        product (Disneyland). This mirrors `_book_consultation`'s existing gate:
+        resolve the booking product and check ITS registration; fall back to camp
+        when there is no per-product context (USE_PER_PRODUCT_BOOKING off, or a
+        camp booking) — byte-identical to today. Never raises."""
+        try:
+            program_id = self._resolve_booking_program_id()
+            if program_id:
+                from app.services import admin_config_service
+                return admin_config_service.is_program_registration_open(program_id)
+        except Exception:  # pragma: no cover - defensive → camp
+            pass
+        return _is_camp_registration_open()
 
     def _book_consultation(self, args: dict[str, Any]) -> dict[str, Any]:
         from app.flows import parent_flow
@@ -2012,7 +2031,7 @@ class ParentToolExecutor:
         if action not in {"cancel", "reschedule"}:
             return {"success": False, "reason": "invalid_action"}
 
-        if action == "reschedule" and not _is_camp_registration_open():
+        if action == "reschedule" and not self._registration_open_for_booking():
             return _registration_closed_tool_result(action="reschedule")
         # Identify the active booking. We trust the in-memory Lead first
         # (the booking we just made this session) and fall back to the
