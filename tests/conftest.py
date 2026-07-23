@@ -135,6 +135,7 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_SELF_OVERAGE_ADULT_REDIRECT=False,
         USE_VAGUE_CAMP_INTENT=False,
         USE_MIXED_INTENT_CAMP_ADULT=False,
+        USE_PROGRAM_ISOLATION=False,
         USE_SAFETY_SPINE=False,
     )
     # Pin the config singleton too, so tests that rebuild settings from

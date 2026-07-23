@@ -444,6 +444,14 @@ class Settings:
     # marker + self ref — not „what events are IN the camp?"). OFF ⇒ camp intro
     # only, byte-identical.
     USE_MIXED_INTENT_CAMP_ADULT: bool = False
+    # Program isolation (2026-07-23): when a dynamic (non-camp) program is
+    # active, append an explicit anti-mixing instruction to the dynamic-programs
+    # prompt suffix — the LLM must answer a specific program's question from ONLY
+    # that program's get_program_info data and NEVER borrow camp (or any other
+    # program's) location/price/age/date. Fixes the eval leak where a robotics
+    # answer invented the camp location „ამბასადორი". Gated on top of
+    # USE_DYNAMIC_PROGRAMS; OFF ⇒ dynamic suffix byte-identical.
+    USE_PROGRAM_ISOLATION: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -662,6 +670,9 @@ class Settings:
             ),
             USE_MIXED_INTENT_CAMP_ADULT=_parse_bool_optional(
                 "USE_MIXED_INTENT_CAMP_ADULT", False,
+            ),
+            USE_PROGRAM_ISOLATION=_parse_bool_optional(
+                "USE_PROGRAM_ISOLATION", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

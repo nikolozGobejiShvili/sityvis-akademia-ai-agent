@@ -96,12 +96,26 @@ def _dynamic_programs_prompt_suffix() -> str:
     if not others:
         return ""
     names = ", ".join(f"{s.get('name')} (id: {s.get('id')})" for s in others if s.get("id"))
-    return (
+    suffix = (
         "\n\n[დინამიური პროგრამები] გარდა ბანაკისა, აქტიურია: " + names +
         ". ამ პროგრამებზე ნებისმიერ კითხვაზე ჯერ გამოიძახე list_programs, "
         "შემდეგ get_program_info(program_id). ფაქტები მხოლოდ ხელსაწყოს პასუხიდან "
         "აიღე — არასდროს მოიგონო."
     )
+    if getattr(settings, "USE_PROGRAM_ISOLATION", False):
+        # Program isolation (2026-07-23): each program is self-contained. When
+        # answering about a specific non-camp program, use ONLY that program's
+        # get_program_info data and never borrow another program's (e.g. camp's)
+        # location/price/age/date. Fixes the eval leak where a robotics answer
+        # invented the camp location „ამბასადორი".
+        suffix += (
+            " თითოეული პროგრამა დამოუკიდებელია: კონკრეტული პროგრამის კითხვაზე "
+            "გამოიყენე მხოლოდ ამ პროგრამის get_program_info-ს მონაცემი და არასდროს "
+            "აურიო სხვა პროგრამის (მაგალითად ბანაკის) ლოკაცია, ფასი, ასაკი ან თარიღი. "
+            "თუ ამ პროგრამის კონკრეტული დეტალი ხელსაწყოში არ არის, თქვი რომ დეტალს "
+            "მენეჯერი დააზუსტებს — არ ჩაანაცვლო სხვა პროგრამის ფაქტით."
+        )
+    return suffix
 
 
 def _approved_answer_prompt_suffix() -> str:
