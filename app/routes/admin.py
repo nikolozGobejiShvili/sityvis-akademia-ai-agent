@@ -181,6 +181,7 @@ def create_program(
     payment_terms: str = Form(""),
     price_monthly: str = Form(""),
     price_onetime: str = Form(""),
+    registration_status: str = Form("open"),
     description_short: str = Form(""),
     description_full: str = Form(""),
     registration_url: str = Form(""),
@@ -198,6 +199,7 @@ def create_program(
         location=location, duration_text=duration_text,
         price_text=price_text, payment_terms=payment_terms,
         price_monthly=price_monthly, price_onetime=price_onetime,
+        registration_status=registration_status,
         description_short=description_short, description_full=description_full,
         registration_url=registration_url, manager_contact=manager_contact,
         auto_dm_template_id=auto_dm_template_id,
@@ -283,6 +285,7 @@ def save_program(
     payment_terms: str = Form(""),
     price_monthly: str = Form(""),
     price_onetime: str = Form(""),
+    registration_status: str = Form("open"),
     description_short: str = Form(""),
     description_full: str = Form(""),
     registration_url: str = Form(""),
@@ -300,6 +303,7 @@ def save_program(
         location=location, duration_text=duration_text,
         price_text=price_text, payment_terms=payment_terms,
         price_monthly=price_monthly, price_onetime=price_onetime,
+        registration_status=registration_status,
         description_short=description_short, description_full=description_full,
         registration_url=registration_url, manager_contact=manager_contact,
         auto_dm_template_id=auto_dm_template_id,
@@ -812,6 +816,12 @@ def _form_to_section_dict(**form: Any) -> dict[str, Any]:
     # correctly. Empty ⇒ skipped downstream (byte-identical for programs without them).
     price_monthly = (form.get("price_monthly") or "").strip()
     price_onetime = (form.get("price_onetime") or "").strip()
+    # Registration status (2026-07-23) — operator-settable per program. Controls
+    # whether the CONSULTATION booking is open for THIS program. For a dynamic
+    # (non-camp) product `is_program_registration_open` fails CLOSED unless this is
+    # an explicit open value, so without this admin field the operator had no way to
+    # enable booking for a new program.
+    registration_status = (form.get("registration_status") or "open").strip().lower()
 
     streams_raw = (form.get("streams_text") or "").strip()
     streams, stream_errors = _parse_streams_textarea(streams_raw)
@@ -840,6 +850,7 @@ def _form_to_section_dict(**form: Any) -> dict[str, Any]:
         "price_gel": price_gel,
         "price_monthly": price_monthly,
         "price_onetime": price_onetime,
+        "registration_status": registration_status,
         "payment_terms": (form.get("payment_terms") or "").strip(),
         "description_short": (form.get("description_short") or "").strip(),
         "description_full": (form.get("description_full") or "").strip(),

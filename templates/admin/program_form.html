@@ -86,6 +86,14 @@
     <small style="color:#555">ერთჯერადი / სარეგისტრაციო გადასახდელისთვის.</small>
   </label>
 
+  <label>რეგისტრაცია / Registration status
+    <select name="registration_status">
+      <option value="open" {% if section.registration_status != 'closed' %}selected{% endif %}>ღია (open) — კონსულტაციაზე ჩაწერა შესაძლებელია</option>
+      <option value="closed" {% if section.registration_status == 'closed' %}selected{% endif %}>დახურული (closed)</option>
+    </select>
+    <small style="color:#555">„ღია" — მომხმარებელს კონსულტაციაზე ჩაწერა შეუძლია. dynamic პროგრამა default-ად დახურულია, სანამ აქ „ღია"-ს არ დააყენებ და შეინახავ.</small>
+  </label>
+
   {# --- Streams / nakadebi --------------------------------------------- #}
   <label>Streams / ნაკადები (one per line: <code>name | dates_text | status</code>)
     <textarea name="streams_text" rows="4" placeholder="I ნაკადი | 23-29 ივნისი | active">

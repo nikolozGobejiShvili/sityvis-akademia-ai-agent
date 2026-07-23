@@ -36,3 +36,17 @@ def test_fee_fields_default_empty():
 def test_fee_fields_stripped():
     s = _form_to_section_dict(id="x", name="X", price_monthly="  200 ₾  ")
     assert s["price_monthly"] == "200 ₾"
+
+
+# --- registration_status (operator-settable per program, enables booking) ---
+
+def test_registration_status_flows_from_form():
+    assert _form_to_section_dict(id="d", name="D", registration_status="open")["registration_status"] == "open"
+    assert _form_to_section_dict(id="d", name="D", registration_status="closed")["registration_status"] == "closed"
+
+
+def test_registration_status_defaults_open_and_lowercased():
+    # default (no field) → "open" so a newly-created program is bookable
+    assert _form_to_section_dict(id="d", name="D")["registration_status"] == "open"
+    # normalised
+    assert _form_to_section_dict(id="d", name="D", registration_status="OPEN")["registration_status"] == "open"
