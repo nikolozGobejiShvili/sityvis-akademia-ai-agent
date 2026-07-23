@@ -115,6 +115,15 @@ def _dynamic_programs_prompt_suffix() -> str:
             "თუ ამ პროგრამის კონკრეტული დეტალი ხელსაწყოში არ არის, თქვი რომ დეტალს "
             "მენეჯერი დააზუსტებს — არ ჩაანაცვლო სხვა პროგრამის ფაქტით."
         )
+    if getattr(settings, "USE_DYNAMIC_CONTACT_CAPTURE", False):
+        # Dynamic contact capture (2026-07-23): the multi-turn contact turn
+        # reaches the engine but the LLM sometimes only acknowledges the
+        # name/phone in text and skips save_lead_info (eval RC-CC1 turn2=[]).
+        suffix += (
+            " როცა მომხმარებელი მოგაწვდის სახელს ან/და ტელეფონის ნომერს, "
+            "დაუყოვნებლივ გამოიძახე save_lead_info მათ ჩასაწერად (name/phone) — "
+            "მხოლოდ ტექსტში დადასტურება არ არის საკმარისი."
+        )
     return suffix
 
 

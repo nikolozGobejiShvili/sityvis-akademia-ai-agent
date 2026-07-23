@@ -452,6 +452,14 @@ class Settings:
     # answer invented the camp location „ამბასადორი". Gated on top of
     # USE_DYNAMIC_PROGRAMS; OFF ⇒ dynamic suffix byte-identical.
     USE_PROGRAM_ISOLATION: bool = False
+    # Dynamic contact capture (2026-07-23): in a dynamic (non-camp) program
+    # conversation the multi-turn contact turn ("მარიამი, 595111222") reaches the
+    # engine (via USE_PER_PRODUCT_BOOKING) but the LLM sometimes only acknowledges
+    # the name/phone in text and skips the save_lead_info tool, so the contact is
+    # never persisted (eval RC-CC1 turn2=[]). When ON, the dynamic-programs prompt
+    # suffix nudges the engine to call save_lead_info the moment a name/phone is
+    # given. Gated on top of USE_DYNAMIC_PROGRAMS; OFF ⇒ suffix byte-identical.
+    USE_DYNAMIC_CONTACT_CAPTURE: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -673,6 +681,9 @@ class Settings:
             ),
             USE_PROGRAM_ISOLATION=_parse_bool_optional(
                 "USE_PROGRAM_ISOLATION", False,
+            ),
+            USE_DYNAMIC_CONTACT_CAPTURE=_parse_bool_optional(
+                "USE_DYNAMIC_CONTACT_CAPTURE", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
