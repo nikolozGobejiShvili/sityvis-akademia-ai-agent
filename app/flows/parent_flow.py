@@ -779,6 +779,32 @@ def _msg_has_camp_intent(message: str) -> bool:
     return False
 
 
+# Explicit camp words — a question carrying one of these IS about the camp, so the
+# camp-off gate never suppresses it (it still gets the clean „camp ended" message).
+_CAMP_WORD_STEMS: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ")
+
+
+def _camp_off_suppresses_info(message: str) -> bool:
+    """USE_CAMP_OFF_GATE: when the camp is NOT active AND the message has no explicit
+    camp word, the deterministic camp INFO interceptors that fire on generic markers
+    (price „ფასი", topic facts, transport, exact-detail, …) defer to the LLM engine —
+    so a generic question in a dynamic-program conversation is reasoned over that
+    program's data instead of leaking camp facts (2150 / ამბასადორი) or a rote camp
+    answer. Explicit camp questions (ბანაკ/საზაფხულო/ლაგერ) are never suppressed —
+    they still get the clean „camp ended" status via `_maybe_handle_camp_status`.
+    Fail-open: any error → False. OFF ⇒ False ⇒ camp chain byte-identical."""
+    if not getattr(settings, "USE_CAMP_OFF_GATE", False):
+        return False
+    low = (message or "").lower()
+    if any(k in low for k in _CAMP_WORD_STEMS):
+        return False
+    try:
+        from app.services import admin_config_service
+        return admin_config_service.get_camp_status() != "active"
+    except Exception:  # pragma: no cover — never suppress camp on a fault
+        return False
+
+
 def _msg_is_child_offering(message: str) -> bool:
     """„ბავშვისთვის რა გაქვთ?" — a generic child-offering question with no explicit
     camp keyword that would otherwise default to the camp sales funnel."""
@@ -1218,7 +1244,15 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     if injection_response is not None:
         return injection_response
 
-    final_camp_policy_response = _maybe_handle_final_camp_public_policy(
+    # Camp-off gate (USE_CAMP_OFF_GATE): when the camp is turned OFF and this message
+    # carries no explicit camp word, the deterministic camp INFO interceptors below
+    # are skipped so a generic question is reasoned by the LLM engine over the active
+    # (dynamic) program's data — no 2150 / ამბასადორი leak, no rote camp answer. The
+    # non-camp guards (injection/identity/political/adult/unclear) and the
+    # booking/contact/safety interceptors are NEVER gated. OFF ⇒ False ⇒ unchanged.
+    camp_off = _camp_off_suppresses_info(message)
+
+    final_camp_policy_response = None if camp_off else _maybe_handle_final_camp_public_policy(
         conversation,
         message,
     )
@@ -1234,7 +1268,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # single-topic operational / seats / repeat-price interceptors so
     # „ფასი … და ადგილები" is not collapsed to just the seats defer. A
     # single-topic message returns None (unchanged flow).
-    multi_response = _maybe_handle_multi_question(conversation, message)
+    multi_response = None if camp_off else _maybe_handle_multi_question(conversation, message)
     if multi_response is not None:
         return _sanitise_booking_confirmation(conversation, multi_response)
 
@@ -1247,7 +1281,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # handlers and owns transport wording (known fact: transport is included in
     # the price; exact regional pickup/route is deferred to the manager). It
     # also corrects a „სპორტი რა შუაშია?" challenge after a wrong sports reply.
-    transport_response = _maybe_handle_transport_logistics(conversation, message)
+    transport_response = None if camp_off else _maybe_handle_transport_logistics(conversation, message)
     if transport_response is not None:
         return _sanitise_booking_confirmation(conversation, transport_response)
 
@@ -1258,7 +1292,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # first turn. It runs BEFORE the static welcome so a fresh
     # „ოთახში რამდენი ბავშვი იქნება?" gets the honest manager defer, not the
     # menu/age question. Returns None for everything else (unchanged behaviour).
-    early_operational_response = _maybe_handle_unknown_operational_early(
+    early_operational_response = None if camp_off else _maybe_handle_unknown_operational_early(
         conversation, message,
     )
     if early_operational_response is not None:
@@ -1271,7 +1305,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # manager (unknown-detail pattern), never invent a vague „part of the full
     # price" answer. Runs before the price/payment handling so it takes priority
     # over the payment-method answer; the METHOD question is left untouched.
-    reservation_fee_response = _maybe_handle_reservation_fee_question(
+    reservation_fee_response = None if camp_off else _maybe_handle_reservation_fee_question(
         conversation, message,
     )
     if reservation_fee_response is not None:
@@ -1302,7 +1336,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # adult participant-age question. Runs BEFORE the adult-context handler so a
     # genuine camp contact question in camp context wins. Returns None for a
     # non-contact/visit message or outside camp context.
-    contact_visit_response = _maybe_handle_parent_contact_visit(conversation, message)
+    contact_visit_response = None if camp_off else _maybe_handle_parent_contact_visit(conversation, message)
     if contact_visit_response is not None:
         return _sanitise_booking_confirmation(conversation, contact_visit_response)
 
@@ -1321,7 +1355,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     if unclear_response is not None:
         return unclear_response
 
-    camp_stream_lifecycle_response = _maybe_handle_camp_stream_lifecycle(
+    camp_stream_lifecycle_response = None if camp_off else _maybe_handle_camp_stream_lifecycle(
         conversation,
         message,
     )
@@ -1338,7 +1372,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # welcome so it is never shown the generic camp-vs-adult menu. Typo-tolerant
     # („ასოკობრივი" → „ასაკობრივი"). Seats/operational stream questions and a
     # bare stream-dates question (no age/price) return None (own handler/engine).
-    camp_stream_response = _maybe_handle_camp_stream_query(conversation, message)
+    camp_stream_response = None if camp_off else _maybe_handle_camp_stream_query(conversation, message)
     if camp_stream_response is not None:
         return _sanitise_booking_confirmation(conversation, camp_stream_response)
 
@@ -1660,7 +1694,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         # menu / staff count / peer presence / age-group count). Immediate repeat
         # → defer only. Runs before repeat-price/camp-topic so the exact detail
         # is never answered with only the general block.
-        exact_detail_response = _maybe_handle_exact_detail(conversation, message)
+        exact_detail_response = None if camp_off else _maybe_handle_exact_detail(conversation, message)
         if exact_detail_response is not None:
             return _sanitise_booking_confirmation(
                 conversation, exact_detail_response,
@@ -1668,7 +1702,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
 
         # Camp price/payment split: price amount, payment process, and
         # reservation exact amount are handled before topic/engine paths.
-        repeat_price_response = _maybe_handle_repeat_camp_price(
+        repeat_price_response = None if camp_off else _maybe_handle_repeat_camp_price(
             conversation, message,
         )
         if repeat_price_response is not None:
@@ -1699,7 +1733,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         # contact reply is consumed earlier; only an explicit NEW camp-topic
         # question reaches here). Returns None for non-topic messages → the LLM
         # engine answers as before.
-        camp_topic_response = _maybe_handle_camp_topic_facts(
+        camp_topic_response = None if camp_off else _maybe_handle_camp_topic_facts(
             conversation, message,
         )
         if camp_topic_response is not None:
