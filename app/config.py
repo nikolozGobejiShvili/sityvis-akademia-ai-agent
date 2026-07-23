@@ -436,6 +436,14 @@ class Settings:
     # „ბანაკი" (no WH) still shows the menu; price/topic questions still defer to
     # their own handlers. OFF ⇒ byte-identical (bare topic word → menu as before).
     USE_VAGUE_CAMP_INTENT: bool = False
+    # Mixed camp+adult intent in one message (R8/#7 increment, 2026-07): „ბავშვს
+    # ბანაკი მინდა და ჩემთვის რამე ღონისძიება" collapsed to the camp intro,
+    # silently dropping the adult half. When ON, a camp-intro turn that ALSO
+    # carries an adult-event marker AND a self/other reference gets a deterministic
+    # adult-events pointer appended, so BOTH halves are addressed. Narrow (adult
+    # marker + self ref — not „what events are IN the camp?"). OFF ⇒ camp intro
+    # only, byte-identical.
+    USE_MIXED_INTENT_CAMP_ADULT: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -651,6 +659,9 @@ class Settings:
             ),
             USE_VAGUE_CAMP_INTENT=_parse_bool_optional(
                 "USE_VAGUE_CAMP_INTENT", False,
+            ),
+            USE_MIXED_INTENT_CAMP_ADULT=_parse_bool_optional(
+                "USE_MIXED_INTENT_CAMP_ADULT", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

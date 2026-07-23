@@ -6851,6 +6851,17 @@ def _is_self_overage_camp_request(message: str) -> bool:
     return False
 
 
+def _is_mixed_camp_adult_request(message: str) -> bool:
+    """True for a genuine camp+adult multi-intent turn („ბავშვისთვის ბანაკი და
+    ჩემთვის რამე ღონისძიება") — an adult-event marker PLUS a self/other reference.
+    A „what events are IN the camp?" question („ბანაკში რა ღონისძიებებია") has the
+    adult marker but NO self reference, so it never matches (no false mixing)."""
+    low = (message or "").lower()
+    if not any(m in low for m in ("ღონისძიებ", "ზრდასრულ", "კულტურ", "საღამო")):
+        return False
+    return "ჩემთვის" in low or "მე " in low or low.startswith("მე")
+
+
 def _maybe_handle_camp_intro(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -6905,6 +6916,12 @@ def _maybe_handle_camp_intro(
             return None
     except Exception:  # pragma: no cover — defensive
         pass
+    if getattr(settings, "USE_MIXED_INTENT_CAMP_ADULT", False) and \
+            _is_mixed_camp_adult_request(message):
+        # Camp-intro turn that ALSO asks about an adult event for the sender:
+        # answer BOTH halves — the camp intro + an adult-events pointer (eval R8).
+        # OFF ⇒ the camp intro only, byte-identical.
+        return _CAMP_INTRO_TEXT + "\n\n" + _CAMP_OFF_ADULT_POINTER
     return _CAMP_INTRO_TEXT
 
 
