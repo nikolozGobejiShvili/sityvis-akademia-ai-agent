@@ -419,6 +419,47 @@ class Settings:
     # is answered; a genuine registration/booking action still gets the closed
     # answer. OFF ⇒ the catch-all returns the closed answer as before, byte-identical.
     USE_REGISTRATION_CLOSED_NARROWING: bool = False
+    # Self-overage → adult redirect (R4 increment, 2026-07): when the sender asks
+    # about CAMP for THEMSELVES at an adult age (>17) — „ჩემთვის მინდა ბანაკი, 25
+    # წლის ვარ" — the child-focused camp intro used to fire (camp is 9–17, so this
+    # is a mismatch: an adult gets a pitch about a kids' camp). When ON, that turn
+    # is answered with the camp age band + an adult-events pointer instead (no
+    # booking). Narrow: self-reference AND a stated age >17. OFF ⇒ camp intro fires
+    # exactly as before, byte-identical.
+    USE_SELF_OVERAGE_ADULT_REDIRECT: bool = False
+    # Vague camp question → answer, not the menu (U9 increment, 2026-07): a vague
+    # colloquial camp question („ეგ თქვენი ბანაკი რა ხდება?") has a camp keyword +
+    # a WH word but no interest marker, so `_has_explicit_georgian_camp_intent`
+    # was False → `_maybe_static_welcome` showed the two-option menu instead of
+    # answering. When ON, a camp keyword + a WH word (რა/როგორ/…) counts as camp
+    # intent (welcome yields) and `_maybe_handle_camp_intro` answers it. A BARE
+    # „ბანაკი" (no WH) still shows the menu; price/topic questions still defer to
+    # their own handlers. OFF ⇒ byte-identical (bare topic word → menu as before).
+    USE_VAGUE_CAMP_INTENT: bool = False
+    # Mixed camp+adult intent in one message (R8/#7 increment, 2026-07): „ბავშვს
+    # ბანაკი მინდა და ჩემთვის რამე ღონისძიება" collapsed to the camp intro,
+    # silently dropping the adult half. When ON, a camp-intro turn that ALSO
+    # carries an adult-event marker AND a self/other reference gets a deterministic
+    # adult-events pointer appended, so BOTH halves are addressed. Narrow (adult
+    # marker + self ref — not „what events are IN the camp?"). OFF ⇒ camp intro
+    # only, byte-identical.
+    USE_MIXED_INTENT_CAMP_ADULT: bool = False
+    # Program isolation (2026-07-23): when a dynamic (non-camp) program is
+    # active, append an explicit anti-mixing instruction to the dynamic-programs
+    # prompt suffix — the LLM must answer a specific program's question from ONLY
+    # that program's get_program_info data and NEVER borrow camp (or any other
+    # program's) location/price/age/date. Fixes the eval leak where a robotics
+    # answer invented the camp location „ამბასადორი". Gated on top of
+    # USE_DYNAMIC_PROGRAMS; OFF ⇒ dynamic suffix byte-identical.
+    USE_PROGRAM_ISOLATION: bool = False
+    # Dynamic contact capture (2026-07-23): in a dynamic (non-camp) program
+    # conversation the multi-turn contact turn ("მარიამი, 595111222") reaches the
+    # engine (via USE_PER_PRODUCT_BOOKING) but the LLM sometimes only acknowledges
+    # the name/phone in text and skips the save_lead_info tool, so the contact is
+    # never persisted (eval RC-CC1 turn2=[]). When ON, the dynamic-programs prompt
+    # suffix nudges the engine to call save_lead_info the moment a name/phone is
+    # given. Gated on top of USE_DYNAMIC_PROGRAMS; OFF ⇒ suffix byte-identical.
+    USE_DYNAMIC_CONTACT_CAPTURE: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -628,6 +669,21 @@ class Settings:
             ),
             USE_REGISTRATION_CLOSED_NARROWING=_parse_bool_optional(
                 "USE_REGISTRATION_CLOSED_NARROWING", False,
+            ),
+            USE_SELF_OVERAGE_ADULT_REDIRECT=_parse_bool_optional(
+                "USE_SELF_OVERAGE_ADULT_REDIRECT", False,
+            ),
+            USE_VAGUE_CAMP_INTENT=_parse_bool_optional(
+                "USE_VAGUE_CAMP_INTENT", False,
+            ),
+            USE_MIXED_INTENT_CAMP_ADULT=_parse_bool_optional(
+                "USE_MIXED_INTENT_CAMP_ADULT", False,
+            ),
+            USE_PROGRAM_ISOLATION=_parse_bool_optional(
+                "USE_PROGRAM_ISOLATION", False,
+            ),
+            USE_DYNAMIC_CONTACT_CAPTURE=_parse_bool_optional(
+                "USE_DYNAMIC_CONTACT_CAPTURE", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

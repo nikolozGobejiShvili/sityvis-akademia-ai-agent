@@ -722,6 +722,9 @@ _CAMP_ENDED_DIRECT: str = (
 )
 _CAMP_OFF_CHILD_PREFIX: str = "ამ ეტაპზე ბანაკის მიმდინარე ნაკადები აქტიური არ არის."
 _CAMP_OFF_ADULT_POINTER: str = "რაც შეეხება ზრდასრულთა ღონისძიებებს — რომელი გაინტერესებთ?"
+_CAMP_OVERAGE_ADULT_REDIRECT: str = (
+    "ბანაკი 9–17 წლის ბავშვებისთვისაა. " + _CAMP_OFF_ADULT_POINTER
+)
 
 _CAMP_STATUS_KEYWORDS: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ", "ნაკად")
 _CAMP_ENDED_Q_MARKERS: tuple[str, ...] = (
@@ -6614,6 +6617,11 @@ def _maybe_handle_camp_stream_query(
     )
     return "\n\n".join(paras)
 
+# WH / content-question words that, next to a camp keyword, mark a vague camp
+# QUESTION („ბანაკი რა ხდება?") — distinct from a bare topic word („ბანაკი").
+_CAMP_WH_WORDS: tuple[str, ...] = ("რა ", "რას ", "როგორ", "რატომ", "სად ", "რაშ")
+
+
 def _has_explicit_georgian_camp_intent(message: str) -> bool:
     """True when the FIRST message clearly states camp interest — a camp
     keyword PLUS an interest / info / sign-up marker. Lets the static
@@ -6635,6 +6643,13 @@ def _has_explicit_georgian_camp_intent(message: str) -> bool:
     if not any(kw in text for kw in _CAMP_INTENT_KEYWORDS):
         return False
     if any(m in text for m in _CAMP_INTENT_MARKERS):
+        return True
+    # Vague camp QUESTION (camp keyword + a WH word, no interest marker) — treat
+    # as clear camp intent so the static welcome yields and the question is
+    # answered instead of the disambiguation menu (eval U9). A BARE „ბანაკი" (no
+    # WH word) still returns False below → the branded menu. OFF ⇒ unchanged.
+    if getattr(settings, "USE_VAGUE_CAMP_INTENT", False) and \
+            any(w in text for w in _CAMP_WH_WORDS):
         return True
     # BUG 1/6 (2026-07-07) — a SPECIFIC camp QUESTION (price / topic fact /
     # operational-detail / exact-detail) also skips the disambiguation menu: the
@@ -6812,6 +6827,41 @@ _CAMP_INTRO_INTENT_MARKERS: tuple[str, ...] = (
 )
 
 
+def _is_self_overage_camp_request(message: str) -> bool:
+    """True when the sender asks about CAMP for THEMSELVES at an adult age (>17)
+    („ჩემთვის მინდა ბანაკი, 25 წლის ვარ"). Camp is 9–17, so the child-focused
+    intro must not fire — the caller points to adult events instead. Narrow: a
+    self-reference AND a stated age strictly greater than 17. A third-person child
+    age („შვილი 25 წლისაა") has neither the self-reference nor first-person „ვარ",
+    so it never matches."""
+    low = (message or "").lower()
+    self_ref = (
+        "ჩემთვის" in low
+        or "ჩემი თავის" in low
+        or (("მე " in low or low.startswith("მე")) and "ვარ" in low)
+    )
+    if not self_ref:
+        return False
+    for m in re.findall(r"(\d{1,3})\s*წლ", low):
+        try:
+            if int(m) > 17:
+                return True
+        except ValueError:  # pragma: no cover — defensive
+            pass
+    return False
+
+
+def _is_mixed_camp_adult_request(message: str) -> bool:
+    """True for a genuine camp+adult multi-intent turn („ბავშვისთვის ბანაკი და
+    ჩემთვის რამე ღონისძიება") — an adult-event marker PLUS a self/other reference.
+    A „what events are IN the camp?" question („ბანაკში რა ღონისძიებებია") has the
+    adult marker but NO self reference, so it never matches (no false mixing)."""
+    low = (message or "").lower()
+    if not any(m in low for m in ("ღონისძიებ", "ზრდასრულ", "კულტურ", "საღამო")):
+        return False
+    return "ჩემთვის" in low or "მე " in low or low.startswith("მე")
+
+
 def _maybe_handle_camp_intro(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -6836,7 +6886,15 @@ def _maybe_handle_camp_intro(
     # read as an intro turn (those have their own handlers / reach the engine).
     if not any(kw in low for kw in _CAMP_INTENT_KEYWORDS):
         return None
-    if not any(m in low for m in _CAMP_INTRO_INTENT_MARKERS):
+    if getattr(settings, "USE_SELF_OVERAGE_ADULT_REDIRECT", False) and \
+            _is_self_overage_camp_request(message):
+        # An adult (>17) asking about CAMP for THEMSELVES: camp is 9–17, so give
+        # the age band + an adult-events pointer, not the child-focused intro
+        # (eval R7). OFF ⇒ this block is skipped, camp intro fires as before.
+        return _CAMP_OVERAGE_ADULT_REDIRECT
+    _vague_camp = getattr(settings, "USE_VAGUE_CAMP_INTENT", False) and \
+        any(w in low for w in _CAMP_WH_WORDS)
+    if not _vague_camp and not any(m in low for m in _CAMP_INTRO_INTENT_MARKERS):
         return None
     if _is_camp_price_intent(message):
         return None
@@ -6858,6 +6916,12 @@ def _maybe_handle_camp_intro(
             return None
     except Exception:  # pragma: no cover — defensive
         pass
+    if getattr(settings, "USE_MIXED_INTENT_CAMP_ADULT", False) and \
+            _is_mixed_camp_adult_request(message):
+        # Camp-intro turn that ALSO asks about an adult event for the sender:
+        # answer BOTH halves — the camp intro + an adult-events pointer (eval R8).
+        # OFF ⇒ the camp intro only, byte-identical.
+        return _CAMP_INTRO_TEXT + "\n\n" + _CAMP_OFF_ADULT_POINTER
     return _CAMP_INTRO_TEXT
 
 

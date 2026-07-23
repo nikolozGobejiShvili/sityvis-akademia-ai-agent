@@ -132,6 +132,11 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_PER_PRODUCT_BOOKING=False,
         USE_SECTION_STATUS_GATE=False,
         USE_REGISTRATION_CLOSED_NARROWING=False,
+        USE_SELF_OVERAGE_ADULT_REDIRECT=False,
+        USE_VAGUE_CAMP_INTENT=False,
+        USE_MIXED_INTENT_CAMP_ADULT=False,
+        USE_PROGRAM_ISOLATION=False,
+        USE_DYNAMIC_CONTACT_CAPTURE=False,
         USE_SAFETY_SPINE=False,
     )
     # Pin the config singleton too, so tests that rebuild settings from
