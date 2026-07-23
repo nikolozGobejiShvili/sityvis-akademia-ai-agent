@@ -179,6 +179,8 @@ def create_program(
     duration_text: str = Form(""),
     price_text: str = Form(""),
     payment_terms: str = Form(""),
+    price_monthly: str = Form(""),
+    price_onetime: str = Form(""),
     description_short: str = Form(""),
     description_full: str = Form(""),
     registration_url: str = Form(""),
@@ -195,6 +197,7 @@ def create_program(
         hashtags=hashtags, age_min=age_min, age_max=age_max,
         location=location, duration_text=duration_text,
         price_text=price_text, payment_terms=payment_terms,
+        price_monthly=price_monthly, price_onetime=price_onetime,
         description_short=description_short, description_full=description_full,
         registration_url=registration_url, manager_contact=manager_contact,
         auto_dm_template_id=auto_dm_template_id,
@@ -278,6 +281,8 @@ def save_program(
     duration_text: str = Form(""),
     price_text: str = Form(""),
     payment_terms: str = Form(""),
+    price_monthly: str = Form(""),
+    price_onetime: str = Form(""),
     description_short: str = Form(""),
     description_full: str = Form(""),
     registration_url: str = Form(""),
@@ -294,6 +299,7 @@ def save_program(
         hashtags=hashtags, age_min=age_min, age_max=age_max,
         location=location, duration_text=duration_text,
         price_text=price_text, payment_terms=payment_terms,
+        price_monthly=price_monthly, price_onetime=price_onetime,
         description_short=description_short, description_full=description_full,
         registration_url=registration_url, manager_contact=manager_contact,
         auto_dm_template_id=auto_dm_template_id,
@@ -800,6 +806,12 @@ def _form_to_section_dict(**form: Any) -> dict[str, Any]:
 
     price_text = (form.get("price_text") or "").strip()
     price_gel = admin_config_service.parse_price_gel(price_text)
+    # Structured recurring/one-off fees (2026-07-23) — operator-visible free text
+    # (e.g. „200 ₾/თვე" / „50 ₾ სარეგისტრაციო"). Surfaced to the LLM via
+    # get_program_info so a program with a monthly fee (Sunday School) is answered
+    # correctly. Empty ⇒ skipped downstream (byte-identical for programs without them).
+    price_monthly = (form.get("price_monthly") or "").strip()
+    price_onetime = (form.get("price_onetime") or "").strip()
 
     streams_raw = (form.get("streams_text") or "").strip()
     streams, stream_errors = _parse_streams_textarea(streams_raw)
@@ -826,6 +838,8 @@ def _form_to_section_dict(**form: Any) -> dict[str, Any]:
         "duration_text": (form.get("duration_text") or "").strip(),
         "price_text": price_text,
         "price_gel": price_gel,
+        "price_monthly": price_monthly,
+        "price_onetime": price_onetime,
         "payment_terms": (form.get("payment_terms") or "").strip(),
         "description_short": (form.get("description_short") or "").strip(),
         "description_full": (form.get("description_full") or "").strip(),

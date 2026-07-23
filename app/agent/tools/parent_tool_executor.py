@@ -404,6 +404,7 @@ class ParentToolExecutor:
     # operator field never leaks by default.
     _PROGRAM_PUBLIC_FIELDS: tuple[str, ...] = (
         "name", "type", "location", "price_text", "price_gel", "payment_terms",
+        "price_monthly", "price_onetime",
         "age_min", "age_max", "description_short", "description_full",
         "schedule_text", "duration_text", "streams", "included_items", "discounts",
     )

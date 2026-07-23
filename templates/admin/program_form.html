@@ -76,6 +76,16 @@
     <input type="text" name="payment_terms" value="{{ section.payment_terms or '' }}">
   </label>
 
+  <label>თვიური გადასახადი / Monthly fee (free-form, e.g. "200 ₾/თვე")
+    <input type="text" name="price_monthly" value="{{ section.price_monthly or '' }}">
+    <small style="color:#555">გამოიყენე რეგულარული (ყოველთვიური) გადასახდელისთვის — მაგ. საკვირაო სკოლა.</small>
+  </label>
+
+  <label>ერთჯერადი გადასახადი / One-time fee (free-form, e.g. "50 ₾ სარეგისტრაციო")
+    <input type="text" name="price_onetime" value="{{ section.price_onetime or '' }}">
+    <small style="color:#555">ერთჯერადი / სარეგისტრაციო გადასახდელისთვის.</small>
+  </label>
+
   {# --- Streams / nakadebi --------------------------------------------- #}
   <label>Streams / ნაკადები (one per line: <code>name | dates_text | status</code>)
     <textarea name="streams_text" rows="4" placeholder="I ნაკადი | 23-29 ივნისი | active">
