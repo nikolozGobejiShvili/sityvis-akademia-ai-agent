@@ -21,6 +21,32 @@ class ProgramId(str, Enum):
     ADULT_EVENTS = "adult_events"
 
 
+# Programs that are treated as DYNAMIC (engine-reasoned via get_program_info)
+# instead of curated/canned, when USE_RESERVED_PROGRAMS_DYNAMIC is on.
+_DYNAMIC_WHEN_UNRESERVED: frozenset[str] = frozenset({ProgramId.SUNDAY_SCHOOL.value})
+
+
+def reserved_program_ids() -> frozenset[str]:
+    """Program ids handled by curated deterministic flows (NOT the dynamic LLM
+    engine). Single source of truth for the 3 modules that used to each derive
+    ``frozenset(p.value for p in ProgramId)``.
+
+    When ``USE_RESERVED_PROGRAMS_DYNAMIC`` is on, ``sunday_school`` drops out of the
+    reserved set so it is answered from admin data by the engine like any dynamic
+    program (camp + adult_events keep their curated flows). OFF ⇒ all three reserved
+    (byte-identical). Fail-safe: any error ⇒ the full reserved set (never
+    accidentally un-reserves on a fault). Resolved per-call so a runtime flag flip /
+    test monkeypatch takes effect."""
+    base = frozenset(p.value for p in ProgramId)
+    try:
+        from app.config import settings
+        if getattr(settings, "USE_RESERVED_PROGRAMS_DYNAMIC", False):
+            return base - _DYNAMIC_WHEN_UNRESERVED
+    except Exception:  # pragma: no cover — never un-reserve on a fault
+        pass
+    return base
+
+
 class TransformationReason(str, Enum):
     """Closed-set evidence for deterministic preprocessing changes."""
 

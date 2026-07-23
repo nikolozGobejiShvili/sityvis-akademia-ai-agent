@@ -138,6 +138,7 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_PROGRAM_ISOLATION=False,
         USE_DYNAMIC_CONTACT_CAPTURE=False,
         USE_CAMP_OFF_GATE=False,
+        USE_RESERVED_PROGRAMS_DYNAMIC=False,
         USE_SAFETY_SPINE=False,
     )
     # Pin the config singleton too, so tests that rebuild settings from
