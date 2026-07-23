@@ -36,7 +36,7 @@ from app.agent.tools.parent_tools import (
     TOPIC_TOOLS,
 )
 from app.config import settings
-from app.domain.decision.models import ProgramId
+from app.domain.decision.models import ProgramId, reserved_program_ids
 from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.reasoning.age_question import (
@@ -89,7 +89,7 @@ def _dynamic_programs_prompt_suffix() -> str:
         from app.services import admin_config_service
         others = [
             s for s in admin_config_service.get_active_sections()
-            if s.get("id") not in _RESERVED_PROGRAM_IDS
+            if s.get("id") not in reserved_program_ids()
         ]
     except Exception:
         return ""
@@ -2439,7 +2439,7 @@ def _reasoning_is_dynamic_program_turn(user_message: str) -> bool:
         m = match_dynamic_program(
             user_message, admin_config_service.get_active_sections(),
         )
-        return bool(m and m.get("program_id") not in _RESERVED_PROGRAM_IDS)
+        return bool(m and m.get("program_id") not in reserved_program_ids())
     except Exception:
         return False
 

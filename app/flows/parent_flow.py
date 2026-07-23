@@ -18,7 +18,7 @@ from app.agent.llm.parent_reply_composer import (
 )
 from app.agent.services.knowledge_loader import load_knowledge
 from app.config import settings
-from app.domain.decision.models import ProgramId
+from app.domain.decision.models import ProgramId, reserved_program_ids
 from app.flows.parent_turn_router import (
     contains_booking_confirmation,
     maybe_handle_analyzer_interrupt,
@@ -1010,7 +1010,7 @@ def _is_dynamic_program_turn(message: str) -> bool:
         match = match_dynamic_program(message, admin_config_service.get_active_sections())
     except Exception:  # pragma: no cover - defensive
         return False
-    return bool(match) and match.get("program_id") not in _HARDCODED_PROGRAM_IDS
+    return bool(match) and match.get("program_id") not in reserved_program_ids()
 
 
 def _tag_per_product_booking(conversation: Conversation, message: str) -> None:
@@ -1040,7 +1040,7 @@ def _tag_per_product_booking(conversation: Conversation, message: str) -> None:
     if not match:
         return
     pid = (match.get("program_id") or "").strip()
-    if pid and pid not in _HARDCODED_PROGRAM_IDS:
+    if pid and pid not in reserved_program_ids():
         lead.program_id = pid
 
 
@@ -1057,7 +1057,7 @@ def _is_active_per_product_booking(conversation: Conversation) -> bool:
     if lead is None:
         return False
     pid = (getattr(lead, "program_id", "") or "").strip()
-    return bool(pid) and pid not in _HARDCODED_PROGRAM_IDS
+    return bool(pid) and pid not in reserved_program_ids()
 
 
 def _safety_spine(conversation: Conversation, message: str) -> str | None:
@@ -11580,7 +11580,7 @@ def _facts_for_post_booking(lead: Lead) -> dict:
     try:
         if getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
             pid = (getattr(lead, "program_id", "") or "").strip()
-            if pid and pid not in _HARDCODED_PROGRAM_IDS:
+            if pid and pid not in reserved_program_ids():
                 program_id = pid
     except Exception:  # pragma: no cover - defensive → camp
         program_id = ""

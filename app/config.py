@@ -470,6 +470,14 @@ class Settings:
     # message via _maybe_handle_camp_status; booking/contact/safety interceptors are
     # untouched. OFF ⇒ camp chain byte-identical.
     USE_CAMP_OFF_GATE: bool = False
+    # Reserved-programs dynamic (2026-07-23): treat sunday_school as a normal
+    # dynamic (engine-reasoned) program instead of a curated/canned one — so it is
+    # answered from admin data like any new program the operator adds, and off-topic
+    # / unknown questions reach the LLM (which reasons „that's not in my data")
+    # rather than a canned clarify/refusal. Drops sunday_school from the effective
+    # reserved set (camp + adult_events keep their flows). OFF ⇒ reserved set
+    # byte-identical.
+    USE_RESERVED_PROGRAMS_DYNAMIC: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -697,6 +705,9 @@ class Settings:
             ),
             USE_CAMP_OFF_GATE=_parse_bool_optional(
                 "USE_CAMP_OFF_GATE", False,
+            ),
+            USE_RESERVED_PROGRAMS_DYNAMIC=_parse_bool_optional(
+                "USE_RESERVED_PROGRAMS_DYNAMIC", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

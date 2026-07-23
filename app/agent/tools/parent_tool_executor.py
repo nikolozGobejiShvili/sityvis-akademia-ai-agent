@@ -38,7 +38,7 @@ from app.agent.services.timestamps import (
     now_tbilisi,
     resolve_relative_datetime,
 )
-from app.domain.decision.models import ProgramId
+from app.domain.decision.models import ProgramId, reserved_program_ids
 from app.agent.tools.parent_tools import (
     ALLOWED_TOOL_NAMES,
     CAMP_INFO_TOPICS,
@@ -430,7 +430,7 @@ class ParentToolExecutor:
         program_id = str(args.get("program_id") or "").strip()
         if not program_id:
             return {"success": False, "reason": "missing_program_id"}
-        if program_id in self._HARDCODED_PROGRAM_IDS:
+        if program_id in reserved_program_ids():
             return {"success": False, "reason": "use_specific_tool",
                     "program_id": program_id}
         from app.services import admin_config_service
@@ -1065,7 +1065,7 @@ class ParentToolExecutor:
                 self.user_message or "", admin_config_service.get_active_sections(),
             )
             pid = (m or {}).get("program_id") or ""
-            if pid and pid not in self._HARDCODED_PROGRAM_IDS:
+            if pid and pid not in reserved_program_ids():
                 self.lead.program_id = pid
                 return pid
         except Exception:  # pragma: no cover - defensive → fall through to camp
@@ -1087,7 +1087,7 @@ class ParentToolExecutor:
         #    the documented single-product-conversation scope limitation (see
         #    docs/ENABLEMENT_USE_PER_PRODUCT_BOOKING.md).
         stuck = (getattr(self.lead, "program_id", "") or "").strip()
-        if stuck and stuck not in self._HARDCODED_PROGRAM_IDS:
+        if stuck and stuck not in reserved_program_ids():
             return stuck
         # 4. camp
         return ""
