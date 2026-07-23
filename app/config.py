@@ -427,6 +427,15 @@ class Settings:
     # booking). Narrow: self-reference AND a stated age >17. OFF ⇒ camp intro fires
     # exactly as before, byte-identical.
     USE_SELF_OVERAGE_ADULT_REDIRECT: bool = False
+    # Vague camp question → answer, not the menu (U9 increment, 2026-07): a vague
+    # colloquial camp question („ეგ თქვენი ბანაკი რა ხდება?") has a camp keyword +
+    # a WH word but no interest marker, so `_has_explicit_georgian_camp_intent`
+    # was False → `_maybe_static_welcome` showed the two-option menu instead of
+    # answering. When ON, a camp keyword + a WH word (რა/როგორ/…) counts as camp
+    # intent (welcome yields) and `_maybe_handle_camp_intro` answers it. A BARE
+    # „ბანაკი" (no WH) still shows the menu; price/topic questions still defer to
+    # their own handlers. OFF ⇒ byte-identical (bare topic word → menu as before).
+    USE_VAGUE_CAMP_INTENT: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -639,6 +648,9 @@ class Settings:
             ),
             USE_SELF_OVERAGE_ADULT_REDIRECT=_parse_bool_optional(
                 "USE_SELF_OVERAGE_ADULT_REDIRECT", False,
+            ),
+            USE_VAGUE_CAMP_INTENT=_parse_bool_optional(
+                "USE_VAGUE_CAMP_INTENT", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

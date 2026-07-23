@@ -6617,6 +6617,11 @@ def _maybe_handle_camp_stream_query(
     )
     return "\n\n".join(paras)
 
+# WH / content-question words that, next to a camp keyword, mark a vague camp
+# QUESTION („ბანაკი რა ხდება?") — distinct from a bare topic word („ბანაკი").
+_CAMP_WH_WORDS: tuple[str, ...] = ("რა ", "რას ", "როგორ", "რატომ", "სად ", "რაშ")
+
+
 def _has_explicit_georgian_camp_intent(message: str) -> bool:
     """True when the FIRST message clearly states camp interest — a camp
     keyword PLUS an interest / info / sign-up marker. Lets the static
@@ -6638,6 +6643,13 @@ def _has_explicit_georgian_camp_intent(message: str) -> bool:
     if not any(kw in text for kw in _CAMP_INTENT_KEYWORDS):
         return False
     if any(m in text for m in _CAMP_INTENT_MARKERS):
+        return True
+    # Vague camp QUESTION (camp keyword + a WH word, no interest marker) — treat
+    # as clear camp intent so the static welcome yields and the question is
+    # answered instead of the disambiguation menu (eval U9). A BARE „ბანაკი" (no
+    # WH word) still returns False below → the branded menu. OFF ⇒ unchanged.
+    if getattr(settings, "USE_VAGUE_CAMP_INTENT", False) and \
+            any(w in text for w in _CAMP_WH_WORDS):
         return True
     # BUG 1/6 (2026-07-07) — a SPECIFIC camp QUESTION (price / topic fact /
     # operational-detail / exact-detail) also skips the disambiguation menu: the
@@ -6869,7 +6881,9 @@ def _maybe_handle_camp_intro(
         # the age band + an adult-events pointer, not the child-focused intro
         # (eval R7). OFF ⇒ this block is skipped, camp intro fires as before.
         return _CAMP_OVERAGE_ADULT_REDIRECT
-    if not any(m in low for m in _CAMP_INTRO_INTENT_MARKERS):
+    _vague_camp = getattr(settings, "USE_VAGUE_CAMP_INTENT", False) and \
+        any(w in low for w in _CAMP_WH_WORDS)
+    if not _vague_camp and not any(m in low for m in _CAMP_INTRO_INTENT_MARKERS):
         return None
     if _is_camp_price_intent(message):
         return None

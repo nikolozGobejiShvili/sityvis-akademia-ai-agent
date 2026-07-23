@@ -133,6 +133,7 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_SECTION_STATUS_GATE=False,
         USE_REGISTRATION_CLOSED_NARROWING=False,
         USE_SELF_OVERAGE_ADULT_REDIRECT=False,
+        USE_VAGUE_CAMP_INTENT=False,
         USE_SAFETY_SPINE=False,
     )
     # Pin the config singleton too, so tests that rebuild settings from
