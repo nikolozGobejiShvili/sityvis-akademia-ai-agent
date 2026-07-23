@@ -460,6 +460,16 @@ class Settings:
     # suffix nudges the engine to call save_lead_info the moment a name/phone is
     # given. Gated on top of USE_DYNAMIC_PROGRAMS; OFF ⇒ suffix byte-identical.
     USE_DYNAMIC_CONTACT_CAPTURE: bool = False
+    # Camp-off gate (2026-07-23): when the camp is turned OFF (status ended/hidden/
+    # inactive) and the message carries NO explicit camp word (ბანაკ/საზაფხულო/
+    # ლაგერ), the deterministic camp INFO interceptors that fire on generic markers
+    # (price „ფასი", topic facts, transport, exact-detail, …) DEFER to the LLM
+    # engine — so a generic question in a dynamic-program conversation is reasoned
+    # over that program's data instead of leaking camp facts (2150 / ამბასადორი) or
+    # a rote camp answer. Explicit camp questions still get the clean „camp ended"
+    # message via _maybe_handle_camp_status; booking/contact/safety interceptors are
+    # untouched. OFF ⇒ camp chain byte-identical.
+    USE_CAMP_OFF_GATE: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -684,6 +694,9 @@ class Settings:
             ),
             USE_DYNAMIC_CONTACT_CAPTURE=_parse_bool_optional(
                 "USE_DYNAMIC_CONTACT_CAPTURE", False,
+            ),
+            USE_CAMP_OFF_GATE=_parse_bool_optional(
+                "USE_CAMP_OFF_GATE", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
