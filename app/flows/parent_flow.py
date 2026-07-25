@@ -1113,6 +1113,23 @@ def _maybe_handle_camp_info_early(
     return None
 
 
+def _maybe_handle_camp_stream_chain(
+    conversation: Conversation, message: str, camp_off: bool,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 2 contiguous camp-stream
+    interceptors (stream lifecycle status, then the stream/cohort age+price direct
+    answer) grouped into one cohesive chain so ``_handle_core`` calls one node
+    instead of two. The ``camp_off`` gate, order, and ``_sanitise_booking_confirmation``
+    wrapping are preserved. Returns the first non-None sanitised response, else None."""
+    r = None if camp_off else _maybe_handle_camp_stream_lifecycle(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_camp_stream_query(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    return None
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1348,26 +1365,11 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     if unclear_response is not None:
         return unclear_response
 
-    camp_stream_lifecycle_response = None if camp_off else _maybe_handle_camp_stream_lifecycle(
-        conversation,
-        message,
+    camp_stream_chain_response = _maybe_handle_camp_stream_chain(
+        conversation, message, camp_off,
     )
-    if camp_stream_lifecycle_response is not None:
-        return _sanitise_booking_confirmation(
-            conversation,
-            camp_stream_lifecycle_response,
-        )
-
-    # Camp stream/cohort direct answer (live bug 2026-07-07) — a message that
-    # names a camp STREAM/cohort („ნაკადი" / „მესამე ნაკადი" / „3 ნაკადი") and
-    # asks the age limit and/or price is unambiguous camp intent. Answer it
-    # directly (stream date + age band + price + inclusions) BEFORE the static
-    # welcome so it is never shown the generic camp-vs-adult menu. Typo-tolerant
-    # („ასოკობრივი" → „ასაკობრივი"). Seats/operational stream questions and a
-    # bare stream-dates question (no age/price) return None (own handler/engine).
-    camp_stream_response = None if camp_off else _maybe_handle_camp_stream_query(conversation, message)
-    if camp_stream_response is not None:
-        return _sanitise_booking_confirmation(conversation, camp_stream_response)
+    if camp_stream_chain_response is not None:
+        return camp_stream_chain_response
 
     # Static welcome bypass.
     # On the bot's first reply at state=START, return the static
