@@ -1083,6 +1083,36 @@ def _safety_spine(conversation: Conversation, message: str) -> str | None:
     return None
 
 
+def _maybe_handle_camp_info_early(
+    conversation: Conversation, message: str, camp_off: bool,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 5 contiguous camp INFO interceptors
+    that ran early in ``_handle_core``, grouped into one cohesive chain so the
+    dispatcher calls a single node instead of five (lowers ``_handle_core`` coupling,
+    raises cohesion — the Graphify report's flaw). The ``camp_off`` gate, the exact
+    dispatch ORDER, and the ``_sanitise_booking_confirmation`` wrapping are preserved:
+      1. final camp public policy   2. multi-question (two camp facts)
+      3. transport / logistics      4. unknown OPERATIONAL detail (anti-invention)
+      5. reservation FEE amount (unknown -> manager defer)
+    Returns the first non-None sanitised response, else None."""
+    r = None if camp_off else _maybe_handle_final_camp_public_policy(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_multi_question(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_transport_logistics(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_unknown_operational_early(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_reservation_fee_question(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    return None
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1270,66 +1300,11 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # booking/contact/safety interceptors are NEVER gated. OFF ⇒ False ⇒ unchanged.
     camp_off = _camp_off_suppresses_info(message)
 
-    final_camp_policy_response = None if camp_off else _maybe_handle_final_camp_public_policy(
-        conversation,
-        message,
+    camp_info_early_response = _maybe_handle_camp_info_early(
+        conversation, message, camp_off,
     )
-    if final_camp_policy_response is not None:
-        return _sanitise_booking_confirmation(
-            conversation,
-            final_camp_policy_response,
-        )
-
-    # Client follow-up hotfix (2026-06-30) — LIMITED multi-question FIRST: a
-    # message with TWO distinct camp parts (price + sports, safety +
-    # parent-contact, price + seats/stadium) answers BOTH. Runs before the
-    # single-topic operational / seats / repeat-price interceptors so
-    # „ფასი … და ადგილები" is not collapsed to just the seats defer. A
-    # single-topic message returns None (unchanged flow).
-    multi_response = None if camp_off else _maybe_handle_multi_question(conversation, message)
-    if multi_response is not None:
-        return _sanitise_booking_confirmation(conversation, multi_response)
-
-    # ADDITIONAL LIVE BUG (2026-07-06) — a TRANSPORT / logistics question
-    # („ტრანსპორტირება როგორ მოხდება?" / „ტრანსპორტი საიდან გადის?" /
-    # „მე თელავში ვცხოვრობ …") must be answered as TRANSPORT, never as sports.
-    # Root cause: the sports camp-topic keyword „სპორტ" is a SUBSTRING of
-    # „ტრან-სპორტ-ირება", so every transport question matched the sports answer.
-    # This deterministic interceptor runs BEFORE the operational / camp-topic
-    # handlers and owns transport wording (known fact: transport is included in
-    # the price; exact regional pickup/route is deferred to the manager). It
-    # also corrects a „სპორტი რა შუაშია?" challenge after a wrong sports reply.
-    transport_response = None if camp_off else _maybe_handle_transport_logistics(conversation, message)
-    if transport_response is not None:
-        return _sanitise_booking_confirmation(conversation, transport_response)
-
-    # Client follow-up hotfix (2026-06-29) — GLOBAL anti-invention defer FIRST.
-    # An unsupported OPERATIONAL detail question (seats / room count / towels /
-    # hotel / transport / day schedule / direct-call rules / organizer / generic)
-    # must NEVER show the camp intro or ask the child's age — not even on the
-    # first turn. It runs BEFORE the static welcome so a fresh
-    # „ოთახში რამდენი ბავშვი იქნება?" gets the honest manager defer, not the
-    # menu/age question. Returns None for everything else (unchanged behaviour).
-    early_operational_response = None if camp_off else _maybe_handle_unknown_operational_early(
-        conversation, message,
-    )
-    if early_operational_response is not None:
-        return _sanitise_booking_confirmation(
-            conversation, early_operational_response,
-        )
-
-    # BUG 2 (2026-07-06) — the exact reservation/booking FEE amount is not
-    # configured. A „ჯავშნის საფასური რამდენია?" question must defer to the
-    # manager (unknown-detail pattern), never invent a vague „part of the full
-    # price" answer. Runs before the price/payment handling so it takes priority
-    # over the payment-method answer; the METHOD question is left untouched.
-    reservation_fee_response = None if camp_off else _maybe_handle_reservation_fee_question(
-        conversation, message,
-    )
-    if reservation_fee_response is not None:
-        return _sanitise_booking_confirmation(
-            conversation, reservation_fee_response,
-        )
+    if camp_info_early_response is not None:
+        return camp_info_early_response
 
     # ADDITIONAL LIVE BUG (2026-07-07) — an IDENTITY / bot question
     # („შენ gpt ხარ?" / „ჩატჯიპიტი ხარ?" / „რობოტი ხარ?" / „ვინ ხარ?" /
