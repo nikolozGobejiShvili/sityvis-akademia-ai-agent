@@ -478,6 +478,14 @@ class Settings:
     # reserved set (camp + adult_events keep their flows). OFF ⇒ reserved set
     # byte-identical.
     USE_RESERVED_PROGRAMS_DYNAMIC: bool = False
+    # Off-topic intelligence (2026-07-25): the system prompt hard-codes camp-
+    # specific off-topic scripts — the political refusal says „ბანაკთან" (camp is
+    # over) and the unclear-phrase rule makes the LLM blindly „clarify" an off-topic
+    # name (Simba/Mufasa). When ON, `_build_system_prompt` rewrites those two lines
+    # to be PROGRAM-AGNOSTIC and logic-oriented: for a question outside our programs
+    # the LLM briefly says it's out of scope and offers the active programs, instead
+    # of parroting a clarify or referencing camp. OFF ⇒ prompt byte-identical.
+    USE_OFFTOPIC_INTELLIGENCE: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -708,6 +716,9 @@ class Settings:
             ),
             USE_RESERVED_PROGRAMS_DYNAMIC=_parse_bool_optional(
                 "USE_RESERVED_PROGRAMS_DYNAMIC", False,
+            ),
+            USE_OFFTOPIC_INTELLIGENCE=_parse_bool_optional(
+                "USE_OFFTOPIC_INTELLIGENCE", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

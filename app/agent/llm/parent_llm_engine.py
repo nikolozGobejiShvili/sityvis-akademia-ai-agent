@@ -2746,6 +2746,34 @@ def _use_lean_prompt() -> bool:
     return bool(getattr(settings, "USE_LEAN_PROMPT", False))
 
 
+# Off-topic intelligence (USE_OFFTOPIC_INTELLIGENCE, 2026-07-25) — rewrite the two
+# camp-specific off-topic scripts in the loaded prompt to be PROGRAM-AGNOSTIC and
+# logic-oriented. Targeted substring swaps (no tricky Georgian quotes) so an exact
+# match is robust; a no-op when the flag is off or the anchor text is absent (e.g. a
+# slim/lean prompt), so flag-off is byte-identical.
+_OFFTOPIC_POLITICAL_OLD = "ბანაკთან დაკავშირებულ კითხვებზე დაგეხმარებით"
+_OFFTOPIC_POLITICAL_NEW = "სიამოვნებით დაგეხმარებით ჩვენს პროგრამებთან დაკავშირებით"
+_OFFTOPIC_UNCLEAR_OLD = "- როცა მომხმარებლის ფრაზა გაუგებარია, ჰკითხე თავაზიანად: "
+_OFFTOPIC_UNCLEAR_NEW = (
+    "- თუ მომხმარებლის კითხვა ჩვენს პროგრამებს არ ეხება (მაგ. მულტფილმის/წიგნის "
+    "პერსონაჟი, ამინდი, ზოგადი ცოდნა) — ბრმად ნუ დააზუსტებ ფრაზის გამეორებით და ნუ "
+    "ახსენებ პოლიტიკას; თავაზიანად თქვი, რომ ეს შენი დახმარების სფეროს გარეთაა და "
+    "შესთავაზე ჩვენი აქტიური პროგრამები. მხოლოდ ნამდვილი აკრეფის-შეცდომისას ჰკითხე "
+    "თავაზიანად: "
+)
+
+
+def _apply_offtopic_intelligence(prompt: str) -> str:
+    """Program-agnostic, logic-oriented off-topic guidance. Flag off ⇒ unchanged."""
+    if not getattr(settings, "USE_OFFTOPIC_INTELLIGENCE", False):
+        return prompt
+    return (
+        prompt
+        .replace(_OFFTOPIC_POLITICAL_OLD, _OFFTOPIC_POLITICAL_NEW)
+        .replace(_OFFTOPIC_UNCLEAR_OLD, _OFFTOPIC_UNCLEAR_NEW)
+    )
+
+
 def _build_system_prompt(message: str = "", segment: str = "") -> str:
     # Canonical Admin Config age band (5A-2 migration) — runtime prompt
     # context only; the `system_parent_v2.md` file is untouched. With the
@@ -2769,6 +2797,7 @@ def _build_system_prompt(message: str = "", segment: str = "") -> str:
         age_min=age_min,
         age_max=age_max,
     )
+    base_prompt = _apply_offtopic_intelligence(base_prompt)
     return (
         base_prompt
         + _dynamic_programs_prompt_suffix()
