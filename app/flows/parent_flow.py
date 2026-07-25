@@ -1194,6 +1194,98 @@ def _maybe_handle_camp_facts_chain(
     return None
 
 
+def _maybe_handle_contact_commit_chain(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 7 contiguous lead-capture /
+    booking-commit / manager-handoff COMMITMENT interceptors (under-age manager
+    handoff, explicit manager number, name/phone correction, out-of-range age,
+    contact collection, pending-booking commit, full-contact-on-intent) grouped
+    into one cohesive deterministic chain so ``_handle_core`` calls one node
+    instead of seven. Every handler STAYS deterministic (the SAFETY/COMMITMENT
+    layer) — the exact order and the ``_sanitise_booking_confirmation`` wrapping
+    are preserved byte-for-byte. Returns the first non-None response, else None."""
+    # BUG 1 + BUG 2 (2026-06-12) — deterministic contact-collection
+    # capture. A contact-only message (a parsed phone, no explicit
+    # datetime) is saved and answered here so a bare 9-digit phone is
+    # never dropped by the stochastic LLM and a reversed „<phone> <name>"
+    # never routes to the booking/time path. Defers (None) for booking
+    # turns and a genuinely bookable future confirmed slot.
+    # Live P0/P1 Hotfix BUG A (2026-06-15) — an UNDER-AGE manager handoff
+    # with contact provided MUST actually notify the operator. Runs before
+    # the generic contact-collection ack so the under-age contact turn
+    # dispatches a real notification instead of a side-effect-free reply.
+    underage_handoff_response = _maybe_handle_underage_manager_handoff(
+        conversation, message,
+    )
+    if underage_handoff_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, underage_handoff_response,
+        )
+
+    # Explicit manager-NUMBER request (live bug 2026-06-21): disclose the
+    # configured manager number + offer a callback, BEFORE the
+    # contact-collection canned ask — so a parent who asks for the
+    # MANAGER's number is never just re-asked for their own. Under-age
+    # handoff above still takes precedence.
+    manager_number_response = _maybe_handle_explicit_manager_request(
+        conversation, message,
+    )
+    if manager_number_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, manager_number_response,
+        )
+
+    # Explicit name/phone CORRECTION (live-demo fix 2026-06-22): update the
+    # already-stored field before the contact-collection capture (which
+    # never overwrites a set field). In-memory only — no Calendar/Sheets.
+    contact_correction_response = _maybe_handle_contact_correction(
+        conversation, message,
+    )
+    if contact_correction_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, contact_correction_response,
+        )
+
+    # Out-of-range child age (live bug 2026-06-27): a disclosed age below the
+    # camp minimum („6 წლის არის…") must yield the eligibility + manager
+    # message — NOT be mis-stored as a name by the contact collector below.
+    # Runs before contact collection; eligible/over-age/no-age → None.
+    out_of_range_age_response = _maybe_handle_out_of_range_age(
+        conversation, message,
+    )
+    if out_of_range_age_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, out_of_range_age_response,
+        )
+
+    contact_response = _maybe_handle_contact_collection(
+        conversation, message,
+    )
+    if contact_response is not None:
+        return _sanitise_booking_confirmation(conversation, contact_response)
+
+    commit_response = _maybe_commit_pending_booking_engine(
+        conversation, message,
+    )
+    if commit_response is not None:
+        return _sanitise_booking_confirmation(conversation, commit_response)
+
+    # BUG 4 (2026-06-12) — on an explicit consultation request with
+    # contact still missing (and no bookable slot pending), ask for the
+    # COMPLETE contact deterministically: name + 9-digit phone when the
+    # name is not validly known, phone-only when it is. Never a partial
+    # name-less ask, never „სახელი უკვე ვიცი".
+    intent_contact_response = _maybe_request_full_contact_on_intent(
+        conversation, message,
+    )
+    if intent_contact_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, intent_contact_response,
+        )
+    return None
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1669,84 +1761,11 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if reschedule_response is not None:
             return _sanitise_booking_confirmation(conversation, reschedule_response)
 
-        # BUG 1 + BUG 2 (2026-06-12) — deterministic contact-collection
-        # capture. A contact-only message (a parsed phone, no explicit
-        # datetime) is saved and answered here so a bare 9-digit phone is
-        # never dropped by the stochastic LLM and a reversed „<phone> <name>"
-        # never routes to the booking/time path. Defers (None) for booking
-        # turns and a genuinely bookable future confirmed slot.
-        # Live P0/P1 Hotfix BUG A (2026-06-15) — an UNDER-AGE manager handoff
-        # with contact provided MUST actually notify the operator. Runs before
-        # the generic contact-collection ack so the under-age contact turn
-        # dispatches a real notification instead of a side-effect-free reply.
-        underage_handoff_response = _maybe_handle_underage_manager_handoff(
+        contact_commit_chain_response = _maybe_handle_contact_commit_chain(
             conversation, message,
         )
-        if underage_handoff_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, underage_handoff_response,
-            )
-
-        # Explicit manager-NUMBER request (live bug 2026-06-21): disclose the
-        # configured manager number + offer a callback, BEFORE the
-        # contact-collection canned ask — so a parent who asks for the
-        # MANAGER's number is never just re-asked for their own. Under-age
-        # handoff above still takes precedence.
-        manager_number_response = _maybe_handle_explicit_manager_request(
-            conversation, message,
-        )
-        if manager_number_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, manager_number_response,
-            )
-
-        # Explicit name/phone CORRECTION (live-demo fix 2026-06-22): update the
-        # already-stored field before the contact-collection capture (which
-        # never overwrites a set field). In-memory only — no Calendar/Sheets.
-        contact_correction_response = _maybe_handle_contact_correction(
-            conversation, message,
-        )
-        if contact_correction_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, contact_correction_response,
-            )
-
-        # Out-of-range child age (live bug 2026-06-27): a disclosed age below the
-        # camp minimum („6 წლის არის…") must yield the eligibility + manager
-        # message — NOT be mis-stored as a name by the contact collector below.
-        # Runs before contact collection; eligible/over-age/no-age → None.
-        out_of_range_age_response = _maybe_handle_out_of_range_age(
-            conversation, message,
-        )
-        if out_of_range_age_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, out_of_range_age_response,
-            )
-
-        contact_response = _maybe_handle_contact_collection(
-            conversation, message,
-        )
-        if contact_response is not None:
-            return _sanitise_booking_confirmation(conversation, contact_response)
-
-        commit_response = _maybe_commit_pending_booking_engine(
-            conversation, message,
-        )
-        if commit_response is not None:
-            return _sanitise_booking_confirmation(conversation, commit_response)
-
-        # BUG 4 (2026-06-12) — on an explicit consultation request with
-        # contact still missing (and no bookable slot pending), ask for the
-        # COMPLETE contact deterministically: name + 9-digit phone when the
-        # name is not validly known, phone-only when it is. Never a partial
-        # name-less ask, never „სახელი უკვე ვიცი".
-        intent_contact_response = _maybe_request_full_contact_on_intent(
-            conversation, message,
-        )
-        if intent_contact_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, intent_contact_response,
-            )
+        if contact_commit_chain_response is not None:
+            return contact_commit_chain_response
 
         camp_facts_chain_response = _maybe_handle_camp_facts_chain(
             conversation, message, camp_off,
