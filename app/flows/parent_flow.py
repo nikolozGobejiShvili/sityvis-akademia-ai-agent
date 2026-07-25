@@ -1199,6 +1199,24 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if hoisted_injection_response is not None:
             return hoisted_injection_response
 
+        # Dynamic contact capture (deterministic, 2026-07-25) — the hoist returns
+        # to the engine below, bypassing the deterministic contact-collection
+        # handler. Live bug: in a dynamic-product booking a bare „595999733" was
+        # re-requested because the LLM did not reliably persist/advance it. Run the
+        # SAME program-agnostic contact-collection handler here first (it captures
+        # name+phone and replies deterministically, and self-defers on a question /
+        # age / datetime / bookable-slot turn) so a per-product contact turn never
+        # depends on LLM discipline. Gated on USE_DYNAMIC_CONTACT_CAPTURE (which
+        # also adds the prompt nudge); OFF ⇒ straight to the engine, byte-identical.
+        if getattr(settings, "USE_DYNAMIC_CONTACT_CAPTURE", False):
+            hoisted_contact_response = _maybe_handle_contact_collection(
+                conversation, message,
+            )
+            if hoisted_contact_response is not None:
+                return _sanitise_booking_confirmation(
+                    conversation, hoisted_contact_response,
+                )
+
         return _sanitise_booking_confirmation(
             conversation, _run_llm_engine_safely(conversation, message),
         )
