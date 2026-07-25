@@ -1130,6 +1130,70 @@ def _maybe_handle_camp_stream_chain(
     return None
 
 
+def _maybe_handle_camp_facts_chain(
+    conversation: Conversation, message: str, camp_off: bool,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 3 contiguous engine-block camp-facts
+    interceptors (exact-detail defer, repeat camp price with full-block age-wrapping,
+    structured camp TOPIC facts) grouped into one cohesive chain so ``_handle_core``
+    calls one node instead of three. The ``camp_off`` gate, the exact order, the
+    repeat-price full-block wrapping, and the ``_sanitise_booking_confirmation``
+    wrapping are all preserved. Returns the first non-None sanitised response, else None."""
+    # Client follow-up hotfix (2026-06-30) — EXACT-DETAIL split: a KNOWN
+    # general answer + an exact-unknown manager defer (food frequency / exact
+    # menu / staff count / peer presence / age-group count). Immediate repeat
+    # → defer only. Runs before repeat-price/camp-topic so the exact detail
+    # is never answered with only the general block.
+    exact_detail_response = None if camp_off else _maybe_handle_exact_detail(conversation, message)
+    if exact_detail_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, exact_detail_response,
+        )
+
+    # Camp price/payment split: price amount, payment process, and
+    # reservation exact amount are handled before topic/engine paths.
+    repeat_price_response = None if camp_off else _maybe_handle_repeat_camp_price(
+        conversation, message,
+    )
+    if repeat_price_response is not None:
+        if _is_camp_price_full_block_question(message):
+            repeat_price_response = _strip_redundant_age_question_if_known(
+                conversation, repeat_price_response,
+            )
+            if _is_camp_registration_open():
+                repeat_price_response = _ensure_camp_age_question(
+                    conversation, message, repeat_price_response,
+                )
+                repeat_price_response = _dedupe_child_age_questions(
+                    repeat_price_response,
+                )
+                repeat_price_response = _format_multipoint_paragraphs(
+                    repeat_price_response,
+                )
+        return _sanitise_booking_confirmation(
+            conversation, repeat_price_response,
+        )
+    # Structured camp TOPIC facts (2026-06-28): a camp-related QUESTION about
+    # a SPECIFIC concern (safety / food / gadgets / confidence / …) is
+    # answered with ONLY the 1 relevant focused block — never the whole camp
+    # description. Runs LAST among the deterministic interceptors, AFTER every
+    # canonical handler (Sunday School, adult events, booking day/time,
+    # registration link, manager phone, repeat price) — so it never overrides
+    # them and never interrupts an active consultation booking (a daypart /
+    # contact reply is consumed earlier; only an explicit NEW camp-topic
+    # question reaches here). Returns None for non-topic messages → the LLM
+    # engine answers as before.
+    camp_topic_response = None if camp_off else _maybe_handle_camp_topic_facts(
+        conversation, message,
+    )
+    if camp_topic_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, camp_topic_response,
+        )
+
+    return None
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1684,57 +1748,11 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                 conversation, intent_contact_response,
             )
 
-        # Client follow-up hotfix (2026-06-30) — EXACT-DETAIL split: a KNOWN
-        # general answer + an exact-unknown manager defer (food frequency / exact
-        # menu / staff count / peer presence / age-group count). Immediate repeat
-        # → defer only. Runs before repeat-price/camp-topic so the exact detail
-        # is never answered with only the general block.
-        exact_detail_response = None if camp_off else _maybe_handle_exact_detail(conversation, message)
-        if exact_detail_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, exact_detail_response,
-            )
-
-        # Camp price/payment split: price amount, payment process, and
-        # reservation exact amount are handled before topic/engine paths.
-        repeat_price_response = None if camp_off else _maybe_handle_repeat_camp_price(
-            conversation, message,
+        camp_facts_chain_response = _maybe_handle_camp_facts_chain(
+            conversation, message, camp_off,
         )
-        if repeat_price_response is not None:
-            if _is_camp_price_full_block_question(message):
-                repeat_price_response = _strip_redundant_age_question_if_known(
-                    conversation, repeat_price_response,
-                )
-                if _is_camp_registration_open():
-                    repeat_price_response = _ensure_camp_age_question(
-                        conversation, message, repeat_price_response,
-                    )
-                    repeat_price_response = _dedupe_child_age_questions(
-                        repeat_price_response,
-                    )
-                    repeat_price_response = _format_multipoint_paragraphs(
-                        repeat_price_response,
-                    )
-            return _sanitise_booking_confirmation(
-                conversation, repeat_price_response,
-            )
-        # Structured camp TOPIC facts (2026-06-28): a camp-related QUESTION about
-        # a SPECIFIC concern (safety / food / gadgets / confidence / …) is
-        # answered with ONLY the 1 relevant focused block — never the whole camp
-        # description. Runs LAST among the deterministic interceptors, AFTER every
-        # canonical handler (Sunday School, adult events, booking day/time,
-        # registration link, manager phone, repeat price) — so it never overrides
-        # them and never interrupts an active consultation booking (a daypart /
-        # contact reply is consumed earlier; only an explicit NEW camp-topic
-        # question reaches here). Returns None for non-topic messages → the LLM
-        # engine answers as before.
-        camp_topic_response = None if camp_off else _maybe_handle_camp_topic_facts(
-            conversation, message,
-        )
-        if camp_topic_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, camp_topic_response,
-            )
+        if camp_facts_chain_response is not None:
+            return camp_facts_chain_response
 
         # Today-first consultation availability (hotfix 2026-06-28): a „nearest
         # free time" / „is today free?" question is answered deterministically
