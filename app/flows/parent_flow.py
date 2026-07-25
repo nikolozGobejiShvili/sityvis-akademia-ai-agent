@@ -1340,6 +1340,54 @@ def _maybe_handle_pre_engine_guards(
     return None
 
 
+def _maybe_handle_returning_user_state(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 4 contiguous returning-conversation
+    state guards (memory-info recall „what do you know about me?“, child
+    re-qualification on „different child“, resumed-state acknowledgement, multi-child
+    age record-and-continue) grouped into one cohesive chain so ``_handle_core`` calls one
+    node instead of four. All four return directly (none sanitised, none camp_off-gated);
+    the exact order is preserved byte-for-byte. Returns the first non-None response, else None."""
+    # Booked State Memory Response Polish (2026-05-30) — deterministic
+    # short-circuit for "what info do you have about me?" questions.
+    # Runs BEFORE the engine so the LLM never gets a chance to leak
+    # "მყარი ჯავშანი" / "ეკრანსიგან" wording or to suggest yet another
+    # consultation booking to an already-booked parent. Returns None for
+    # any other inbound text, so normal flow continues.
+    memory_info_response = _maybe_memory_info_reply(conversation, message)
+    if memory_info_response is not None:
+        return memory_info_response
+
+    # FIX 3 (2026-06-11) — re-qualification: an explicit „different child
+    # / age" message clears the stored child_age and re-asks. Runs before
+    # the engine so the cleared state drives the rest of the turn.
+    requalify_response = _maybe_requalify_child(conversation, message)
+    if requalify_response is not None:
+        return requalify_response
+
+    # FIX 3 (2026-06-11) — stored-state transparency: on a greeting /
+    # restart of a resumed (completed/booked) conversation that already
+    # has a stored child_age, acknowledge it once instead of silently
+    # reusing it.
+    resume_ack = _maybe_acknowledge_stored_state(conversation, message)
+    if resume_ack is not None:
+        return resume_ack
+
+    # Multi-child age record-and-continue (2026-07-06 client fix) — a parent
+    # registering two children states two ages („12-14 წლის" / „12 და 14 წლის").
+    # The age-range guard used to silently drop „12-14" (mistaking it for the
+    # advertised „9-17" band), so the booking kept re-asking the age. Record BOTH
+    # ages BEFORE the engine (child_age = first in-band gate value; full list in
+    # the manager-visible deeper_concern field), acknowledge, and continue. The
+    # band is still never captured. Returns None for a single age / the band / an
+    # eligibility question → the normal flow continues unchanged.
+    multi_child_age_response = _maybe_handle_multi_child_age(conversation, message)
+    if multi_child_age_response is not None:
+        return multi_child_age_response
+    return None
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1565,42 +1613,11 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             _fetch_profile_into_lead(conversation, lead)
         return static_welcome
 
-    # Booked State Memory Response Polish (2026-05-30) — deterministic
-    # short-circuit for "what info do you have about me?" questions.
-    # Runs BEFORE the engine so the LLM never gets a chance to leak
-    # "მყარი ჯავშანი" / "ეკრანსიგან" wording or to suggest yet another
-    # consultation booking to an already-booked parent. Returns None for
-    # any other inbound text, so normal flow continues.
-    memory_info_response = _maybe_memory_info_reply(conversation, message)
-    if memory_info_response is not None:
-        return memory_info_response
-
-    # FIX 3 (2026-06-11) — re-qualification: an explicit „different child
-    # / age" message clears the stored child_age and re-asks. Runs before
-    # the engine so the cleared state drives the rest of the turn.
-    requalify_response = _maybe_requalify_child(conversation, message)
-    if requalify_response is not None:
-        return requalify_response
-
-    # FIX 3 (2026-06-11) — stored-state transparency: on a greeting /
-    # restart of a resumed (completed/booked) conversation that already
-    # has a stored child_age, acknowledge it once instead of silently
-    # reusing it.
-    resume_ack = _maybe_acknowledge_stored_state(conversation, message)
-    if resume_ack is not None:
-        return resume_ack
-
-    # Multi-child age record-and-continue (2026-07-06 client fix) — a parent
-    # registering two children states two ages („12-14 წლის" / „12 და 14 წლის").
-    # The age-range guard used to silently drop „12-14" (mistaking it for the
-    # advertised „9-17" band), so the booking kept re-asking the age. Record BOTH
-    # ages BEFORE the engine (child_age = first in-band gate value; full list in
-    # the manager-visible deeper_concern field), acknowledge, and continue. The
-    # band is still never captured. Returns None for a single age / the band / an
-    # eligibility question → the normal flow continues unchanged.
-    multi_child_age_response = _maybe_handle_multi_child_age(conversation, message)
-    if multi_child_age_response is not None:
-        return multi_child_age_response
+    returning_state_response = _maybe_handle_returning_user_state(
+        conversation, message,
+    )
+    if returning_state_response is not None:
+        return returning_state_response
 
     # Turn Intent Gateway (Reasoning Layer Phase 2, 2026-06-23) — central,
     # DETERMINISTIC, metadata-only intent classification computed ONCE per turn
