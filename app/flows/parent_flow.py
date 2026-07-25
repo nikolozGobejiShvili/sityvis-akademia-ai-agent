@@ -1286,6 +1286,60 @@ def _maybe_handle_contact_commit_chain(
     return None
 
 
+def _maybe_handle_pre_engine_guards(
+    conversation: Conversation, message: str, camp_off: bool,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 5 contiguous pre-funnel guards
+    that answer-and-return BEFORE the static welcome + LLM engine (brand IDENTITY,
+    camp CALL/VISIT question, ADULT-context relative routing, POLITICAL redirect,
+    UNCLEAR-phrase clarification) grouped into one cohesive chain so ``_handle_core``
+    calls one node instead of five. Each guard keeps its OWN return handling (only
+    contact/visit is camp_off-gated + sanitised; the others return directly) and the
+    exact order is preserved byte-for-byte. Returns the first non-None response, else None."""
+    # ADDITIONAL LIVE BUG (2026-07-07) — an IDENTITY / bot question
+    # („შენ gpt ხარ?" / „ჩატჯიპიტი ხარ?" / „რობოტი ხარ?" / „ვინ ხარ?" /
+    # „ადამიანი ხარ?") is NOT political and must NEVER hit the politics refusal
+    # or the camp-age question. Answer with the brand consultant identity. Runs
+    # BEFORE the political / off-topic guard and the engine. Organizer questions
+    # („ვინ ხართ ორგანიზატორები?") are already caught by the operational defer
+    # above, so this never hijacks them.
+    identity_response = _maybe_handle_identity(conversation, message)
+    if identity_response is not None:
+        return identity_response
+
+    # ADDITIONAL LIVE BUG (2026-07-07) — once the conversation is in ADULT-EVENTS
+    # context (out-of-camp participant age, user opted into adult events),
+    # „ჩემი შვილისთვის" must NOT route back to summer camp just because the word
+    # „შვილი" appears (a child can be an adult child). Keep adult-events context:
+    # offer adult events when the participant is known-adult, else ask the
+    # participant's age. A hard camp keyword / in-band camp age still wins (camp).
+    # ADDITIONAL LIVE BUG (2026-07-08) — a camp parent's CALL / VISIT question
+    # („შემიძლია ბავშვს დავურეკო ან ჩამოვიდე და ვნახო?") must be answered as CAMP
+    # (daily updates + manager defer for the exact call/visit rules), never the
+    # adult participant-age question. Runs BEFORE the adult-context handler so a
+    # genuine camp contact question in camp context wins. Returns None for a
+    # non-contact/visit message or outside camp context.
+    contact_visit_response = None if camp_off else _maybe_handle_parent_contact_visit(conversation, message)
+    if contact_visit_response is not None:
+        return _sanitise_booking_confirmation(conversation, contact_visit_response)
+
+    adult_ctx_response = _maybe_handle_adult_context_relative(conversation, message)
+    if adult_ctx_response is not None:
+        return adult_ctx_response
+
+    # Client follow-up hotfix (2026-06-30) — political / party-identity bait →
+    # neutral redirect; an unclear Georgian phrase → polished clarification. Both
+    # run before the static welcome / engine so they preempt the funnel (no
+    # child-age question, no consultation offer).
+    political_response = _maybe_handle_political(conversation, message)
+    if political_response is not None:
+        return political_response
+    unclear_response = _maybe_handle_unclear_phrase(conversation, message)
+    if unclear_response is not None:
+        return unclear_response
+    return None
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1479,47 +1533,11 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     if camp_info_early_response is not None:
         return camp_info_early_response
 
-    # ADDITIONAL LIVE BUG (2026-07-07) — an IDENTITY / bot question
-    # („შენ gpt ხარ?" / „ჩატჯიპიტი ხარ?" / „რობოტი ხარ?" / „ვინ ხარ?" /
-    # „ადამიანი ხარ?") is NOT political and must NEVER hit the politics refusal
-    # or the camp-age question. Answer with the brand consultant identity. Runs
-    # BEFORE the political / off-topic guard and the engine. Organizer questions
-    # („ვინ ხართ ორგანიზატორები?") are already caught by the operational defer
-    # above, so this never hijacks them.
-    identity_response = _maybe_handle_identity(conversation, message)
-    if identity_response is not None:
-        return identity_response
-
-    # ADDITIONAL LIVE BUG (2026-07-07) — once the conversation is in ADULT-EVENTS
-    # context (out-of-camp participant age, user opted into adult events),
-    # „ჩემი შვილისთვის" must NOT route back to summer camp just because the word
-    # „შვილი" appears (a child can be an adult child). Keep adult-events context:
-    # offer adult events when the participant is known-adult, else ask the
-    # participant's age. A hard camp keyword / in-band camp age still wins (camp).
-    # ADDITIONAL LIVE BUG (2026-07-08) — a camp parent's CALL / VISIT question
-    # („შემიძლია ბავშვს დავურეკო ან ჩამოვიდე და ვნახო?") must be answered as CAMP
-    # (daily updates + manager defer for the exact call/visit rules), never the
-    # adult participant-age question. Runs BEFORE the adult-context handler so a
-    # genuine camp contact question in camp context wins. Returns None for a
-    # non-contact/visit message or outside camp context.
-    contact_visit_response = None if camp_off else _maybe_handle_parent_contact_visit(conversation, message)
-    if contact_visit_response is not None:
-        return _sanitise_booking_confirmation(conversation, contact_visit_response)
-
-    adult_ctx_response = _maybe_handle_adult_context_relative(conversation, message)
-    if adult_ctx_response is not None:
-        return adult_ctx_response
-
-    # Client follow-up hotfix (2026-06-30) — political / party-identity bait →
-    # neutral redirect; an unclear Georgian phrase → polished clarification. Both
-    # run before the static welcome / engine so they preempt the funnel (no
-    # child-age question, no consultation offer).
-    political_response = _maybe_handle_political(conversation, message)
-    if political_response is not None:
-        return political_response
-    unclear_response = _maybe_handle_unclear_phrase(conversation, message)
-    if unclear_response is not None:
-        return unclear_response
+    pre_engine_guard_response = _maybe_handle_pre_engine_guards(
+        conversation, message, camp_off,
+    )
+    if pre_engine_guard_response is not None:
+        return pre_engine_guard_response
 
     camp_stream_chain_response = _maybe_handle_camp_stream_chain(
         conversation, message, camp_off,
