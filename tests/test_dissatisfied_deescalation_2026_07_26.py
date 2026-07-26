@@ -1,16 +1,20 @@
-"""Dissatisfied-customer de-escalation (USE_DISSATISFIED_DEESCALATION, 2026-07-26 live test).
+"""Dissatisfied-customer de-escalation — converted to a SKILL (2026-07-26, plan-aligned).
 
-A harsh complaint / insult about the company gets a short empathy + manager number + connect
-offer, with NO camp and NO program mention. A plain price objection is NOT an insult (keeps
-selling). Runs before camp-status / camp-intro / engine on BOTH the normal and the hoisted path.
+Per the interceptors→tools plan, advisory de-escalation is NOT a substring interceptor — it is
+the operator-editable `dissatisfied-customer` SKILL (`app/agent/skills/dissatisfied-customer.md`),
+selected at the LLM layer when USE_SKILLS is on. parent_flow keeps only a thin ROUTING predicate
+(`_msg_is_dissatisfaction`) so camp-status does NOT treat an insult that happens to name camp as a
+camp question — it must reach the engine + skill (empathy + manager), not „camp ended".
 """
-import dataclasses
+from unittest.mock import patch
 
-from app import config
 from app.flows import parent_flow as pf
-from app.services import admin_config_service
+from app.services import skills_service
 from app.models.conversation import Conversation
 from app.models.lead import Lead
+
+
+_INSULT = "საზიზღარი კომპანია გაქვთ თვენი ბანაკი მხოლოდ მდიდარი ბავშვებისთვის არის"
 
 
 def _conv():
@@ -19,66 +23,51 @@ def _conv():
     return c
 
 
-_INSULT = "საზიზღარი კომპანია გაქვთ თვენი ბანაკი მხოლოდ მდიდარი ბავშვებისთვის არის"
+# --- the skill exists as operator-editable data ---
+
+def test_skill_file_present_and_active():
+    skills = {s["id"]: s for s in skills_service.load_skills()}
+    assert "dissatisfied-customer" in skills
+    sk = skills["dissatisfied-customer"]
+    assert sk["status"] == "active"
+    assert any("საზიზღარ" in t for t in sk["triggers"])
+    assert "მენეჯერ" in sk["body"]           # offers the manager
+    assert "558 67 47 33" in sk["body"]
 
 
-def _pin_helper(monkeypatch, flag):
-    monkeypatch.setattr(pf, "settings", dataclasses.replace(
-        config.settings, USE_DISSATISFIED_DEESCALATION=flag))
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "558 67 47 33")
+def test_skill_selected_for_insult():
+    picked = {s["id"] for s in skills_service.select_skills(_INSULT, "PARENT")}
+    assert "dissatisfied-customer" in picked
 
 
-# --- flag + helper ---
-
-def test_flag_defaults_false():
-    assert config.Settings().USE_DISSATISFIED_DEESCALATION is False
-
-
-def test_off_returns_none(monkeypatch):
-    _pin_helper(monkeypatch, False)
-    assert pf._maybe_handle_dissatisfied_customer(_conv(), _INSULT) is None
+def test_skill_not_selected_for_price_objection():
+    picked = {s["id"] for s in skills_service.select_skills("ძვირია ეს ფასი", "PARENT")}
+    assert "dissatisfied-customer" not in picked
 
 
-def test_insult_gets_empathy_manager_no_camp_no_program(monkeypatch):
-    _pin_helper(monkeypatch, True)
-    out = pf._maybe_handle_dissatisfied_customer(_conv(), _INSULT)
-    assert out is not None
-    assert "ვწუხვარ" in out                    # empathy
-    assert "558 67 47 33" in out               # manager number
-    assert "დაგაკავშირებთ" in out              # connect offer
-    assert "ბანაკ" not in out                  # NO camp
-    assert "დისნეილენდ" not in out and "პროგრამ" not in out   # NO program
+# --- thin routing predicate (no handler, no flag) ---
+
+def test_predicate_true_for_insult():
+    assert pf._msg_is_dissatisfaction(_INSULT)
 
 
-def test_price_objection_is_not_an_insult(monkeypatch):
-    _pin_helper(monkeypatch, True)
-    assert pf._maybe_handle_dissatisfied_customer(_conv(), "ძვირია ეს ფასი") is None
+def test_predicate_false_for_price_objection():
+    assert not pf._msg_is_dissatisfaction("ძვირია ეს ფასი")
 
 
-def test_normal_question_not_matched(monkeypatch):
-    _pin_helper(monkeypatch, True)
-    assert pf._maybe_handle_dissatisfied_customer(_conv(), "დისნეილენდი როდის იწყება?") is None
+def test_no_interceptor_or_flag_left():
+    # the old substring interceptor + flag are gone (un-bloated parent_flow)
+    assert not hasattr(pf, "_maybe_handle_dissatisfied_customer")
+    from app.config import Settings
+    assert not hasattr(Settings(), "USE_DISSATISFIED_DEESCALATION")
 
 
-# --- integration: normal path (no hoist) ---
+# --- camp-status routes an insult to the engine (not „camp ended") ---
 
-def test_handle_core_normal_path_deescalates(monkeypatch):
-    monkeypatch.setattr(pf, "settings", dataclasses.replace(
-        config.settings, USE_DISSATISFIED_DEESCALATION=True, USE_PARENT_LLM_ENGINE=False))
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "558 67 47 33")
-    out = pf._handle_core(_conv(), _INSULT)
-    assert "ვწუხვარ" in out and "558 67 47 33" in out
-    assert "9–17" not in out and "შესაბამისია" not in out   # no camp pitch
-
-
-# --- integration: hoisted path (dynamic/per-product session) ---
-
-def test_handle_core_hoisted_path_deescalates(monkeypatch):
-    monkeypatch.setattr(pf, "settings", dataclasses.replace(
-        config.settings, USE_DISSATISFIED_DEESCALATION=True, USE_PARENT_LLM_ENGINE=True))
-    monkeypatch.setattr(pf, "_is_active_per_product_booking", lambda conv: True)  # hoist fires
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "558 67 47 33")
-    monkeypatch.setattr(pf, "_run_llm_engine_safely", lambda conv, msg: "ENGINE_SENTINEL")
-    out = pf._handle_core(_conv(), _INSULT)
-    assert "ვწუხვარ" in out and "558 67 47 33" in out
-    assert "ENGINE_SENTINEL" not in out          # camp-centric LLM NOT reached
+def test_camp_status_defers_on_insult():
+    conv = _conv()
+    with patch("app.services.admin_config_service.get_camp_status", return_value="ended"):
+        # an insult that names camp is NOT a camp question → None → engine + skill
+        assert pf._maybe_handle_camp_status(conv, _INSULT) is None
+        # a genuine camp question still gets the deterministic „camp ended"
+        assert "დასრულებულია" in (pf._maybe_handle_camp_status(conv, "ბანაკი დამთავრდა?") or "")

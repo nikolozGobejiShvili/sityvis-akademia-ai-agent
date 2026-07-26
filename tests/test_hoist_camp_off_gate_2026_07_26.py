@@ -55,13 +55,14 @@ def test_hoist_non_camp_question_goes_to_engine(monkeypatch):
     assert "ENGINE_SENTINEL" in out          # not a camp question → engine
 
 
-def test_hoist_camp_criticism_does_not_pitch_camp(monkeypatch):
-    """Live test #2 step-34: an INSULT that names camp („თქვენი ბანაკი მხოლოდ მდიდარი
-    ბავშვებისთვის…") made the camp-centric LLM DEFEND/pitch camp („ბანაკი 9–17 წლისაა,
-    სადაც ბავშვები…"). It mentions ბანაკი, so the camp-off gate now answers „camp ended
-    + alternatives" instead of routing to the pitch."""
+def test_hoist_camp_criticism_routes_to_engine_for_skill(monkeypatch):
+    """Live test #2 step-34 + skill conversion (2026-07-26): an INSULT that names camp
+    („თქვენი ბანაკი მხოლოდ მდიდარი ბავშვებისთვის…") is NOT a camp question — camp-status
+    defers, so it routes PAST the camp-off gate to the engine, where the operator-editable
+    `dissatisfied-customer` skill answers with empathy + manager (NOT „camp ended", NOT a
+    camp pitch). De-escalation is skill/LLM, not a substring interceptor (plan-aligned)."""
     _pin(monkeypatch, camp_off_gate=True)
     insult = "საზიზღარი კომპანია გაქვთ თვენი ბანაკი მხოლოდ მდიდარი ბავშვებისთვის არის"
     out = pf._handle_core(_conv(), insult)
-    assert "დასრულებულია" in out
-    assert "ENGINE_SENTINEL" not in out      # the camp-centric LLM (pitch) is NOT reached
+    assert "ENGINE_SENTINEL" in out           # routed to the engine (where the skill applies)
+    assert "დასრულებულია" not in out          # NOT the deterministic camp-ended gate
