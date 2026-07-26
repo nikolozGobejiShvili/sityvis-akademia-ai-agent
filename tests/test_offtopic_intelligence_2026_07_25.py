@@ -73,3 +73,27 @@ def test_prompt_rewritten_when_on(monkeypatch):
 
 def test_on_differs_from_off(monkeypatch):
     assert _prompt(monkeypatch, True) != _prompt(monkeypatch, False)
+
+
+# --- BUG-2 (2026-07-26 live test): program-agnostic directive (camp-off default) ---
+
+def test_program_agnostic_directive_appended_when_on(monkeypatch):
+    monkeypatch.setattr(ple, "settings", dataclasses.replace(ple.settings, USE_OFFTOPIC_INTELLIGENCE=True))
+    out = ple._apply_offtopic_intelligence("base prompt")
+    assert "პროგრამა-აგნოსტიკური წესი" in out
+    assert "list_programs" in out
+    assert "დასრულებულია" in out          # states camp is ended
+    assert out.startswith("base prompt")   # appended, base preserved
+
+
+def test_program_agnostic_directive_absent_when_off(monkeypatch):
+    monkeypatch.setattr(ple, "settings", dataclasses.replace(ple.settings, USE_OFFTOPIC_INTELLIGENCE=False))
+    assert ple._apply_offtopic_intelligence("base prompt") == "base prompt"
+
+
+def test_built_prompt_carries_directive_when_on(monkeypatch):
+    p = _prompt(monkeypatch, True)
+    assert "პროგრამა-აგნოსტიკური წესი" in p
+    assert "list_programs" in p
+    # off ⇒ the directive must be absent (byte-identical guarantee holds)
+    assert "პროგრამა-აგნოსტიკური წესი" not in _prompt(monkeypatch, False)
