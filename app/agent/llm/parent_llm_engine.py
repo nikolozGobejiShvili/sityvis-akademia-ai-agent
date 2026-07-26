@@ -2183,6 +2183,57 @@ def _suppress_redundant_age_question(
     return _next_missing_contact_prompt(lead)
 
 
+_PHONE_ASK_VERBS = (
+    "მომწერეთ", "მოგვწერეთ", "მიუთითეთ", "გაიმეორეთ", "გამომიგზავნეთ", "მოგვაწოდეთ",
+)
+
+
+def _sentence_is_phone_ask(sent: str) -> bool:
+    """A sentence that ASKS for the phone (an ask verb + „ნომერ"). A confirmation
+    („ნომერი მივიღე") or a manager-callback mention („მენეჯერი დაგიკავშირდებათ
+    ნომერზე") carries no ask verb → not matched."""
+    return "ნომერ" in sent and any(v in sent for v in _PHONE_ASK_VERBS)
+
+
+def _strip_phone_questions(text: str) -> str:
+    """Drop only the sentence(s) that re-ask for the phone; keep everything else."""
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    kept = [p for p in parts if p.strip() and not _sentence_is_phone_ask(p)]
+    return " ".join(kept).strip()
+
+
+def _suppress_redundant_phone_question(
+    text: str, lead: Lead, conversation: Conversation,
+) -> str:
+    """BUG-1 anti-repeat (2026-07-26 live test): the dynamic booking path confirmed a
+    slot and then RE-asked for the phone the user had already given („ნომერი მივიღე"
+    → time chosen → „მომწერეთ ნომერი" again). Mirrors _suppress_redundant_age_question:
+    when lead.phone is known but the reply still asks for it, STRIP only the phone
+    question and keep the rest; a phone-only reply falls back to the next missing
+    detail. Phone genuinely unknown → untouched (asking is correct). Gated by
+    USE_DYNAMIC_CONTACT_CAPTURE ⇒ OFF is byte-identical."""
+    if not text:
+        return text
+    if not getattr(settings, "USE_DYNAMIC_CONTACT_CAPTURE", False):
+        return text
+    if not (lead.phone or "").strip():
+        return text
+    if not _sentence_is_phone_ask(text):
+        return text
+    stripped = _strip_phone_questions(text)
+    if stripped:
+        logger.info(
+            "[parent_llm_engine] anti-repeat: stripped a redundant phone question, "
+            "kept the rest (phone already known)",
+        )
+        return stripped
+    logger.info(
+        "[parent_llm_engine] anti-repeat: replaced a phone-only reply with the next "
+        "step (phone already known)",
+    )
+    return _next_missing_contact_prompt(lead)
+
+
 # Sentence-initial Georgian greeting openers. The static welcome owns the
 # FIRST greeting of a conversation; a greeting on a LATER turn is a scripted
 # "reset" (live bug: the agent said „გამარჯობა" mid-conversation while handling
@@ -2662,6 +2713,8 @@ def run_parent_llm_turn(
             cleaned = sanitise_response_wording(final_content.strip())
             # Anti-repeat safety net: never re-ask the child's age once known.
             cleaned = _suppress_redundant_age_question(cleaned, lead, conversation)
+            # BUG-1 (2026-07-26 live test): never re-ask a phone the user already gave.
+            cleaned = _suppress_redundant_phone_question(cleaned, lead, conversation)
             # Never greet again mid-conversation (scripted-reset guard).
             final_answer = _strip_mid_conversation_greeting(cleaned, conversation)
             # REFLECT (Phase 2) — verify the answer's facts against the grounded
