@@ -341,6 +341,26 @@ def _format_booked_datetime_georgian(iso: str | None) -> str:
     return f"{dt.day} {month}, {dt.strftime('%H:%M')}"
 
 
+def _program_interest_phrase(lead: Lead) -> str:
+    """The program the lead is interested in, for the manager summary. A non-camp
+    per-product booking tags ``lead.program_id``; when USE_PER_PRODUCT_BOOKING is on,
+    name the REAL program (e.g. „დისნეილენდი") instead of always „ბანაკი", so the
+    manager email is correct. Empty program_id OR flag off → „ბანაკით" (byte-identical).
+    Never raises."""
+    pid = (getattr(lead, "program_id", "") or "").strip()
+    if not pid or not getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
+        return "ბანაკით"
+    try:
+        from app.services import admin_config_service
+        section = admin_config_service.get_section(pid) or {}
+        name = str(section.get("name") or "").strip()
+        if name:
+            return f'პროგრამით „{name}"'
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return "ბანაკით"
+
+
 def _build_parent_summary(lead: Lead) -> str:
     """Short fixed Georgian summary keyed on booking state.
 
@@ -360,27 +380,28 @@ def _build_parent_summary(lead: Lead) -> str:
     # chat text — so „მოკლე რეზიუმე" stays a clean manager summary and
     # never duplicates raw user phrasing already shown above.
     challenge_clean = _clean_challenge_for_email(lead.challenge).strip()
+    interest = _program_interest_phrase(lead)
     if lead.calendly_booked:
         when = _format_booked_datetime_georgian(lead.booked_datetime_iso)
         if challenge_clean and when:
             return (
-                f"მშობელი დაინტერესებულია ბანაკით — "
+                f"მშობელი დაინტერესებულია {interest} — "
                 f"მთავარი ფოკუსი: {challenge_clean}. "
                 f"კონსულტაცია ჩანიშნულია {when} საათზე."
             )
         if when:
             return (
-                f"ლიდი დაინტერესებულია ბანაკით. "
+                f"ლიდი დაინტერესებულია {interest}. "
                 f"კონსულტაცია ჩანიშნულია {when} საათზე."
             )
-        return "ლიდი დაინტერესებულია ბანაკით. კონსულტაცია უკვე ჩანიშნულია."
+        return f"ლიდი დაინტერესებულია {interest}. კონსულტაცია უკვე ჩანიშნულია."
     if challenge_clean:
         return (
-            f"მშობელი დაინტერესებულია ბანაკით — მთავარი ფოკუსი: "
+            f"მშობელი დაინტერესებულია {interest} — მთავარი ფოკუსი: "
             f"{challenge_clean}. საჭიროებს მენეჯერის დაკავშირებას."
         )
     return (
-        "ლიდი დაინტერესებულია ბანაკით და საჭიროებს მენეჯერის დაკავშირებას."
+        f"ლიდი დაინტერესებულია {interest} და საჭიროებს მენეჯერის დაკავშირებას."
     )
 
 
