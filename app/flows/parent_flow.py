@@ -835,6 +835,24 @@ _DISSATISFIED_MARKERS: tuple[str, ...] = (
     "ალოგიკურ", "სისულელ", "გამაბრაზ", "ნერვ", "საჩივ", "უკმაყოფილ",
 )
 
+def _msg_names_other_program(message: str) -> bool:
+    """True when the message NAMES an active NON-camp admin program (e.g. Disneyland,
+    Formula 1). A price/topic question that names another program („დისნეილენდის ფასი
+    რა არის?") is about THAT program — NOT camp — so the camp gate must not claim it.
+    Uses the same declension-tolerant matcher as the hoist; camp itself is excluded.
+    Never raises → False on any error."""
+    try:
+        from app.services import admin_config_service
+        from app.reasoning.dynamic_program_match import match_dynamic_program
+        sections = [
+            s for s in admin_config_service.get_active_sections()
+            if (s.get("id") or "").strip() != "summer_camp"
+        ]
+        return match_dynamic_program(message, sections) is not None
+    except Exception:  # pragma: no cover — defensive
+        return False
+
+
 def _msg_is_dissatisfaction(message: str) -> bool:
     """A harsh complaint / insult about the company — a ROUTING signal, not a handler.
     The de-escalation RESPONSE is the operator-editable `dissatisfied-customer` SKILL at
@@ -870,6 +888,15 @@ def _maybe_handle_camp_status(
     # `dissatisfied-customer` skill answers with empathy + manager, not „camp ended".
     # Advisory de-escalation lives in the skill layer, not in this deterministic gate.
     if _msg_is_dissatisfaction(message):
+        return None
+
+    # Program-aware (2026-07-26 live test): a price/topic question that NAMES a non-camp
+    # program („დისნეილენდის ფასი რა არის?", „ფორმულა 1-ის ფასი") is about THAT program,
+    # not camp — the camp price/topic detectors below over-fire on „ფასი" and would answer
+    # „ბანაკი დასრულდა". Route it to the engine (correct program price). Gated by
+    # USE_PROGRAM_ISOLATION („non-camp answers never borrow camp"). A message that also
+    # carries a hard camp keyword („ბანაკის ფასი") still gets the camp status via has_camp.
+    if getattr(settings, "USE_PROGRAM_ISOLATION", False) and _msg_names_other_program(message):
         return None
 
     has_camp = _msg_has_camp_intent(message)
