@@ -53,3 +53,15 @@ def test_hoist_non_camp_question_goes_to_engine(monkeypatch):
     _pin(monkeypatch, camp_off_gate=True)
     out = pf._handle_core(_conv(), "დისნეილენდი როდის იწყება?")
     assert "ENGINE_SENTINEL" in out          # not a camp question → engine
+
+
+def test_hoist_camp_criticism_does_not_pitch_camp(monkeypatch):
+    """Live test #2 step-34: an INSULT that names camp („თქვენი ბანაკი მხოლოდ მდიდარი
+    ბავშვებისთვის…") made the camp-centric LLM DEFEND/pitch camp („ბანაკი 9–17 წლისაა,
+    სადაც ბავშვები…"). It mentions ბანაკი, so the camp-off gate now answers „camp ended
+    + alternatives" instead of routing to the pitch."""
+    _pin(monkeypatch, camp_off_gate=True)
+    insult = "საზიზღარი კომპანია გაქვთ თვენი ბანაკი მხოლოდ მდიდარი ბავშვებისთვის არის"
+    out = pf._handle_core(_conv(), insult)
+    assert "დასრულებულია" in out
+    assert "ENGINE_SENTINEL" not in out      # the camp-centric LLM (pitch) is NOT reached
