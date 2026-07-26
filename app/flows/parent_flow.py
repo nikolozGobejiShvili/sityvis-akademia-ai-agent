@@ -1504,6 +1504,21 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if hoisted_injection_response is not None:
             return hoisted_injection_response
 
+        # Camp-off status guard for the HOISTED path (2026-07-26 live test). The hoist
+        # returns to the engine below and BYPASSES `_maybe_handle_camp_status` (line
+        # ~1537). Live bug: after a Disneyland (per-product) booking a camp question
+        # („ბანაკი დამთავრდა?") reached the camp-centric LLM, which offered camp — asked
+        # the child's age → „ბანაკი ამ ასაკისთვის შესაბამისია". Camp being OFF is a status
+        # fact that must hold on EVERY path, so run the SAME deterministic „camp ended"
+        # gate here first. Gated on USE_CAMP_OFF_GATE; returns None when camp is active OR
+        # the message is not a camp question ⇒ straight to the engine, byte-identical.
+        if getattr(settings, "USE_CAMP_OFF_GATE", False):
+            hoisted_camp_status = _maybe_handle_camp_status(conversation, message)
+            if hoisted_camp_status is not None:
+                return _sanitise_booking_confirmation(
+                    conversation, hoisted_camp_status,
+                )
+
         # Dynamic contact capture (deterministic, 2026-07-25) — the hoist returns
         # to the engine below, bypassing the deterministic contact-collection
         # handler. Live bug: in a dynamic-product booking a bare „595999733" was
