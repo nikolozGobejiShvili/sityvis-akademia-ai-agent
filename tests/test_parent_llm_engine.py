@@ -5072,8 +5072,14 @@ def test_system_prompt_has_angry_user_rule():
     from app.agent.llm.prompt_loader import load_prompt, reset_cache
     reset_cache()
     text = load_prompt("system_parent_v2")
-    assert "გაბრაზებული მომხმარებელი" in text
-    assert "ბოდიშს გიხდით. ვეცდები, სწრაფად და ზუსტად დაგეხმაროთ." in text
+    # The angry/dissatisfied rule still exists (empathy + manager), but the FORCED
+    # canned „ბოდიშს გიხდით. ვეცდები…" text was REMOVED (2026-07-26) so the
+    # `dissatisfied-customer` skill / natural LLM handle it — de-scripting the
+    # camp-centric prompt per the operator's „no hardcode" rule.
+    assert "უკმაყოფილო მომხმარებელი" in text
+    assert "თანაგრძნობ" in text                       # empathy guidance
+    assert "მენეჯერთან დაკავშირება" in text           # offers the manager
+    assert "ბოდიშს გიხდით. ვეცდები, სწრაფად და ზუსტად დაგეხმაროთ." not in text
 
 
 def test_system_prompt_has_past_date_rule():
