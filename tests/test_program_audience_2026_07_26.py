@@ -83,3 +83,21 @@ def test_admin_form_saves_audience():
     assert d["audience"] == "child"
     # invalid → family
     assert _form_to_section_dict(id="x", name="x", audience="bogus")["audience"] == "family"
+
+
+# --- Fix 3: participant-age rule (audience surfaced to the LLM) ---
+
+def test_dynamic_suffix_participant_age_rule(monkeypatch):
+    from app.agent.llm import parent_llm_engine as ple
+    secs = [{"id": "formula_1", "name": "ფორმულა 1", "status": "active", "type": "other"}]
+
+    def suffix(flag):
+        monkeypatch.setattr(ple, "settings", dataclasses.replace(
+            config.settings, USE_DYNAMIC_PROGRAMS=True, USE_PROGRAM_AUDIENCE=flag))
+        monkeypatch.setattr("app.services.admin_config_service.get_active_sections", lambda: secs)
+        return ple._dynamic_programs_prompt_suffix()
+
+    assert "მონაწილის ასაკი" not in suffix(False)   # off ⇒ byte-identical
+    on = suffix(True)
+    assert "მონაწილის ასაკი" in on                  # participant-age guidance added
+    assert "audience" in on

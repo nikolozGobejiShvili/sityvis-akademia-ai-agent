@@ -471,12 +471,22 @@ class ParentToolExecutor:
                 self.lead.program_id = program_id
         except Exception:  # pragma: no cover - defensive: tagging is best-effort
             pass
-        return {
+        payload = {
             "success": True, "program_id": program_id,
             "topic": str(args.get("topic") or "all"),
             "name": section.get("name"), "type": section.get("type"),
             "registration_open": reg_open, "facts": facts,
         }
+        # Program audience (2026-07-26, USE_PROGRAM_AUDIENCE): surface child/adult/family so
+        # the model asks „the PARTICIPANT's age" for a family/adult program (e.g. Formula 1),
+        # not „your CHILD's age". OFF ⇒ payload unchanged (byte-identical).
+        if getattr(_pp_settings, "USE_PROGRAM_AUDIENCE", False):
+            try:
+                from app.services import admin_config_service
+                payload["audience"] = admin_config_service.get_program_audience(section)
+            except Exception:  # pragma: no cover - defensive
+                pass
+        return payload
 
     # -- get_approved_answer (Phase 5 Task 5, USE_LEARNING) -----------------
 
