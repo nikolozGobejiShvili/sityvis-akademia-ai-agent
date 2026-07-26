@@ -87,3 +87,30 @@ def test_no_suffix_when_dynamic_off(monkeypatch):
     without the dynamic gate."""
     _pin(monkeypatch, USE_DYNAMIC_PROGRAMS=False, USE_DYNAMIC_CONTACT_CAPTURE=True)
     assert parent_llm_engine._dynamic_programs_prompt_suffix() == ""
+
+
+# --- deterministic capture (2026-07-25): the hoist runs _maybe_handle_contact_collection
+# so a bare phone in a per-product booking is captured without LLM discipline ---
+
+def _contact_conv():
+    from app.models.conversation import Conversation
+    from app.models.lead import Lead
+    c = Conversation(sender_id="x", platform="instagram", segment="PARENT")
+    c.lead = Lead(sender_id="x", platform="instagram", segment="PARENT")
+    c.pending_booking = {"source": "per_product"}   # satisfies in_contact_ctx
+    return c
+
+
+def test_bare_phone_captured_deterministically():
+    from app.flows import parent_flow
+    c = _contact_conv()
+    resp = parent_flow._maybe_handle_contact_collection(c, "595999733")
+    assert resp is not None                    # answered deterministically
+    assert c.lead.phone == "595999733"         # captured, no LLM needed
+
+
+def test_contact_collection_defers_on_question():
+    from app.flows import parent_flow
+    c = _contact_conv()
+    # a question is a discussion turn — never hijacked (defers to engine)
+    assert parent_flow._maybe_handle_contact_collection(c, "რა ღირს კონსულტაცია?") is None

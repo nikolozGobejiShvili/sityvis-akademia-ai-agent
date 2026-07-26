@@ -1083,6 +1083,311 @@ def _safety_spine(conversation: Conversation, message: str) -> str | None:
     return None
 
 
+def _maybe_handle_camp_info_early(
+    conversation: Conversation, message: str, camp_off: bool,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 5 contiguous camp INFO interceptors
+    that ran early in ``_handle_core``, grouped into one cohesive chain so the
+    dispatcher calls a single node instead of five (lowers ``_handle_core`` coupling,
+    raises cohesion — the Graphify report's flaw). The ``camp_off`` gate, the exact
+    dispatch ORDER, and the ``_sanitise_booking_confirmation`` wrapping are preserved:
+      1. final camp public policy   2. multi-question (two camp facts)
+      3. transport / logistics      4. unknown OPERATIONAL detail (anti-invention)
+      5. reservation FEE amount (unknown -> manager defer)
+    Returns the first non-None sanitised response, else None."""
+    r = None if camp_off else _maybe_handle_final_camp_public_policy(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_multi_question(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_transport_logistics(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_unknown_operational_early(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_reservation_fee_question(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    return None
+
+
+def _maybe_handle_camp_stream_chain(
+    conversation: Conversation, message: str, camp_off: bool,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 2 contiguous camp-stream
+    interceptors (stream lifecycle status, then the stream/cohort age+price direct
+    answer) grouped into one cohesive chain so ``_handle_core`` calls one node
+    instead of two. The ``camp_off`` gate, order, and ``_sanitise_booking_confirmation``
+    wrapping are preserved. Returns the first non-None sanitised response, else None."""
+    r = None if camp_off else _maybe_handle_camp_stream_lifecycle(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    r = None if camp_off else _maybe_handle_camp_stream_query(conversation, message)
+    if r is not None:
+        return _sanitise_booking_confirmation(conversation, r)
+    return None
+
+
+def _maybe_handle_camp_facts_chain(
+    conversation: Conversation, message: str, camp_off: bool,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 3 contiguous engine-block camp-facts
+    interceptors (exact-detail defer, repeat camp price with full-block age-wrapping,
+    structured camp TOPIC facts) grouped into one cohesive chain so ``_handle_core``
+    calls one node instead of three. The ``camp_off`` gate, the exact order, the
+    repeat-price full-block wrapping, and the ``_sanitise_booking_confirmation``
+    wrapping are all preserved. Returns the first non-None sanitised response, else None."""
+    # Client follow-up hotfix (2026-06-30) — EXACT-DETAIL split: a KNOWN
+    # general answer + an exact-unknown manager defer (food frequency / exact
+    # menu / staff count / peer presence / age-group count). Immediate repeat
+    # → defer only. Runs before repeat-price/camp-topic so the exact detail
+    # is never answered with only the general block.
+    exact_detail_response = None if camp_off else _maybe_handle_exact_detail(conversation, message)
+    if exact_detail_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, exact_detail_response,
+        )
+
+    # Camp price/payment split: price amount, payment process, and
+    # reservation exact amount are handled before topic/engine paths.
+    repeat_price_response = None if camp_off else _maybe_handle_repeat_camp_price(
+        conversation, message,
+    )
+    if repeat_price_response is not None:
+        if _is_camp_price_full_block_question(message):
+            repeat_price_response = _strip_redundant_age_question_if_known(
+                conversation, repeat_price_response,
+            )
+            if _is_camp_registration_open():
+                repeat_price_response = _ensure_camp_age_question(
+                    conversation, message, repeat_price_response,
+                )
+                repeat_price_response = _dedupe_child_age_questions(
+                    repeat_price_response,
+                )
+                repeat_price_response = _format_multipoint_paragraphs(
+                    repeat_price_response,
+                )
+        return _sanitise_booking_confirmation(
+            conversation, repeat_price_response,
+        )
+    # Structured camp TOPIC facts (2026-06-28): a camp-related QUESTION about
+    # a SPECIFIC concern (safety / food / gadgets / confidence / …) is
+    # answered with ONLY the 1 relevant focused block — never the whole camp
+    # description. Runs LAST among the deterministic interceptors, AFTER every
+    # canonical handler (Sunday School, adult events, booking day/time,
+    # registration link, manager phone, repeat price) — so it never overrides
+    # them and never interrupts an active consultation booking (a daypart /
+    # contact reply is consumed earlier; only an explicit NEW camp-topic
+    # question reaches here). Returns None for non-topic messages → the LLM
+    # engine answers as before.
+    camp_topic_response = None if camp_off else _maybe_handle_camp_topic_facts(
+        conversation, message,
+    )
+    if camp_topic_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, camp_topic_response,
+        )
+
+    return None
+
+
+def _maybe_handle_contact_commit_chain(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 7 contiguous lead-capture /
+    booking-commit / manager-handoff COMMITMENT interceptors (under-age manager
+    handoff, explicit manager number, name/phone correction, out-of-range age,
+    contact collection, pending-booking commit, full-contact-on-intent) grouped
+    into one cohesive deterministic chain so ``_handle_core`` calls one node
+    instead of seven. Every handler STAYS deterministic (the SAFETY/COMMITMENT
+    layer) — the exact order and the ``_sanitise_booking_confirmation`` wrapping
+    are preserved byte-for-byte. Returns the first non-None response, else None."""
+    # BUG 1 + BUG 2 (2026-06-12) — deterministic contact-collection
+    # capture. A contact-only message (a parsed phone, no explicit
+    # datetime) is saved and answered here so a bare 9-digit phone is
+    # never dropped by the stochastic LLM and a reversed „<phone> <name>"
+    # never routes to the booking/time path. Defers (None) for booking
+    # turns and a genuinely bookable future confirmed slot.
+    # Live P0/P1 Hotfix BUG A (2026-06-15) — an UNDER-AGE manager handoff
+    # with contact provided MUST actually notify the operator. Runs before
+    # the generic contact-collection ack so the under-age contact turn
+    # dispatches a real notification instead of a side-effect-free reply.
+    underage_handoff_response = _maybe_handle_underage_manager_handoff(
+        conversation, message,
+    )
+    if underage_handoff_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, underage_handoff_response,
+        )
+
+    # Explicit manager-NUMBER request (live bug 2026-06-21): disclose the
+    # configured manager number + offer a callback, BEFORE the
+    # contact-collection canned ask — so a parent who asks for the
+    # MANAGER's number is never just re-asked for their own. Under-age
+    # handoff above still takes precedence.
+    manager_number_response = _maybe_handle_explicit_manager_request(
+        conversation, message,
+    )
+    if manager_number_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, manager_number_response,
+        )
+
+    # Explicit name/phone CORRECTION (live-demo fix 2026-06-22): update the
+    # already-stored field before the contact-collection capture (which
+    # never overwrites a set field). In-memory only — no Calendar/Sheets.
+    contact_correction_response = _maybe_handle_contact_correction(
+        conversation, message,
+    )
+    if contact_correction_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, contact_correction_response,
+        )
+
+    # Out-of-range child age (live bug 2026-06-27): a disclosed age below the
+    # camp minimum („6 წლის არის…") must yield the eligibility + manager
+    # message — NOT be mis-stored as a name by the contact collector below.
+    # Runs before contact collection; eligible/over-age/no-age → None.
+    out_of_range_age_response = _maybe_handle_out_of_range_age(
+        conversation, message,
+    )
+    if out_of_range_age_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, out_of_range_age_response,
+        )
+
+    contact_response = _maybe_handle_contact_collection(
+        conversation, message,
+    )
+    if contact_response is not None:
+        return _sanitise_booking_confirmation(conversation, contact_response)
+
+    commit_response = _maybe_commit_pending_booking_engine(
+        conversation, message,
+    )
+    if commit_response is not None:
+        return _sanitise_booking_confirmation(conversation, commit_response)
+
+    # BUG 4 (2026-06-12) — on an explicit consultation request with
+    # contact still missing (and no bookable slot pending), ask for the
+    # COMPLETE contact deterministically: name + 9-digit phone when the
+    # name is not validly known, phone-only when it is. Never a partial
+    # name-less ask, never „სახელი უკვე ვიცი".
+    intent_contact_response = _maybe_request_full_contact_on_intent(
+        conversation, message,
+    )
+    if intent_contact_response is not None:
+        return _sanitise_booking_confirmation(
+            conversation, intent_contact_response,
+        )
+    return None
+
+
+def _maybe_handle_pre_engine_guards(
+    conversation: Conversation, message: str, camp_off: bool,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 5 contiguous pre-funnel guards
+    that answer-and-return BEFORE the static welcome + LLM engine (brand IDENTITY,
+    camp CALL/VISIT question, ADULT-context relative routing, POLITICAL redirect,
+    UNCLEAR-phrase clarification) grouped into one cohesive chain so ``_handle_core``
+    calls one node instead of five. Each guard keeps its OWN return handling (only
+    contact/visit is camp_off-gated + sanitised; the others return directly) and the
+    exact order is preserved byte-for-byte. Returns the first non-None response, else None."""
+    # ADDITIONAL LIVE BUG (2026-07-07) — an IDENTITY / bot question
+    # („შენ gpt ხარ?" / „ჩატჯიპიტი ხარ?" / „რობოტი ხარ?" / „ვინ ხარ?" /
+    # „ადამიანი ხარ?") is NOT political and must NEVER hit the politics refusal
+    # or the camp-age question. Answer with the brand consultant identity. Runs
+    # BEFORE the political / off-topic guard and the engine. Organizer questions
+    # („ვინ ხართ ორგანიზატორები?") are already caught by the operational defer
+    # above, so this never hijacks them.
+    identity_response = _maybe_handle_identity(conversation, message)
+    if identity_response is not None:
+        return identity_response
+
+    # ADDITIONAL LIVE BUG (2026-07-07) — once the conversation is in ADULT-EVENTS
+    # context (out-of-camp participant age, user opted into adult events),
+    # „ჩემი შვილისთვის" must NOT route back to summer camp just because the word
+    # „შვილი" appears (a child can be an adult child). Keep adult-events context:
+    # offer adult events when the participant is known-adult, else ask the
+    # participant's age. A hard camp keyword / in-band camp age still wins (camp).
+    # ADDITIONAL LIVE BUG (2026-07-08) — a camp parent's CALL / VISIT question
+    # („შემიძლია ბავშვს დავურეკო ან ჩამოვიდე და ვნახო?") must be answered as CAMP
+    # (daily updates + manager defer for the exact call/visit rules), never the
+    # adult participant-age question. Runs BEFORE the adult-context handler so a
+    # genuine camp contact question in camp context wins. Returns None for a
+    # non-contact/visit message or outside camp context.
+    contact_visit_response = None if camp_off else _maybe_handle_parent_contact_visit(conversation, message)
+    if contact_visit_response is not None:
+        return _sanitise_booking_confirmation(conversation, contact_visit_response)
+
+    adult_ctx_response = _maybe_handle_adult_context_relative(conversation, message)
+    if adult_ctx_response is not None:
+        return adult_ctx_response
+
+    # Client follow-up hotfix (2026-06-30) — political / party-identity bait →
+    # neutral redirect; an unclear Georgian phrase → polished clarification. Both
+    # run before the static welcome / engine so they preempt the funnel (no
+    # child-age question, no consultation offer).
+    political_response = _maybe_handle_political(conversation, message)
+    if political_response is not None:
+        return political_response
+    unclear_response = _maybe_handle_unclear_phrase(conversation, message)
+    if unclear_response is not None:
+        return unclear_response
+    return None
+
+
+def _maybe_handle_returning_user_state(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Phase 3 decomposition (2026-07-25) — the 4 contiguous returning-conversation
+    state guards (memory-info recall „what do you know about me?“, child
+    re-qualification on „different child“, resumed-state acknowledgement, multi-child
+    age record-and-continue) grouped into one cohesive chain so ``_handle_core`` calls one
+    node instead of four. All four return directly (none sanitised, none camp_off-gated);
+    the exact order is preserved byte-for-byte. Returns the first non-None response, else None."""
+    # Booked State Memory Response Polish (2026-05-30) — deterministic
+    # short-circuit for "what info do you have about me?" questions.
+    # Runs BEFORE the engine so the LLM never gets a chance to leak
+    # "მყარი ჯავშანი" / "ეკრანსიგან" wording or to suggest yet another
+    # consultation booking to an already-booked parent. Returns None for
+    # any other inbound text, so normal flow continues.
+    memory_info_response = _maybe_memory_info_reply(conversation, message)
+    if memory_info_response is not None:
+        return memory_info_response
+
+    # FIX 3 (2026-06-11) — re-qualification: an explicit „different child
+    # / age" message clears the stored child_age and re-asks. Runs before
+    # the engine so the cleared state drives the rest of the turn.
+    requalify_response = _maybe_requalify_child(conversation, message)
+    if requalify_response is not None:
+        return requalify_response
+
+    # FIX 3 (2026-06-11) — stored-state transparency: on a greeting /
+    # restart of a resumed (completed/booked) conversation that already
+    # has a stored child_age, acknowledge it once instead of silently
+    # reusing it.
+    resume_ack = _maybe_acknowledge_stored_state(conversation, message)
+    if resume_ack is not None:
+        return resume_ack
+
+    # Multi-child age record-and-continue (2026-07-06 client fix) — a parent
+    # registering two children states two ages („12-14 წლის" / „12 და 14 წლის").
+    # The age-range guard used to silently drop „12-14" (mistaking it for the
+    # advertised „9-17" band), so the booking kept re-asking the age. Record BOTH
+    # ages BEFORE the engine (child_age = first in-band gate value; full list in
+    # the manager-visible deeper_concern field), acknowledge, and continue. The
+    # band is still never captured. Returns None for a single age / the band / an
+    # eligibility question → the normal flow continues unchanged.
+    multi_child_age_response = _maybe_handle_multi_child_age(conversation, message)
+    if multi_child_age_response is not None:
+        return multi_child_age_response
+    return None
+
+
 def _handle_core(conversation: Conversation, message: str) -> str:
     """Public entry point — runs `_handle_impl` and applies the PART 8
     fake-booking guard before returning.
@@ -1199,6 +1504,24 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if hoisted_injection_response is not None:
             return hoisted_injection_response
 
+        # Dynamic contact capture (deterministic, 2026-07-25) — the hoist returns
+        # to the engine below, bypassing the deterministic contact-collection
+        # handler. Live bug: in a dynamic-product booking a bare „595999733" was
+        # re-requested because the LLM did not reliably persist/advance it. Run the
+        # SAME program-agnostic contact-collection handler here first (it captures
+        # name+phone and replies deterministically, and self-defers on a question /
+        # age / datetime / bookable-slot turn) so a per-product contact turn never
+        # depends on LLM discipline. Gated on USE_DYNAMIC_CONTACT_CAPTURE (which
+        # also adds the prompt nudge); OFF ⇒ straight to the engine, byte-identical.
+        if getattr(settings, "USE_DYNAMIC_CONTACT_CAPTURE", False):
+            hoisted_contact_response = _maybe_handle_contact_collection(
+                conversation, message,
+            )
+            if hoisted_contact_response is not None:
+                return _sanitise_booking_confirmation(
+                    conversation, hoisted_contact_response,
+                )
+
         return _sanitise_booking_confirmation(
             conversation, _run_llm_engine_safely(conversation, message),
         )
@@ -1252,129 +1575,23 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # booking/contact/safety interceptors are NEVER gated. OFF ⇒ False ⇒ unchanged.
     camp_off = _camp_off_suppresses_info(message)
 
-    final_camp_policy_response = None if camp_off else _maybe_handle_final_camp_public_policy(
-        conversation,
-        message,
+    camp_info_early_response = _maybe_handle_camp_info_early(
+        conversation, message, camp_off,
     )
-    if final_camp_policy_response is not None:
-        return _sanitise_booking_confirmation(
-            conversation,
-            final_camp_policy_response,
-        )
+    if camp_info_early_response is not None:
+        return camp_info_early_response
 
-    # Client follow-up hotfix (2026-06-30) — LIMITED multi-question FIRST: a
-    # message with TWO distinct camp parts (price + sports, safety +
-    # parent-contact, price + seats/stadium) answers BOTH. Runs before the
-    # single-topic operational / seats / repeat-price interceptors so
-    # „ფასი … და ადგილები" is not collapsed to just the seats defer. A
-    # single-topic message returns None (unchanged flow).
-    multi_response = None if camp_off else _maybe_handle_multi_question(conversation, message)
-    if multi_response is not None:
-        return _sanitise_booking_confirmation(conversation, multi_response)
-
-    # ADDITIONAL LIVE BUG (2026-07-06) — a TRANSPORT / logistics question
-    # („ტრანსპორტირება როგორ მოხდება?" / „ტრანსპორტი საიდან გადის?" /
-    # „მე თელავში ვცხოვრობ …") must be answered as TRANSPORT, never as sports.
-    # Root cause: the sports camp-topic keyword „სპორტ" is a SUBSTRING of
-    # „ტრან-სპორტ-ირება", so every transport question matched the sports answer.
-    # This deterministic interceptor runs BEFORE the operational / camp-topic
-    # handlers and owns transport wording (known fact: transport is included in
-    # the price; exact regional pickup/route is deferred to the manager). It
-    # also corrects a „სპორტი რა შუაშია?" challenge after a wrong sports reply.
-    transport_response = None if camp_off else _maybe_handle_transport_logistics(conversation, message)
-    if transport_response is not None:
-        return _sanitise_booking_confirmation(conversation, transport_response)
-
-    # Client follow-up hotfix (2026-06-29) — GLOBAL anti-invention defer FIRST.
-    # An unsupported OPERATIONAL detail question (seats / room count / towels /
-    # hotel / transport / day schedule / direct-call rules / organizer / generic)
-    # must NEVER show the camp intro or ask the child's age — not even on the
-    # first turn. It runs BEFORE the static welcome so a fresh
-    # „ოთახში რამდენი ბავშვი იქნება?" gets the honest manager defer, not the
-    # menu/age question. Returns None for everything else (unchanged behaviour).
-    early_operational_response = None if camp_off else _maybe_handle_unknown_operational_early(
-        conversation, message,
+    pre_engine_guard_response = _maybe_handle_pre_engine_guards(
+        conversation, message, camp_off,
     )
-    if early_operational_response is not None:
-        return _sanitise_booking_confirmation(
-            conversation, early_operational_response,
-        )
+    if pre_engine_guard_response is not None:
+        return pre_engine_guard_response
 
-    # BUG 2 (2026-07-06) — the exact reservation/booking FEE amount is not
-    # configured. A „ჯავშნის საფასური რამდენია?" question must defer to the
-    # manager (unknown-detail pattern), never invent a vague „part of the full
-    # price" answer. Runs before the price/payment handling so it takes priority
-    # over the payment-method answer; the METHOD question is left untouched.
-    reservation_fee_response = None if camp_off else _maybe_handle_reservation_fee_question(
-        conversation, message,
+    camp_stream_chain_response = _maybe_handle_camp_stream_chain(
+        conversation, message, camp_off,
     )
-    if reservation_fee_response is not None:
-        return _sanitise_booking_confirmation(
-            conversation, reservation_fee_response,
-        )
-
-    # ADDITIONAL LIVE BUG (2026-07-07) — an IDENTITY / bot question
-    # („შენ gpt ხარ?" / „ჩატჯიპიტი ხარ?" / „რობოტი ხარ?" / „ვინ ხარ?" /
-    # „ადამიანი ხარ?") is NOT political and must NEVER hit the politics refusal
-    # or the camp-age question. Answer with the brand consultant identity. Runs
-    # BEFORE the political / off-topic guard and the engine. Organizer questions
-    # („ვინ ხართ ორგანიზატორები?") are already caught by the operational defer
-    # above, so this never hijacks them.
-    identity_response = _maybe_handle_identity(conversation, message)
-    if identity_response is not None:
-        return identity_response
-
-    # ADDITIONAL LIVE BUG (2026-07-07) — once the conversation is in ADULT-EVENTS
-    # context (out-of-camp participant age, user opted into adult events),
-    # „ჩემი შვილისთვის" must NOT route back to summer camp just because the word
-    # „შვილი" appears (a child can be an adult child). Keep adult-events context:
-    # offer adult events when the participant is known-adult, else ask the
-    # participant's age. A hard camp keyword / in-band camp age still wins (camp).
-    # ADDITIONAL LIVE BUG (2026-07-08) — a camp parent's CALL / VISIT question
-    # („შემიძლია ბავშვს დავურეკო ან ჩამოვიდე და ვნახო?") must be answered as CAMP
-    # (daily updates + manager defer for the exact call/visit rules), never the
-    # adult participant-age question. Runs BEFORE the adult-context handler so a
-    # genuine camp contact question in camp context wins. Returns None for a
-    # non-contact/visit message or outside camp context.
-    contact_visit_response = None if camp_off else _maybe_handle_parent_contact_visit(conversation, message)
-    if contact_visit_response is not None:
-        return _sanitise_booking_confirmation(conversation, contact_visit_response)
-
-    adult_ctx_response = _maybe_handle_adult_context_relative(conversation, message)
-    if adult_ctx_response is not None:
-        return adult_ctx_response
-
-    # Client follow-up hotfix (2026-06-30) — political / party-identity bait →
-    # neutral redirect; an unclear Georgian phrase → polished clarification. Both
-    # run before the static welcome / engine so they preempt the funnel (no
-    # child-age question, no consultation offer).
-    political_response = _maybe_handle_political(conversation, message)
-    if political_response is not None:
-        return political_response
-    unclear_response = _maybe_handle_unclear_phrase(conversation, message)
-    if unclear_response is not None:
-        return unclear_response
-
-    camp_stream_lifecycle_response = None if camp_off else _maybe_handle_camp_stream_lifecycle(
-        conversation,
-        message,
-    )
-    if camp_stream_lifecycle_response is not None:
-        return _sanitise_booking_confirmation(
-            conversation,
-            camp_stream_lifecycle_response,
-        )
-
-    # Camp stream/cohort direct answer (live bug 2026-07-07) — a message that
-    # names a camp STREAM/cohort („ნაკადი" / „მესამე ნაკადი" / „3 ნაკადი") and
-    # asks the age limit and/or price is unambiguous camp intent. Answer it
-    # directly (stream date + age band + price + inclusions) BEFORE the static
-    # welcome so it is never shown the generic camp-vs-adult menu. Typo-tolerant
-    # („ასოკობრივი" → „ასაკობრივი"). Seats/operational stream questions and a
-    # bare stream-dates question (no age/price) return None (own handler/engine).
-    camp_stream_response = None if camp_off else _maybe_handle_camp_stream_query(conversation, message)
-    if camp_stream_response is not None:
-        return _sanitise_booking_confirmation(conversation, camp_stream_response)
+    if camp_stream_chain_response is not None:
+        return camp_stream_chain_response
 
     # Static welcome bypass.
     # On the bot's first reply at state=START, return the static
@@ -1396,42 +1613,11 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             _fetch_profile_into_lead(conversation, lead)
         return static_welcome
 
-    # Booked State Memory Response Polish (2026-05-30) — deterministic
-    # short-circuit for "what info do you have about me?" questions.
-    # Runs BEFORE the engine so the LLM never gets a chance to leak
-    # "მყარი ჯავშანი" / "ეკრანსიგან" wording or to suggest yet another
-    # consultation booking to an already-booked parent. Returns None for
-    # any other inbound text, so normal flow continues.
-    memory_info_response = _maybe_memory_info_reply(conversation, message)
-    if memory_info_response is not None:
-        return memory_info_response
-
-    # FIX 3 (2026-06-11) — re-qualification: an explicit „different child
-    # / age" message clears the stored child_age and re-asks. Runs before
-    # the engine so the cleared state drives the rest of the turn.
-    requalify_response = _maybe_requalify_child(conversation, message)
-    if requalify_response is not None:
-        return requalify_response
-
-    # FIX 3 (2026-06-11) — stored-state transparency: on a greeting /
-    # restart of a resumed (completed/booked) conversation that already
-    # has a stored child_age, acknowledge it once instead of silently
-    # reusing it.
-    resume_ack = _maybe_acknowledge_stored_state(conversation, message)
-    if resume_ack is not None:
-        return resume_ack
-
-    # Multi-child age record-and-continue (2026-07-06 client fix) — a parent
-    # registering two children states two ages („12-14 წლის" / „12 და 14 წლის").
-    # The age-range guard used to silently drop „12-14" (mistaking it for the
-    # advertised „9-17" band), so the booking kept re-asking the age. Record BOTH
-    # ages BEFORE the engine (child_age = first in-band gate value; full list in
-    # the manager-visible deeper_concern field), acknowledge, and continue. The
-    # band is still never captured. Returns None for a single age / the band / an
-    # eligibility question → the normal flow continues unchanged.
-    multi_child_age_response = _maybe_handle_multi_child_age(conversation, message)
-    if multi_child_age_response is not None:
-        return multi_child_age_response
+    returning_state_response = _maybe_handle_returning_user_state(
+        conversation, message,
+    )
+    if returning_state_response is not None:
+        return returning_state_response
 
     # Turn Intent Gateway (Reasoning Layer Phase 2, 2026-06-23) — central,
     # DETERMINISTIC, metadata-only intent classification computed ONCE per turn
@@ -1610,136 +1796,17 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if reschedule_response is not None:
             return _sanitise_booking_confirmation(conversation, reschedule_response)
 
-        # BUG 1 + BUG 2 (2026-06-12) — deterministic contact-collection
-        # capture. A contact-only message (a parsed phone, no explicit
-        # datetime) is saved and answered here so a bare 9-digit phone is
-        # never dropped by the stochastic LLM and a reversed „<phone> <name>"
-        # never routes to the booking/time path. Defers (None) for booking
-        # turns and a genuinely bookable future confirmed slot.
-        # Live P0/P1 Hotfix BUG A (2026-06-15) — an UNDER-AGE manager handoff
-        # with contact provided MUST actually notify the operator. Runs before
-        # the generic contact-collection ack so the under-age contact turn
-        # dispatches a real notification instead of a side-effect-free reply.
-        underage_handoff_response = _maybe_handle_underage_manager_handoff(
+        contact_commit_chain_response = _maybe_handle_contact_commit_chain(
             conversation, message,
         )
-        if underage_handoff_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, underage_handoff_response,
-            )
+        if contact_commit_chain_response is not None:
+            return contact_commit_chain_response
 
-        # Explicit manager-NUMBER request (live bug 2026-06-21): disclose the
-        # configured manager number + offer a callback, BEFORE the
-        # contact-collection canned ask — so a parent who asks for the
-        # MANAGER's number is never just re-asked for their own. Under-age
-        # handoff above still takes precedence.
-        manager_number_response = _maybe_handle_explicit_manager_request(
-            conversation, message,
+        camp_facts_chain_response = _maybe_handle_camp_facts_chain(
+            conversation, message, camp_off,
         )
-        if manager_number_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, manager_number_response,
-            )
-
-        # Explicit name/phone CORRECTION (live-demo fix 2026-06-22): update the
-        # already-stored field before the contact-collection capture (which
-        # never overwrites a set field). In-memory only — no Calendar/Sheets.
-        contact_correction_response = _maybe_handle_contact_correction(
-            conversation, message,
-        )
-        if contact_correction_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, contact_correction_response,
-            )
-
-        # Out-of-range child age (live bug 2026-06-27): a disclosed age below the
-        # camp minimum („6 წლის არის…") must yield the eligibility + manager
-        # message — NOT be mis-stored as a name by the contact collector below.
-        # Runs before contact collection; eligible/over-age/no-age → None.
-        out_of_range_age_response = _maybe_handle_out_of_range_age(
-            conversation, message,
-        )
-        if out_of_range_age_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, out_of_range_age_response,
-            )
-
-        contact_response = _maybe_handle_contact_collection(
-            conversation, message,
-        )
-        if contact_response is not None:
-            return _sanitise_booking_confirmation(conversation, contact_response)
-
-        commit_response = _maybe_commit_pending_booking_engine(
-            conversation, message,
-        )
-        if commit_response is not None:
-            return _sanitise_booking_confirmation(conversation, commit_response)
-
-        # BUG 4 (2026-06-12) — on an explicit consultation request with
-        # contact still missing (and no bookable slot pending), ask for the
-        # COMPLETE contact deterministically: name + 9-digit phone when the
-        # name is not validly known, phone-only when it is. Never a partial
-        # name-less ask, never „სახელი უკვე ვიცი".
-        intent_contact_response = _maybe_request_full_contact_on_intent(
-            conversation, message,
-        )
-        if intent_contact_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, intent_contact_response,
-            )
-
-        # Client follow-up hotfix (2026-06-30) — EXACT-DETAIL split: a KNOWN
-        # general answer + an exact-unknown manager defer (food frequency / exact
-        # menu / staff count / peer presence / age-group count). Immediate repeat
-        # → defer only. Runs before repeat-price/camp-topic so the exact detail
-        # is never answered with only the general block.
-        exact_detail_response = None if camp_off else _maybe_handle_exact_detail(conversation, message)
-        if exact_detail_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, exact_detail_response,
-            )
-
-        # Camp price/payment split: price amount, payment process, and
-        # reservation exact amount are handled before topic/engine paths.
-        repeat_price_response = None if camp_off else _maybe_handle_repeat_camp_price(
-            conversation, message,
-        )
-        if repeat_price_response is not None:
-            if _is_camp_price_full_block_question(message):
-                repeat_price_response = _strip_redundant_age_question_if_known(
-                    conversation, repeat_price_response,
-                )
-                if _is_camp_registration_open():
-                    repeat_price_response = _ensure_camp_age_question(
-                        conversation, message, repeat_price_response,
-                    )
-                    repeat_price_response = _dedupe_child_age_questions(
-                        repeat_price_response,
-                    )
-                    repeat_price_response = _format_multipoint_paragraphs(
-                        repeat_price_response,
-                    )
-            return _sanitise_booking_confirmation(
-                conversation, repeat_price_response,
-            )
-        # Structured camp TOPIC facts (2026-06-28): a camp-related QUESTION about
-        # a SPECIFIC concern (safety / food / gadgets / confidence / …) is
-        # answered with ONLY the 1 relevant focused block — never the whole camp
-        # description. Runs LAST among the deterministic interceptors, AFTER every
-        # canonical handler (Sunday School, adult events, booking day/time,
-        # registration link, manager phone, repeat price) — so it never overrides
-        # them and never interrupts an active consultation booking (a daypart /
-        # contact reply is consumed earlier; only an explicit NEW camp-topic
-        # question reaches here). Returns None for non-topic messages → the LLM
-        # engine answers as before.
-        camp_topic_response = None if camp_off else _maybe_handle_camp_topic_facts(
-            conversation, message,
-        )
-        if camp_topic_response is not None:
-            return _sanitise_booking_confirmation(
-                conversation, camp_topic_response,
-            )
+        if camp_facts_chain_response is not None:
+            return camp_facts_chain_response
 
         # Today-first consultation availability (hotfix 2026-06-28): a „nearest
         # free time" / „is today free?" question is answered deterministically
