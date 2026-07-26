@@ -828,6 +828,25 @@ def _msg_is_camp_ended_question(message: str) -> bool:
     return "ბანაკ" in low and any(m in low for m in _CAMP_ENDED_Q_MARKERS)
 
 
+_DISSATISFIED_MARKERS: tuple[str, ...] = (
+    "საზიზღარ", "თაღლით", "მოტყუებ", "სირცხვილ", "უპატიო", "საშინელ",
+    "იმედი გამიცრუ", "იმედგაცრუებ", "წარმატებას ვერ", "წარმატებებს ვერ",
+    "ცუდი კომპანია", "ცუდი მომსახურ", "უხეშ", "აზრი არ აქვს", "დროის კარგვ",
+    "ალოგიკურ", "სისულელ", "გამაბრაზ", "ნერვ", "საჩივ", "უკმაყოფილ",
+)
+
+def _msg_is_dissatisfaction(message: str) -> bool:
+    """A harsh complaint / insult about the company — a ROUTING signal, not a handler.
+    The de-escalation RESPONSE is the operator-editable `dissatisfied-customer` SKILL at
+    the LLM layer (`app/agent/skills/dissatisfied-customer.md`); per the interceptors→tools
+    plan, advisory behaviour is NOT a substring interceptor. This predicate only lets a
+    dissatisfaction turn REACH the engine — e.g. camp-status must not treat an insult that
+    happens to name camp as a camp question. A plain price objection („ძვირია") is not here
+    (it keeps selling)."""
+    low = (message or "").lower()
+    return any(m in low for m in _DISSATISFIED_MARKERS)
+
+
 def _maybe_handle_camp_status(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -844,6 +863,13 @@ def _maybe_handle_camp_status(
     except Exception:  # pragma: no cover — never disable camp on error
         return None
     if status == "active":
+        return None
+
+    # A dissatisfaction / insult that happens to NAME camp („თქვენი ბანაკი მხოლოდ
+    # მდიდარი…") is NOT a camp question — route it to the engine so the operator-editable
+    # `dissatisfied-customer` skill answers with empathy + manager, not „camp ended".
+    # Advisory de-escalation lives in the skill layer, not in this deterministic gate.
+    if _msg_is_dissatisfaction(message):
         return None
 
     has_camp = _msg_has_camp_intent(message)
@@ -1503,6 +1529,21 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             )
         if hoisted_injection_response is not None:
             return hoisted_injection_response
+
+        # Camp-off status guard for the HOISTED path (2026-07-26 live test). The hoist
+        # returns to the engine below and BYPASSES `_maybe_handle_camp_status` (line
+        # ~1537). Live bug: after a Disneyland (per-product) booking a camp question
+        # („ბანაკი დამთავრდა?") reached the camp-centric LLM, which offered camp — asked
+        # the child's age → „ბანაკი ამ ასაკისთვის შესაბამისია". Camp being OFF is a status
+        # fact that must hold on EVERY path, so run the SAME deterministic „camp ended"
+        # gate here first. Gated on USE_CAMP_OFF_GATE; returns None when camp is active OR
+        # the message is not a camp question ⇒ straight to the engine, byte-identical.
+        if getattr(settings, "USE_CAMP_OFF_GATE", False):
+            hoisted_camp_status = _maybe_handle_camp_status(conversation, message)
+            if hoisted_camp_status is not None:
+                return _sanitise_booking_confirmation(
+                    conversation, hoisted_camp_status,
+                )
 
         # Dynamic contact capture (deterministic, 2026-07-25) — the hoist returns
         # to the engine below, bypassing the deterministic contact-collection
