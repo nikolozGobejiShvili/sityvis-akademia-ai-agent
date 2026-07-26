@@ -246,6 +246,46 @@ def get_active_sections() -> list[dict[str, Any]]:
     ]
 
 
+def get_program_audience(section: dict[str, Any] | None) -> str:
+    """Program audience — ``"child"`` | ``"adult"`` | ``"family"`` (2026-07-26).
+
+    An explicit ``audience`` field wins; otherwise it is derived from ``type``
+    (``camp`` / ``kids_program`` → child, ``adult_events`` → adult) and an unknown
+    type falls back to ``"family"`` (safe middle: offered to children AND asked the
+    participant's age, never assumed to be only a child). Never raises."""
+    try:
+        aud = str((section or {}).get("audience") or "").strip().casefold()
+        if aud in ("child", "adult", "family"):
+            return aud
+        t = str((section or {}).get("type") or "").strip().casefold()
+        if t in ("camp", "kids_program"):
+            return "child"
+        if t == "adult_events":
+            return "adult"
+        return "family"
+    except Exception:  # pragma: no cover - defensive
+        return "family"
+
+
+def get_active_child_program_names() -> list[str]:
+    """Names of ACTIVE programs whose audience includes children (``child``/``family``),
+    for the camp-off „what else" offer — so a camp-off message names the currently
+    active child options from the config (Sunday School only if it is actually active),
+    NOT a hardcoded program. Excludes ``summer_camp``. Never raises → [] on error."""
+    try:
+        out: list[str] = []
+        for s in get_active_sections():
+            if str(s.get("id") or "").strip() == "summer_camp":
+                continue
+            if get_program_audience(s) in ("child", "family"):
+                name = str(s.get("name") or "").strip()
+                if name:
+                    out.append(name)
+        return out
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+
 def is_section_active(section_id: str) -> bool:
     """True when the section's ``status`` is "active" (case/whitespace-insensitive).
 
