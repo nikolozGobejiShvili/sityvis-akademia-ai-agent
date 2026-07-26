@@ -2816,15 +2816,33 @@ _OFFTOPIC_UNCLEAR_NEW = (
 )
 
 
+# BUG-2 (2026-07-26 live test): the ~24KB camp-centric system prompt made the LLM
+# default to offering „საზაფხულო ბანაკი" even on an OFF-TOPIC turn (asked the weather
+# → „თუ ბანაკის პროგრამის დეტალები გაინტერესებთ…"), despite USE_OFFTOPIC_INTELLIGENCE
+# being on. The 2 targeted line rewrites can't overcome the camp-saturated body, so we
+# APPEND a strong program-agnostic directive: state the camp-off reality and route every
+# redirect to the ACTIVE programs from the tool. Logic (reflects camp status = data), not
+# a sanitizer ban. Reflects the camp-always-off constraint; gated by the same flag.
+_OFFTOPIC_PROGRAM_AGNOSTIC_DIRECTIVE = (
+    "\n\n[პროგრამა-აგნოსტიკური წესი — CRITICAL] საზაფხულო ბანაკი ამჟამად დასრულებულია "
+    "და აქტიური შეთავაზება არ არის. *არასოდეს* შესთავაზო ან default-ად ახსენო ბანაკი, "
+    "როგორც ხელმისაწვდომი. როცა კითხვა ჩვენს პროგრამებს არ ეხება (off-topic), ან "
+    "გჭირდება გადამისამართება, ან მომხმარებელი კითხულობს რას სთავაზობთ — ახსენე მხოლოდ "
+    "ამჟამად აქტიური პროგრამები — მათი სახელები აიღე list_programs / get_program_info "
+    "ხელსაწყოდან, არა მეხსიერებიდან. თუ არ იცი აქტიური პროგრამები, გამოიძახე list_programs."
+)
+
+
 def _apply_offtopic_intelligence(prompt: str) -> str:
     """Program-agnostic, logic-oriented off-topic guidance. Flag off ⇒ unchanged."""
     if not getattr(settings, "USE_OFFTOPIC_INTELLIGENCE", False):
         return prompt
-    return (
+    rewritten = (
         prompt
         .replace(_OFFTOPIC_POLITICAL_OLD, _OFFTOPIC_POLITICAL_NEW)
         .replace(_OFFTOPIC_UNCLEAR_OLD, _OFFTOPIC_UNCLEAR_NEW)
     )
+    return rewritten + _OFFTOPIC_PROGRAM_AGNOSTIC_DIRECTIVE
 
 
 def _build_system_prompt(message: str = "", segment: str = "") -> str:
