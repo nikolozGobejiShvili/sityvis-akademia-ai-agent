@@ -486,6 +486,12 @@ class Settings:
     # the LLM briefly says it's out of scope and offers the active programs, instead
     # of parroting a clarify or referencing camp. OFF ⇒ prompt byte-identical.
     USE_OFFTOPIC_INTELLIGENCE: bool = False
+    # Dissatisfied-customer de-escalation (2026-07-26 live test): a harsh complaint /
+    # insult about the company („საზიზღარი კომპანია…", „ალოგიკური პასუხი…") made the
+    # camp-centric LLM DEFEND/pitch camp. When on, a clear dissatisfaction/insult turn
+    # gets a short empathetic de-escalation + the manager's number + an offer to connect
+    # — with NO camp and NO program mention. OFF ⇒ byte-identical.
+    USE_DISSATISFIED_DEESCALATION: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -719,6 +725,9 @@ class Settings:
             ),
             USE_OFFTOPIC_INTELLIGENCE=_parse_bool_optional(
                 "USE_OFFTOPIC_INTELLIGENCE", False,
+            ),
+            USE_DISSATISFIED_DEESCALATION=_parse_bool_optional(
+                "USE_DISSATISFIED_DEESCALATION", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

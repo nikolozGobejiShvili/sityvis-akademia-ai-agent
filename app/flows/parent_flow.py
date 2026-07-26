@@ -828,6 +828,43 @@ def _msg_is_camp_ended_question(message: str) -> bool:
     return "ბანაკ" in low and any(m in low for m in _CAMP_ENDED_Q_MARKERS)
 
 
+_DISSATISFIED_MARKERS: tuple[str, ...] = (
+    "საზიზღარ", "თაღლით", "მოტყუებ", "სირცხვილ", "უპატიო", "საშინელ",
+    "იმედი გამიცრუ", "იმედგაცრუებ", "წარმატებას ვერ", "წარმატებებს ვერ",
+    "ცუდი კომპანია", "ცუდი მომსახურ", "უხეშ", "აზრი არ აქვს", "დროის კარგვ",
+    "ალოგიკურ", "სისულელ", "გამაბრაზ", "ნერვ", "საჩივ", "უკმაყოფილ",
+)
+
+_DISSATISFIED_DEESCALATION: str = (
+    "ძალიან ვწუხვარ, რომ უკმაყოფილო დარჩით. თქვენი აზრი ჩვენთვის მნიშვნელოვანია და "
+    "მინდა, საკითხი სამართლიანად მოგვარდეს. ამ შემთხვევაში საუკეთესოა, პირდაპირ "
+    "მენეჯერს დაუკავშირდეთ: {phone}. თუ გსურთ, მე დაგაკავშირებთ — მომწერეთ თქვენი "
+    "სახელი და საკონტაქტო ნომერი."
+)
+
+
+def _maybe_handle_dissatisfied_customer(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Empathetic de-escalation for a harsh complaint / insult about the company
+    (2026-07-26 live test: „საზიზღარი კომპანია…" made the camp-centric LLM DEFEND camp).
+    Returns a short empathy + manager-number + connect offer — with NO camp and NO
+    program mention. Returns None for any non-insult turn (a plain price objection is
+    NOT an insult and keeps selling). Gated by USE_DISSATISFIED_DEESCALATION ⇒ OFF
+    byte-identical. Never raises."""
+    if not getattr(settings, "USE_DISSATISFIED_DEESCALATION", False):
+        return None
+    low = (message or "").lower()
+    if not any(m in low for m in _DISSATISFIED_MARKERS):
+        return None
+    try:
+        from app.services import admin_config_service
+        phone = (admin_config_service.get_manager_phone() or "").strip() or "558 67 47 33"
+    except Exception:  # pragma: no cover — defensive
+        phone = "558 67 47 33"
+    return _DISSATISFIED_DEESCALATION.format(phone=phone)
+
+
 def _maybe_handle_camp_status(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -1504,6 +1541,14 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if hoisted_injection_response is not None:
             return hoisted_injection_response
 
+        # Dissatisfied-customer de-escalation for the HOISTED path (2026-07-26). An
+        # insult that names camp („თქვენი ბანაკი მხოლოდ მდიდარი…") must get empathy +
+        # manager, NOT the „camp ended" gate below and NOT the camp-centric LLM. Runs
+        # first so it wins over both. Gated ⇒ OFF byte-identical.
+        hoisted_dissatisfied = _maybe_handle_dissatisfied_customer(conversation, message)
+        if hoisted_dissatisfied is not None:
+            return _sanitise_booking_confirmation(conversation, hoisted_dissatisfied)
+
         # Camp-off status guard for the HOISTED path (2026-07-26 live test). The hoist
         # returns to the engine below and BYPASSES `_maybe_handle_camp_status` (line
         # ~1537). Live bug: after a Disneyland (per-product) booking a camp question
@@ -1549,6 +1594,13 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # message gets BOTH the camp line and the Sunday-School answer; a PURE
     # Sunday-School / adult / manager message is not intercepted (returns None).
     # No-op when status == active → existing behaviour is byte-identical.
+    # Dissatisfied-customer de-escalation (2026-07-26): a harsh complaint / insult about
+    # the company gets empathy + manager + connect offer (NO camp, NO program), before
+    # the camp-status / camp-intro / engine paths. Gated ⇒ OFF byte-identical.
+    dissatisfied_response = _maybe_handle_dissatisfied_customer(conversation, message)
+    if dissatisfied_response is not None:
+        return _sanitise_booking_confirmation(conversation, dissatisfied_response)
+
     camp_status_response = _maybe_handle_camp_status(conversation, message)
     if camp_status_response is not None:
         return camp_status_response
