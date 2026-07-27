@@ -930,6 +930,22 @@ def _maybe_handle_camp_status(
     if getattr(settings, "USE_PROGRAM_ISOLATION", False) and _msg_names_other_program(message):
         return None
 
+    # Per-product context defer (2026-07-27 live test #6): a FOLLOW-UP money/payment
+    # question in an active NON-camp program conversation — one the lead is already
+    # tagged to (e.g. Disneyland just discussed) — that does NOT re-name a program is
+    # about THAT program, not camp. „წინასწარი გადასახადი არის თუ ერთიანად?" during a
+    # Disneyland chat hit the camp price detector (`გადასახად` ∈ _CAMP_PRICE_MARKERS)
+    # and got „ბანაკი დასრულდა". Defer to the engine unless the message EXPLICITLY names
+    # camp (a hard camp keyword still gets the camp status). Gated by USE_PROGRAM_ISOLATION;
+    # `_is_active_per_product_booking` is itself gated on USE_PER_PRODUCT_BOOKING ⇒
+    # double-gated, OFF ⇒ byte-identical.
+    if (
+        getattr(settings, "USE_PROGRAM_ISOLATION", False)
+        and _is_active_per_product_booking(conversation)
+        and not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS)
+    ):
+        return None
+
     has_camp = _msg_has_camp_intent(message)
     is_child_offering = _msg_is_child_offering(message)
 
