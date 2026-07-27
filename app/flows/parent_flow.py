@@ -5671,7 +5671,9 @@ def _maybe_handle_underage_manager_handoff(
             lead.name, lead.name,
         ):
             lead.name = ""
-        return _render_manager_number_answer(lead)
+        _manager_out = _render_manager_number_answer(lead)
+        _mark_manager_number_disclosed(conversation)
+        return _manager_out
 
     # Parse any contact in THIS message (any order: „ნიკოლოზი 595999733",
     # „595999733 ნიკოლოზი", „მე ვარ ნიკოლოზი, 595999733").
@@ -6412,6 +6414,23 @@ def _manager_number_answer_fallback(
     )
 
 
+def _mark_manager_number_disclosed(conversation) -> None:
+    """Block future follow-up once the MANAGER's number has been disclosed to the user
+    (operator rule, 2026-07-28: „got the manager's number → no follow-up"). Sets the same
+    `manager_handoff_completed` reason the callback path uses; never overrides a stronger
+    stop (`declined` / `asked_no_more_messages`). Gated on USE_PROGRAM_FOLLOWUP — no-op when
+    off (byte-identical). Never raises."""
+    if not getattr(settings, "USE_PROGRAM_FOLLOWUP", False):
+        return
+    try:
+        if getattr(conversation, "followup_blocked_reason", "") not in {
+            "declined", "asked_no_more_messages",
+        }:
+            conversation.followup_blocked_reason = "manager_handoff_completed"
+    except Exception:  # pragma: no cover — defensive
+        pass
+
+
 def _render_manager_number_answer(
     lead: Lead | None = None, *, self_call: bool = False,
 ) -> str:
@@ -6486,7 +6505,12 @@ def _maybe_handle_explicit_manager_request(
         "disclosure (self_call=%s sender=%s)", is_self_call,
         conversation.sender_id,
     )
-    return _render_manager_number_answer(lead, self_call=is_self_call)
+    _manager_out = _render_manager_number_answer(lead, self_call=is_self_call)
+    # A self-call (user asking about their OWN number) is not a manager handoff — only
+    # block follow-up when the MANAGER's number was actually disclosed.
+    if not is_self_call:
+        _mark_manager_number_disclosed(conversation)
+    return _manager_out
 
 
 # -- contact correction (phone / name) — live-demo fix (2026-06-22) ---------
@@ -7401,7 +7425,9 @@ def _planner_protect_manager_phone(conversation, message: str, plan) -> str | No
             "[planner][auth] manager-phone request → deterministic disclosure "
             "(overrides pending state, sender=%s)", conversation.sender_id,
         )
-        return _render_manager_number_answer(lead)
+        _manager_out = _render_manager_number_answer(lead)
+        _mark_manager_number_disclosed(conversation)
+        return _manager_out
     except Exception:  # pragma: no cover — defensive
         return None
 
@@ -7412,7 +7438,9 @@ def _planner_pre_answer(conversation, message: str, plan) -> str | None:
     try:
         intent = getattr(plan, "user_current_intent", "")
         if intent == "manager_phone_request":
-            return _render_manager_number_answer(_ensure_lead(conversation))
+            _manager_out = _render_manager_number_answer(_ensure_lead(conversation))
+            _mark_manager_number_disclosed(conversation)
+            return _manager_out
         if intent == "camp_registration":
             # Bare „რეგისტრაცია მინდა" in an active camp context → the configured
             # registration link, never an age question (Class 5 #2).
@@ -7577,6 +7605,7 @@ def planner_final_validate(conversation, plan, response: str) -> str:
             if not digits or digits not in re.sub(r"\D", "", out):
                 logger.info("[planner][validator] forced manager-phone disclosure")
                 out = _render_manager_number_answer(getattr(conversation, "lead", None))
+                _mark_manager_number_disclosed(conversation)
                 low = out.lower()
 
         # 2) A registration request MUST return the link and MUST NOT append an

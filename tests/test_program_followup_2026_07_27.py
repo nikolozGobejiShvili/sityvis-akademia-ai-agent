@@ -108,3 +108,37 @@ def test_off_dynamic_lead_not_sent(monkeypatch):
         _conv("UNCLEAR", "disneyland_tour"), fs.now_tbilisi())
     assert result == "skipped"                    # byte-identical: non-PARENT skipped
     assert rec == []
+
+
+# --- manager-number disclosure blocks follow-up (operator rule 2026-07-28) ---
+
+def _mgr_block(monkeypatch, flag, prior=""):
+    from app.flows import parent_flow as pf
+    monkeypatch.setattr(pf, "settings", dataclasses.replace(
+        config.settings, USE_PROGRAM_FOLLOWUP=flag))
+    c = Conversation(sender_id="s", platform="messenger", segment="PARENT")
+    c.followup_blocked_reason = prior
+    pf._mark_manager_number_disclosed(c)
+    return c.followup_blocked_reason
+
+
+def test_manager_number_disclosure_off_is_noop(monkeypatch):
+    assert _mgr_block(monkeypatch, False) == ""          # byte-identical when off
+
+
+def test_manager_number_disclosure_blocks_followup(monkeypatch):
+    assert _mgr_block(monkeypatch, True) == "manager_handoff_completed"
+
+
+def test_manager_number_disclosure_never_overrides_stronger_stop(monkeypatch):
+    assert _mgr_block(monkeypatch, True, "declined") == "declined"
+    assert _mgr_block(monkeypatch, True, "asked_no_more_messages") == "asked_no_more_messages"
+
+
+def test_manager_blocked_lead_is_skipped_by_scheduler(monkeypatch):
+    # end-to-end: a lead blocked by manager-handoff is skipped even though otherwise due
+    rec = _pin(monkeypatch, True, camp_open=True)
+    result = fs._maybe_send_followup_for_conversation(
+        _conv("PARENT", blocked="manager_handoff_completed"), fs.now_tbilisi())
+    assert result == "skipped"
+    assert rec == []
