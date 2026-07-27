@@ -115,6 +115,17 @@ def _dynamic_programs_prompt_suffix() -> str:
             "თუ ამ პროგრამის კონკრეტული დეტალი ხელსაწყოში არ არის, თქვი რომ დეტალს "
             "მენეჯერი დააზუსტებს — არ ჩაანაცვლო სხვა პროგრამის ფაქტით."
         )
+    if getattr(settings, "USE_PROGRAM_AUDIENCE", False):
+        # Program audience (2026-07-26 live test): get_program_info returns
+        # `audience` (child/adult/family). Formula 1 (family) is NOT only for kids, so
+        # asking „your CHILD's age" is wrong. Ask the child's age ONLY for a child
+        # program; for family/adult ask the PARTICIPANT's age.
+        suffix += (
+            " get_program_info აბრუნებს audience-ს (child/adult/family). შვილის ასაკი "
+            "იკითხე მხოლოდ audience=child პროგრამაზე; family ან adult პროგრამაზე "
+            "(მაგ. ფორმულა 1) იკითხე მონაწილის ასაკი და ნუ ჩათვლი, რომ მონაწილე "
+            "აუცილებლად ბავშვია."
+        )
     if getattr(settings, "USE_DYNAMIC_CONTACT_CAPTURE", False):
         # Dynamic contact capture (2026-07-23): the multi-turn contact turn
         # reaches the engine but the LLM sometimes only acknowledges the

@@ -738,12 +738,40 @@ _CAMP_CHILD_OFFERING_MARKERS: tuple[str, ...] = (
 _CAMP_ADULT_MARKERS: tuple[str, ...] = ("ზრდასრულ", "კულტურულ")
 
 
+def _camp_off_alt() -> str:
+    """The „what else" line appended to a camp-off status message. When
+    USE_PROGRAM_AUDIENCE is on, offers the ACTIVE child/family programs BY NAME from
+    the config (Sunday School only if it is actually active) — fixing the live bug
+    where the camp-off reply offered „საკვირაო სკოლა" even though it was inactive.
+    OFF ⇒ the approved static Sunday-School offer (`_CAMP_OFF_ALT`), byte-identical.
+    Never raises."""
+    if not getattr(settings, "USE_PROGRAM_AUDIENCE", False):
+        return _CAMP_OFF_ALT
+    try:
+        from app.services import admin_config_service
+        names = admin_config_service.get_active_child_program_names()
+    except Exception:  # pragma: no cover - defensive
+        return _CAMP_OFF_ALT
+    if not names:
+        return "თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
+    listed = ", ".join(names)
+    return (
+        f"ამ ეტაპზე თქვენი შვილისთვის აქტიურია: {listed}. "
+        "თუ გსურთ, დეტალებზე მენეჯერთან დაგაკავშირებთ."
+    )
+
+
+def _camp_ended_direct() -> str:
+    return "დიახ, ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n" + _camp_off_alt()
+
+
 def _camp_status_message(status: str) -> str:
+    alt = _camp_off_alt()
     if status == "full":
-        return _CAMP_MSG_FULL
+        return "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია.\n\n" + alt
     if status == "coming_soon":
-        return _CAMP_MSG_COMING_SOON
-    return _CAMP_MSG_ENDED  # hidden / ended (+ defensive default)
+        return "ბანაკის დეტალები ჯერ ზუსტდება.\n\n" + alt
+    return "ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n" + alt  # hidden / ended
 
 
 def _camp_status_short(status: str) -> str:
@@ -919,7 +947,7 @@ def _maybe_handle_camp_status(
         return _camp_status_short(status) + "\n\n" + _CAMP_OFF_ADULT_POINTER
     # Direct „ბანაკი დასრულდა?" question (hidden / ended only).
     if status in ("hidden", "ended") and _msg_is_camp_ended_question(message):
-        return _CAMP_ENDED_DIRECT
+        return _camp_ended_direct()
     # Camp-only question → the full status message.
     return _camp_status_message(status)
 

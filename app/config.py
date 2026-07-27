@@ -486,6 +486,13 @@ class Settings:
     # the LLM briefly says it's out of scope and offers the active programs, instead
     # of parroting a clarify or referencing camp. OFF ⇒ prompt byte-identical.
     USE_OFFTOPIC_INTELLIGENCE: bool = False
+    # Program audience (2026-07-26 live test): each admin program has an audience
+    # (child / adult / family). When on, (a) a camp-off message offers the ACTIVE
+    # child/family programs by name from the config — NOT the hardcoded „საკვირაო
+    # სკოლა" (which was offered even when inactive); (b) the participant-age question
+    # is child-only for child programs (a family program like Formula 1 is not asked
+    # „your child's age"). OFF ⇒ byte-identical (static Sunday-School offer).
+    USE_PROGRAM_AUDIENCE: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -719,6 +726,9 @@ class Settings:
             ),
             USE_OFFTOPIC_INTELLIGENCE=_parse_bool_optional(
                 "USE_OFFTOPIC_INTELLIGENCE", False,
+            ),
+            USE_PROGRAM_AUDIENCE=_parse_bool_optional(
+                "USE_PROGRAM_AUDIENCE", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

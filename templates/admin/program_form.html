@@ -94,6 +94,15 @@
     <small style="color:#555">„ღია" — მომხმარებელს კონსულტაციაზე ჩაწერა შეუძლია. dynamic პროგრამა default-ად დახურულია, სანამ აქ „ღია"-ს არ დააყენებ და შეინახავ.</small>
   </label>
 
+  <label>აუდიტორია / Audience
+    <select name="audience">
+      <option value="child" {% if section.audience == 'child' %}selected{% endif %}>ბავშვები (child) — მხოლოდ ბავშვებზეა</option>
+      <option value="family" {% if section.audience == 'family' or not section.audience %}selected{% endif %}>ოჯახი / ყველა (family) — ბავშვებიც და უფროსებიც</option>
+      <option value="adult" {% if section.audience == 'adult' %}selected{% endif %}>ზრდასრულები (adult)</option>
+    </select>
+    <small style="color:#555">განსაზღვრავს: (1) ბანაკის გამორთვისას რომელ პროგრამებს სთავაზობს ბავშვს (child/family); (2) იკითხავს თუ არა „შვილის ასაკს" (მხოლოდ child) თუ „მონაწილის ასაკს" (family/adult). Formula 1 → family, დისნეილენდი → child.</small>
+  </label>
+
   {# --- Streams / nakadebi --------------------------------------------- #}
   <label>Streams / ნაკადები (one per line: <code>name | dates_text | status</code>)
     <textarea name="streams_text" rows="4" placeholder="I ნაკადი | 23-29 ივნისი | active">
