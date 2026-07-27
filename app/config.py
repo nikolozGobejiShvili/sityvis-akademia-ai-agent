@@ -501,6 +501,26 @@ class Settings:
     # name prefix — applies to EVERY active program, not just one. OFF ⇒ byte-identical
     # (exact + declension-prefix only).
     USE_FUZZY_PROGRAM_MATCH: bool = False
+    # Consultation program name in the CRM (2026-07-27 live test #6). Each booking
+    # already APPENDS its own Leads row (no overwrite); the flag-gated „Program" column
+    # stored the internal `program_id` (empty for reserved camp/Sunday-School). When on,
+    # a booking resolves and writes the NAME of the program THAT consultation was
+    # requested for — the tagged dynamic product, else the program the conversation is
+    # about (dynamic name / Sunday School / camp) — so every consultation row shows its
+    # program's real name. Write-only column (`_row_to_lead` never reads it). Needs
+    # USE_PER_PRODUCT_BOOKING (which adds the column). OFF ⇒ the column keeps program_id
+    # (byte-identical).
+    USE_CONSULTATION_PROGRAM_NAME: bool = False
+    # Per-program follow-up (2026-07-27 live test #6). Follow-up was PARENT-only
+    # (`segment != "PARENT"` skip), camp-copy-hardcoded, and globally throttled by the
+    # summer_camp registration flag — so a lead interested in a dynamic program
+    # (Disneyland / Formula 1 / any new admin program) got NO follow-up. When on: a lead
+    # tagged to a dynamic product is ALSO eligible; the camp-registration gate applies to
+    # camp leads only; and the follow-up copy is program-aware (each program can set its
+    # own `auto_followup_template_id`, else a generic template with the program NAME
+    # injected). Send/skip rules unchanged (declined / asked-no-more / manager-handoff /
+    # booked still block). OFF ⇒ PARENT-only camp follow-up (byte-identical).
+    USE_PROGRAM_FOLLOWUP: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -740,6 +760,12 @@ class Settings:
             ),
             USE_FUZZY_PROGRAM_MATCH=_parse_bool_optional(
                 "USE_FUZZY_PROGRAM_MATCH", False,
+            ),
+            USE_CONSULTATION_PROGRAM_NAME=_parse_bool_optional(
+                "USE_CONSULTATION_PROGRAM_NAME", False,
+            ),
+            USE_PROGRAM_FOLLOWUP=_parse_bool_optional(
+                "USE_PROGRAM_FOLLOWUP", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

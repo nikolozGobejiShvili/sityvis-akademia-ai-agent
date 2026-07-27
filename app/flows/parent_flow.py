@@ -930,6 +930,22 @@ def _maybe_handle_camp_status(
     if getattr(settings, "USE_PROGRAM_ISOLATION", False) and _msg_names_other_program(message):
         return None
 
+    # Per-product context defer (2026-07-27 live test #6): a FOLLOW-UP money/payment
+    # question in an active NON-camp program conversation — one the lead is already
+    # tagged to (e.g. Disneyland just discussed) — that does NOT re-name a program is
+    # about THAT program, not camp. „წინასწარი გადასახადი არის თუ ერთიანად?" during a
+    # Disneyland chat hit the camp price detector (`გადასახად` ∈ _CAMP_PRICE_MARKERS)
+    # and got „ბანაკი დასრულდა". Defer to the engine unless the message EXPLICITLY names
+    # camp (a hard camp keyword still gets the camp status). Gated by USE_PROGRAM_ISOLATION;
+    # `_is_active_per_product_booking` is itself gated on USE_PER_PRODUCT_BOOKING ⇒
+    # double-gated, OFF ⇒ byte-identical.
+    if (
+        getattr(settings, "USE_PROGRAM_ISOLATION", False)
+        and _is_active_per_product_booking(conversation)
+        and not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS)
+    ):
+        return None
+
     has_camp = _msg_has_camp_intent(message)
     is_child_offering = _msg_is_child_offering(message)
 
@@ -1146,6 +1162,50 @@ def _is_active_per_product_booking(conversation: Conversation) -> bool:
         return False
     pid = (getattr(lead, "program_id", "") or "").strip()
     return bool(pid) and pid not in reserved_program_ids()
+
+
+def _resolve_consultation_program_name(
+    conversation: Conversation, lead: Lead,
+) -> str:
+    """The NAME of the program THIS consultation was requested for — for the CRM
+    „Program" column (USE_CONSULTATION_PROGRAM_NAME, 2026-07-27 live test #6).
+
+    Priority: (1) the lead's tagged dynamic product (Disneyland / Formula 1 / any new
+    admin program), else (2) the program the recent conversation is about — a dynamic
+    program NAMED, then Sunday School, then camp. Names come from admin config
+    (data-driven, never hardcoded — the reserved-section literals are only a config-
+    missing fallback). Returns "" when nothing resolves. Never raises."""
+    try:
+        from app.services import admin_config_service
+        from app.reasoning.dynamic_program_match import match_dynamic_program
+
+        def _name(pid: str, fallback: str = "") -> str:
+            sec = admin_config_service.get_section(pid) or {}
+            return str(sec.get("name") or fallback or pid)
+
+        pid = (getattr(lead, "program_id", "") or "").strip()
+        if pid and pid not in reserved_program_ids():
+            return _name(pid)
+
+        recent = " ".join(
+            str(m.get("content") or "")
+            for m in (getattr(conversation, "history", []) or [])[-8:]
+            if isinstance(m, dict) and m.get("role") == "user"
+        )
+        if recent.strip():
+            m = match_dynamic_program(
+                recent, admin_config_service.get_active_sections(),
+                fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
+            )
+            if m and m.get("program_id") not in reserved_program_ids():
+                return _name(m["program_id"])
+            if _is_sunday_school_intent(recent):
+                return _name("sunday_school", "საკვირაო სკოლა")
+            if any(k in recent.lower() for k in _CAMP_STATUS_KEYWORDS):
+                return _name("summer_camp", "ბანაკი")
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return ""
 
 
 def _safety_spine(conversation: Conversation, message: str) -> str | None:
@@ -5611,7 +5671,9 @@ def _maybe_handle_underage_manager_handoff(
             lead.name, lead.name,
         ):
             lead.name = ""
-        return _render_manager_number_answer(lead)
+        _manager_out = _render_manager_number_answer(lead)
+        _mark_manager_number_disclosed(conversation)
+        return _manager_out
 
     # Parse any contact in THIS message (any order: „ნიკოლოზი 595999733",
     # „595999733 ნიკოლოზი", „მე ვარ ნიკოლოზი, 595999733").
@@ -6352,6 +6414,23 @@ def _manager_number_answer_fallback(
     )
 
 
+def _mark_manager_number_disclosed(conversation) -> None:
+    """Block future follow-up once the MANAGER's number has been disclosed to the user
+    (operator rule, 2026-07-28: „got the manager's number → no follow-up"). Sets the same
+    `manager_handoff_completed` reason the callback path uses; never overrides a stronger
+    stop (`declined` / `asked_no_more_messages`). Gated on USE_PROGRAM_FOLLOWUP — no-op when
+    off (byte-identical). Never raises."""
+    if not getattr(settings, "USE_PROGRAM_FOLLOWUP", False):
+        return
+    try:
+        if getattr(conversation, "followup_blocked_reason", "") not in {
+            "declined", "asked_no_more_messages",
+        }:
+            conversation.followup_blocked_reason = "manager_handoff_completed"
+    except Exception:  # pragma: no cover — defensive
+        pass
+
+
 def _render_manager_number_answer(
     lead: Lead | None = None, *, self_call: bool = False,
 ) -> str:
@@ -6426,7 +6505,12 @@ def _maybe_handle_explicit_manager_request(
         "disclosure (self_call=%s sender=%s)", is_self_call,
         conversation.sender_id,
     )
-    return _render_manager_number_answer(lead, self_call=is_self_call)
+    _manager_out = _render_manager_number_answer(lead, self_call=is_self_call)
+    # A self-call (user asking about their OWN number) is not a manager handoff — only
+    # block follow-up when the MANAGER's number was actually disclosed.
+    if not is_self_call:
+        _mark_manager_number_disclosed(conversation)
+    return _manager_out
 
 
 # -- contact correction (phone / name) — live-demo fix (2026-06-22) ---------
@@ -7341,7 +7425,9 @@ def _planner_protect_manager_phone(conversation, message: str, plan) -> str | No
             "[planner][auth] manager-phone request → deterministic disclosure "
             "(overrides pending state, sender=%s)", conversation.sender_id,
         )
-        return _render_manager_number_answer(lead)
+        _manager_out = _render_manager_number_answer(lead)
+        _mark_manager_number_disclosed(conversation)
+        return _manager_out
     except Exception:  # pragma: no cover — defensive
         return None
 
@@ -7352,7 +7438,9 @@ def _planner_pre_answer(conversation, message: str, plan) -> str | None:
     try:
         intent = getattr(plan, "user_current_intent", "")
         if intent == "manager_phone_request":
-            return _render_manager_number_answer(_ensure_lead(conversation))
+            _manager_out = _render_manager_number_answer(_ensure_lead(conversation))
+            _mark_manager_number_disclosed(conversation)
+            return _manager_out
         if intent == "camp_registration":
             # Bare „რეგისტრაცია მინდა" in an active camp context → the configured
             # registration link, never an age question (Class 5 #2).
@@ -7517,6 +7605,7 @@ def planner_final_validate(conversation, plan, response: str) -> str:
             if not digits or digits not in re.sub(r"\D", "", out):
                 logger.info("[planner][validator] forced manager-phone disclosure")
                 out = _render_manager_number_answer(getattr(conversation, "lead", None))
+                _mark_manager_number_disclosed(conversation)
                 low = out.lower()
 
         # 2) A registration request MUST return the link and MUST NOT append an
@@ -11550,6 +11639,13 @@ def _book_selected_slot(conversation: Conversation, lead: Lead, slot: dict) -> b
     lead.booked_datetime_iso = str(slot.get("datetime_iso") or "")
     lead.status = "Booked"
     lead.conversation_summary = _generate_summary(conversation)
+    # Consultation program name (2026-07-27 live test #6): capture the NAME of the
+    # program THIS consultation was requested for so the CRM „Program" column shows it
+    # (each booking already gets its own appended row). Flag-gated ⇒ OFF byte-identical.
+    if getattr(settings, "USE_CONSULTATION_PROGRAM_NAME", False):
+        lead.consultation_program_name = _resolve_consultation_program_name(
+            conversation, lead,
+        )
 
     logger.info("[parent_flow] Attempting sheets append for lead sender=%s", lead.sender_id)
     try:

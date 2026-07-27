@@ -560,7 +560,15 @@ def _lead_to_row(lead: Lead, lead_id: int) -> list[Any]:
     # admin product id (empty for a camp/legacy lead) so the width matches
     # `_active_leads_headers()`.
     if getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
-        row.append(getattr(lead, "program_id", "") or "")
+        program_cell = getattr(lead, "program_id", "") or ""
+        # Consultation program name (2026-07-27, USE_CONSULTATION_PROGRAM_NAME): show the
+        # readable per-consultation program name (resolved at booking time) instead of
+        # the internal id. Empty ⇒ fall back to program_id (byte-identical when off).
+        if getattr(settings, "USE_CONSULTATION_PROGRAM_NAME", False):
+            name = (getattr(lead, "consultation_program_name", "") or "").strip()
+            if name:
+                program_cell = name
+        row.append(program_cell)
     return row
 
 
