@@ -1073,6 +1073,7 @@ class ParentToolExecutor:
             from app.services import admin_config_service
             m = match_dynamic_program(
                 self.user_message or "", admin_config_service.get_active_sections(),
+                fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
             )
             pid = (m or {}).get("program_id") or ""
             if pid and pid not in reserved_program_ids():

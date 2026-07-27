@@ -2500,6 +2500,7 @@ def _reasoning_is_dynamic_program_turn(user_message: str) -> bool:
         from app.reasoning.dynamic_program_match import match_dynamic_program
         m = match_dynamic_program(
             user_message, admin_config_service.get_active_sections(),
+            fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
         )
         return bool(m and m.get("program_id") not in reserved_program_ids())
     except Exception:
