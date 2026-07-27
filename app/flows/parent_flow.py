@@ -1164,6 +1164,50 @@ def _is_active_per_product_booking(conversation: Conversation) -> bool:
     return bool(pid) and pid not in reserved_program_ids()
 
 
+def _resolve_consultation_program_name(
+    conversation: Conversation, lead: Lead,
+) -> str:
+    """The NAME of the program THIS consultation was requested for — for the CRM
+    „Program" column (USE_CONSULTATION_PROGRAM_NAME, 2026-07-27 live test #6).
+
+    Priority: (1) the lead's tagged dynamic product (Disneyland / Formula 1 / any new
+    admin program), else (2) the program the recent conversation is about — a dynamic
+    program NAMED, then Sunday School, then camp. Names come from admin config
+    (data-driven, never hardcoded — the reserved-section literals are only a config-
+    missing fallback). Returns "" when nothing resolves. Never raises."""
+    try:
+        from app.services import admin_config_service
+        from app.reasoning.dynamic_program_match import match_dynamic_program
+
+        def _name(pid: str, fallback: str = "") -> str:
+            sec = admin_config_service.get_section(pid) or {}
+            return str(sec.get("name") or fallback or pid)
+
+        pid = (getattr(lead, "program_id", "") or "").strip()
+        if pid and pid not in reserved_program_ids():
+            return _name(pid)
+
+        recent = " ".join(
+            str(m.get("content") or "")
+            for m in (getattr(conversation, "history", []) or [])[-8:]
+            if isinstance(m, dict) and m.get("role") == "user"
+        )
+        if recent.strip():
+            m = match_dynamic_program(
+                recent, admin_config_service.get_active_sections(),
+                fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
+            )
+            if m and m.get("program_id") not in reserved_program_ids():
+                return _name(m["program_id"])
+            if _is_sunday_school_intent(recent):
+                return _name("sunday_school", "საკვირაო სკოლა")
+            if any(k in recent.lower() for k in _CAMP_STATUS_KEYWORDS):
+                return _name("summer_camp", "ბანაკი")
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return ""
+
+
 def _safety_spine(conversation: Conversation, message: str) -> str | None:
     """Layer-0 safety spine (Phase 3.1) — the program-AGNOSTIC sole-enforcer
     guards run as ONE unit, in a fixed order: prompt-injection → political →
@@ -11566,6 +11610,13 @@ def _book_selected_slot(conversation: Conversation, lead: Lead, slot: dict) -> b
     lead.booked_datetime_iso = str(slot.get("datetime_iso") or "")
     lead.status = "Booked"
     lead.conversation_summary = _generate_summary(conversation)
+    # Consultation program name (2026-07-27 live test #6): capture the NAME of the
+    # program THIS consultation was requested for so the CRM „Program" column shows it
+    # (each booking already gets its own appended row). Flag-gated ⇒ OFF byte-identical.
+    if getattr(settings, "USE_CONSULTATION_PROGRAM_NAME", False):
+        lead.consultation_program_name = _resolve_consultation_program_name(
+            conversation, lead,
+        )
 
     logger.info("[parent_flow] Attempting sheets append for lead sender=%s", lead.sender_id)
     try:

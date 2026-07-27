@@ -142,6 +142,7 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_OFFTOPIC_INTELLIGENCE=False,
         USE_PROGRAM_AUDIENCE=False,
         USE_FUZZY_PROGRAM_MATCH=False,
+        USE_CONSULTATION_PROGRAM_NAME=False,
         USE_SAFETY_SPINE=False,
     )
     # Pin the config singleton too, so tests that rebuild settings from

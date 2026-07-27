@@ -93,6 +93,12 @@ class Lead:
     # (flag-gated) and per-product post-booking facts know which product this
     # lead belongs to. Empty ⇒ legacy/camp (the default, byte-identical).
     program_id: str = ""
+    # Consultation program name (2026-07-27, USE_CONSULTATION_PROGRAM_NAME). Resolved
+    # at booking time to the NAME of the program THIS consultation was requested for
+    # (dynamic product OR Sunday School / camp), so the CRM "Program" column shows a
+    # readable per-consultation name instead of the internal id. Empty => the column
+    # falls back to program_id (byte-identical).
+    consultation_program_name: str = ""
 
     def model_dump(self, mode: str | None = None) -> dict[str, Any]:
         data = asdict(self)
@@ -135,6 +141,7 @@ class Lead:
             adult_target_relation=str(data.get("adult_target_relation", "") or ""),
             adult_target_age=str(data.get("adult_target_age", "") or ""),
             program_id=str(data.get("program_id", "") or ""),
+            consultation_program_name=str(data.get("consultation_program_name", "") or ""),
         )
 
     def to_sheet_row(self, reply: str) -> list[Any]:
