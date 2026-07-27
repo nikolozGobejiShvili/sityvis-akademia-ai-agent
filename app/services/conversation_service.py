@@ -399,7 +399,10 @@ def _match_active_program_segment(message_text: str) -> str | None:
     try:
         from app.services import admin_config_service
         from app.reasoning.dynamic_program_match import match_dynamic_program
-        match = match_dynamic_program(message_text, admin_config_service.get_active_sections())
+        match = match_dynamic_program(
+            message_text, admin_config_service.get_active_sections(),
+            fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
+        )
     except Exception:  # pragma: no cover - defensive
         return None
     if not match:

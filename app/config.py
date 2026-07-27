@@ -493,6 +493,14 @@ class Settings:
     # is child-only for child programs (a family program like Formula 1 is not asked
     # „your child's age"). OFF ⇒ byte-identical (static Sunday-School offer).
     USE_PROGRAM_AUDIENCE: bool = False
+    # Fuzzy program-name matching (2026-07-27 live test). Program-name matching was
+    # only prefix/declension-tolerant, so a typo/transposition/dropped letter in an
+    # active program's name („დინსეილენდი" for „დისნეილენდი") failed to match and the
+    # message fell through to the camp answer. When on, the matcher also accepts a
+    # small edit distance (1 for names ≤8 chars, 2 for longer) against the aligned
+    # name prefix — applies to EVERY active program, not just one. OFF ⇒ byte-identical
+    # (exact + declension-prefix only).
+    USE_FUZZY_PROGRAM_MATCH: bool = False
     # Safety spine (Phase 3.1, 2026-07): run the program-agnostic Layer-0 safety
     # guards (injection · political · memory-info/PII) as ONE unit on every path.
     # First increment: on the dynamic-program HOIST (which today runs only the
@@ -729,6 +737,9 @@ class Settings:
             ),
             USE_PROGRAM_AUDIENCE=_parse_bool_optional(
                 "USE_PROGRAM_AUDIENCE", False,
+            ),
+            USE_FUZZY_PROGRAM_MATCH=_parse_bool_optional(
+                "USE_FUZZY_PROGRAM_MATCH", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),

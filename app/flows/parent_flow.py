@@ -876,7 +876,10 @@ def _msg_names_other_program(message: str) -> bool:
             s for s in admin_config_service.get_active_sections()
             if (s.get("id") or "").strip() != "summer_camp"
         ]
-        return match_dynamic_program(message, sections) is not None
+        return match_dynamic_program(
+            message, sections,
+            fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
+        ) is not None
     except Exception:  # pragma: no cover — defensive
         return False
 
@@ -1088,7 +1091,10 @@ def _is_dynamic_program_turn(message: str) -> bool:
     try:
         from app.services import admin_config_service
         from app.reasoning.dynamic_program_match import match_dynamic_program
-        match = match_dynamic_program(message, admin_config_service.get_active_sections())
+        match = match_dynamic_program(
+            message, admin_config_service.get_active_sections(),
+            fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
+        )
     except Exception:  # pragma: no cover - defensive
         return False
     return bool(match) and match.get("program_id") not in reserved_program_ids()
@@ -1115,6 +1121,7 @@ def _tag_per_product_booking(conversation: Conversation, message: str) -> None:
         from app.services import admin_config_service
         match = match_dynamic_program(
             message or "", admin_config_service.get_active_sections(),
+            fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
         )
     except Exception:  # pragma: no cover - defensive
         return
@@ -1618,9 +1625,19 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                     conversation, hoisted_contact_response,
                 )
 
-        return _sanitise_booking_confirmation(
-            conversation, _run_llm_engine_safely(conversation, message),
+        hoisted_engine_out = _run_llm_engine_safely(conversation, message)
+        # Adult-intro dead-end guard on the HOISTED path (2026-07-27 live test). The
+        # hoist RETURNS here and bypasses the post-engine chain (L~1989) where
+        # `_ensure_adult_intro_followup_for_parent_flow` normally runs. Live bug: with a
+        # Disneyland per-product booking active, an adult-events question reached the
+        # engine and the sanitiser collapsed the „გადაგამისამართებთ" redirect into a
+        # dead-end „...ღონისძიებებზე დაგეხმარებით." with NO follow-up — the conversation
+        # stopped. Re-apply the SAME always-on guard here so the hoisted handoff turn
+        # asks the next question instead of stopping. No-op on any normal program answer.
+        hoisted_engine_out = _ensure_adult_intro_followup_for_parent_flow(
+            conversation, hoisted_engine_out,
         )
+        return _sanitise_booking_confirmation(conversation, hoisted_engine_out)
 
     # Camp admin-status gate (2026-07-01) — when the operator turns the camp off
     # (`summer_camp.status` != active), a CAMP question is answered with the
