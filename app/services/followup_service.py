@@ -291,6 +291,59 @@ def check_and_send_followups() -> None:
     )
 
 
+def _followup_program_eligibility(
+    conversation: Conversation,
+) -> tuple[bool, str, bool, str]:
+    """`(eligible, program_name, is_dynamic, section_followup_template_id)` for this
+    lead's follow-up (USE_PROGRAM_FOLLOWUP, 2026-07-27 live test #6).
+
+    OFF ⇒ only ``segment == "PARENT"`` (camp) is eligible; name/dynamic empty
+    (byte-identical to the old `segment != "PARENT"` gate). ON ⇒ PARENT (camp) stays
+    eligible with unchanged copy, AND a lead tagged to a dynamic (non-reserved) admin
+    product is eligible too, carrying its section NAME and optional per-section
+    `auto_followup_template_id`. Never raises."""
+    segment = getattr(conversation, "segment", "") or ""
+    if not getattr(settings, "USE_PROGRAM_FOLLOWUP", False):
+        return (segment == "PARENT", "", False, "")
+    if segment == "PARENT":
+        return (True, "", False, "")  # camp lead — unchanged copy
+    try:
+        from app.domain.decision.models import reserved_program_ids
+        lead = getattr(conversation, "lead", None)
+        pid = (getattr(lead, "program_id", "") or "").strip() if lead else ""
+        if pid and pid not in reserved_program_ids():
+            sec = admin_config_service.get_section(pid) or {}
+            return (
+                True, str(sec.get("name") or ""), True,
+                str(sec.get("auto_followup_template_id") or ""),
+            )
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return (False, "", False, "")
+
+
+def _program_followup_fallback(template_id: str, program_name: str) -> str:
+    """Program-aware fallback follow-up copy (name-injected) when no admin template
+    renders for a dynamic-program lead. Mirrors the camp fallbacks' calm tone — no fake
+    urgency, no price claim, no booking promise."""
+    name = program_name or "პროგრამა"
+    by_id = {
+        "followup_24h": (
+            f"გამარჯობა. {name}-ის შესახებ მოგწერეთ — ხომ არ დაგრჩათ კითხვა? "
+            "თუ გსურთ, დეტალები ან კონსულტაციის დრო გაგიზიაროთ."
+        ),
+        "followup_3d": (
+            f"გამარჯობა. უბრალოდ შეგახსენებთ — თუ {name} ისევ გაინტერესებთ, "
+            "სიამოვნებით გაგიზიარებთ პირობებს ან კონსულტაციის დროს."
+        ),
+        "followup_7d": (
+            f"გამარჯობა. ბოლოს შეგახსენებთ {name}-თან დაკავშირებით. თუ თემა ისევ "
+            "აქტუალურია, მომწერეთ და დაგეხმარებით."
+        ),
+    }
+    return by_id.get(template_id, "").strip()
+
+
 def _maybe_send_followup_for_conversation(
     conversation: Conversation, now: datetime,
 ) -> str:
@@ -310,10 +363,14 @@ def _maybe_send_followup_for_conversation(
     masked = sentry_service.mask_sender(sender_id)
     platform_raw = (conversation.platform or "").strip().lower()
 
-    # Segment: only PARENT is in scope for this patch. ADULT flow is
-    # not live-tested end-to-end (HANDOFF.md §5 IMPORTANT 5) and
-    # UNCLEAR by definition has not chosen a direction yet.
-    if conversation.segment != "PARENT":
+    # Segment / program eligibility. OFF ⇒ only PARENT (camp) is in scope. ON ⇒ PARENT
+    # (camp) stays eligible with unchanged copy, AND a lead tagged to a dynamic admin
+    # product (Disneyland / Formula 1 / any new program) is eligible with program-aware
+    # copy. ADULT without a product tag is still skipped.
+    eligible, program_name, is_dynamic, section_fu_tid = (
+        _followup_program_eligibility(conversation)
+    )
+    if not eligible:
         logger.info(
             "[followup] skipped reason=non_parent_segment segment=%s "
             "platform=%s sender=%s",
@@ -321,17 +378,20 @@ def _maybe_send_followup_for_conversation(
         )
         return "skipped"
 
-    try:
-        registration_open = admin_config_service.is_camp_registration_open()
-    except Exception:  # pragma: no cover - registration actions fail closed
-        logger.exception("[followup] camp registration gate failed")
-        registration_open = False
-    if not registration_open:
-        logger.info(
-            "[followup] skipped reason=camp_registration_closed platform=%s sender=%s",
-            platform_raw, masked,
-        )
-        return "skipped"
+    # Camp registration gate applies to CAMP (PARENT) leads ONLY — a dynamic-program
+    # lead's follow-up is never throttled by the camp's registration state.
+    if not is_dynamic:
+        try:
+            registration_open = admin_config_service.is_camp_registration_open()
+        except Exception:  # pragma: no cover - registration actions fail closed
+            logger.exception("[followup] camp registration gate failed")
+            registration_open = False
+        if not registration_open:
+            logger.info(
+                "[followup] skipped reason=camp_registration_closed platform=%s sender=%s",
+                platform_raw, masked,
+            )
+            return "skipped"
     if conversation.followup_blocked_reason in _BLOCKED_REASONS:
         logger.info(
             "[followup] skipped reason=%s platform=%s sender=%s",
@@ -374,7 +434,11 @@ def _maybe_send_followup_for_conversation(
         return "skipped"
 
     template_id = cadence_entry["template_id"]
-    text = _render_followup_text(template_id, conversation, lead)
+    text = _render_followup_text(
+        template_id, conversation, lead,
+        program_name=program_name, is_dynamic=is_dynamic,
+        section_template_id=section_fu_tid,
+    )
     if not text:
         # Both admin template AND fallback empty — never happens with
         # the constants defined above, but be paranoid.
@@ -473,21 +537,44 @@ def _pick_due_cadence(
 
 def _render_followup_text(
     template_id: str, conversation: Conversation, lead: Lead | None,
+    *, program_name: str = "", is_dynamic: bool = False,
+    section_template_id: str = "",
 ) -> str:
-    """Try the admin template first, fall back to the safe Georgian
-    constant if missing / empty / render-errored.
-    """
+    """Try the admin template first, fall back to the safe Georgian constant if missing
+    / empty / render-errored.
+
+    Program-aware (USE_PROGRAM_FOLLOWUP): for a dynamic-program lead the template is
+    resolved in priority order — the section's own `auto_followup_template_id` → the
+    generic `followup_program_{stage}` template (with `{program_name}` injected) → the
+    camp template — and the last-resort fallback names the program. For a camp/PARENT
+    lead (is_dynamic False) this is byte-identical to the old behaviour."""
     context = _followup_context(conversation, lead)
-    try:
-        rendered = admin_config_service.render_template(template_id, context)
-    except Exception as exc:
-        logger.warning(
-            "[followup] admin render template_id=%s failed: %s",
-            template_id, exc,
-        )
-        rendered = ""
-    if rendered:
-        return rendered.strip()
+    if program_name:
+        context["program_name"] = program_name
+
+    candidate_ids = [template_id]
+    if getattr(settings, "USE_PROGRAM_FOLLOWUP", False) and is_dynamic:
+        stage = template_id.replace("followup_", "")  # 24h / 3d / 7d
+        candidate_ids = [
+            tid for tid in (section_template_id, f"followup_program_{stage}", template_id)
+            if tid
+        ]
+
+    for tid in candidate_ids:
+        try:
+            rendered = admin_config_service.render_template(tid, context)
+        except Exception as exc:
+            logger.warning(
+                "[followup] admin render template_id=%s failed: %s", tid, exc,
+            )
+            rendered = ""
+        if rendered:
+            return rendered.strip()
+
+    if getattr(settings, "USE_PROGRAM_FOLLOWUP", False) and is_dynamic:
+        program_fallback = _program_followup_fallback(template_id, program_name)
+        if program_fallback:
+            return program_fallback
     fallback = _FALLBACK_BY_TEMPLATE_ID.get(template_id, "")
     return fallback.strip()
 
@@ -510,6 +597,10 @@ def _followup_context(
         "followup_link": getattr(settings, "FOLLOWUP_CONTENT_LINK", "") or "",
         "stopped_after": conversation.stopped_after or "",
         "last_meaningful_interest": conversation.last_meaningful_interest or "",
+        # Program-aware follow-up (USE_PROGRAM_FOLLOWUP): overwritten with the real
+        # program name in `_render_followup_text` for a dynamic-program lead; "" here so
+        # a `{program_name}` placeholder never leaks a literal into a camp template.
+        "program_name": "",
     }
 
 
