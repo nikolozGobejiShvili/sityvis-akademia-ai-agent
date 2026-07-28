@@ -115,6 +115,17 @@ def _dynamic_programs_prompt_suffix() -> str:
             "თუ ამ პროგრამის კონკრეტული დეტალი ხელსაწყოში არ არის, თქვი რომ დეტალს "
             "მენეჯერი დააზუსტებს — არ ჩაანაცვლო სხვა პროგრამის ფაქტით."
         )
+        # Live test 2026-07-28: isolation covered FACTS (location/price/age/date)
+        # but NOT the camp VALUE-framing — the model applied camp's value opener
+        # (ცოცხალი ურთიერთობა / აზროვნება / თვითგამოხატვა / ეკრანისგან დისტანცია)
+        # to Disneyland. Forbid borrowing another program's value/benefits too;
+        # a program's value must come from its own get_program_info description.
+        suffix += (
+            " ასევე არ ისესხო სხვა პროგრამის (ბანაკის) ღირებულების ჩარჩო ან გახსნა "
+            "(ცოცხალი ურთიერთობა, აზროვნება, თვითგამოხატვა, ეკრანისგან დისტანცია) — "
+            "ამ პროგრამის ღირებულება და სარგებელი აღწერე მხოლოდ მისი get_program_info-ს "
+            "აღწერიდან, არა ბანაკის ფრაზებით."
+        )
     if getattr(settings, "USE_PROGRAM_AUDIENCE", False):
         # Program audience (2026-07-26 live test): get_program_info returns
         # `audience` (child/adult/family). Formula 1 (family) is NOT only for kids, so

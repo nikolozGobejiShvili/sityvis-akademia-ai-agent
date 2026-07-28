@@ -64,6 +64,20 @@ def test_isolation_present_when_flag_on(monkeypatch):
     assert "ბანაკის" in suffix
 
 
+def test_isolation_forbids_camp_value_framing(monkeypatch):
+    """Live test 2026-07-28: isolation must also forbid borrowing camp's VALUE
+    framing/opener (ცოცხალი ურთიერთობა / აზროვნება / …), not only its facts —
+    the model was applying camp's value opener to Disneyland."""
+    _pin(monkeypatch, USE_DYNAMIC_PROGRAMS=True, USE_PROGRAM_ISOLATION=True)
+    suffix = parent_llm_engine._dynamic_programs_prompt_suffix()
+    assert "ღირებულების ჩარჩო" in suffix       # value-framing clause added
+    assert "ცოცხალი ურთიერთობა" in suffix       # names the camp value opener
+    # flag OFF → value-framing clause absent (byte-identical off)
+    _pin(monkeypatch, USE_DYNAMIC_PROGRAMS=True, USE_PROGRAM_ISOLATION=False)
+    off = parent_llm_engine._dynamic_programs_prompt_suffix()
+    assert "ღირებულების ჩარჩო" not in off
+
+
 def test_isolation_extends_base_suffix(monkeypatch):
     """The ON suffix is a strict superset (starts-with) of the OFF suffix — the
     isolation clause is appended, the base text is not rewritten."""
