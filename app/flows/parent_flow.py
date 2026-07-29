@@ -2502,6 +2502,16 @@ _THANKS_OPENER_PATTERNS: tuple[str, ...] = (
 )
 _USER_THANKS_TOKENS: tuple[str, ...] = ("მადლობა", "გმადლობ", "მადლობთ")
 
+# Live test 2026-07-28: the LLM also appends a TRAILING „მადლობა თქვენ" after a
+# booking confirmation („...ჩაგინიშნეთ 💙 მადლობა თქვენ."), which the leading-only
+# strip missed. These bases are checked at end-of-text (optional trailing
+# punctuation); the client 💙 heart is preserved.
+_THANKS_TRAILING_BASES: tuple[str, ...] = (
+    "მადლობა თქვენ",
+    "დიდი მადლობა",
+    "გმადლობთ",
+)
+
 
 def _user_message_has_thanks(message: str) -> bool:
     text = (message or "").lower()
@@ -2511,30 +2521,51 @@ def _user_message_has_thanks(message: str) -> bool:
 def _strip_unwarranted_thanks_in_booking_confirmation(
     conversation: Conversation, message: str, response: str,
 ) -> str:
-    """Strip a leading „მადლობა თქვენ" opener from a booking-confirmation
-    response when the user did NOT thank in their current message.
+    """Strip an unwarranted „მადლობა თქვენ" thank-you from a booking-confirmation
+    response when the user did NOT thank in their current message — whether it
+    appears as a LEADING opener OR a TRAILING closer („...ჩაგინიშნეთ 💙 მადლობა
+    თქვენ."). The client 💙 heart is preserved.
 
-    Pass-through when: response empty, user actually said thanks, or the
-    response is not a booking confirmation. Never strips a trailing /
-    mid-sentence thanks — only a sentence-initial opener.
+    Pass-through when: response empty, user actually said thanks, or the response
+    is not a booking confirmation. Mid-sentence thanks are left untouched.
     """
     if not response:
         return response
     if _user_message_has_thanks(message):
-        return response  # user thanked → warm thank-you opener is correct
+        return response  # user thanked → warm thank-you is correct
     if not contains_booking_confirmation(response):
         return response  # only touch booking-confirmation turns
-    out = response.lstrip()
+
+    working = response.lstrip()
+    leading = False
     for pat in _THANKS_OPENER_PATTERNS:
-        if out.startswith(pat):
-            stripped = out[len(pat):].lstrip()
-            if stripped:
-                logger.info(
-                    "[parent_flow] stripped unwarranted thanks opener from "
-                    "booking confirmation (user did not thank)",
-                )
-                return stripped
+        if working.startswith(pat):
+            candidate = working[len(pat):].lstrip()
+            if candidate:
+                working, leading = candidate, True
             break
+
+    trailing = False
+    tail = working.rstrip()
+    for base in _THANKS_TRAILING_BASES:
+        matched = False
+        for punct in (".", "!", ",", ""):
+            needle = base + punct
+            if tail.endswith(needle):
+                candidate = tail[: -len(needle)].rstrip()
+                if candidate:
+                    working, trailing = candidate, True
+                matched = True
+                break
+        if matched:
+            break
+
+    if leading or trailing:
+        logger.info(
+            "[parent_flow] stripped unwarranted thanks from booking confirmation "
+            "(leading=%s trailing=%s, user did not thank)", leading, trailing,
+        )
+        return working
     return response
 
 

@@ -173,6 +173,29 @@ def test_user_message_has_thanks_detection():
     assert parent_flow._user_message_has_thanks("კი მინდა") is False
 
 
+@pytest.mark.parametrize("user_msg", ["ხვალ 19:00", "კი მაწყობს", "ჩამწერე"])
+def test_trailing_thanks_stripped_for_non_thanks_confirmation(user_msg):
+    # Live test 2026-07-28: a TRAILING „მადლობა თქვენ" after a booking
+    # confirmation (nobody thanked) is removed; the client 💙 heart is preserved.
+    conv = _conv(booked=True)
+    text = "29 ივლისი, 19:00-ზე კონსულტაცია თავისუფალია და ჩაგინიშნეთ 💙 მადლობა თქვენ."
+    out = parent_flow._strip_unwarranted_thanks_in_booking_confirmation(
+        conv, user_msg, text,
+    )
+    assert "მადლობა თქვენ" not in out
+    assert out.rstrip().endswith("💙")   # farewell heart kept
+    assert "ჩაგინიშნეთ" in out           # booking content intact
+
+
+def test_trailing_thanks_preserved_when_user_thanked():
+    conv = _conv(booked=True)
+    text = "29 ივლისი, 19:00-ზე კონსულტაცია თავისუფალია და ჩაგინიშნეთ 💙 მადლობა თქვენ."
+    out = parent_flow._strip_unwarranted_thanks_in_booking_confirmation(
+        conv, "დიდი მადლობა", text,
+    )
+    assert out == text  # user thanked → keep
+
+
 # ===========================================================================
 # PART 3 — challenge / goal capture hint
 # ===========================================================================
