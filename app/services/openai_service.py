@@ -5,6 +5,7 @@ from typing import Any
 from openai import OpenAI
 
 from app.config import Settings, settings
+from app.services import anthropic_service
 from data.prompts import (
     DETECT_SEGMENT,
     OPENAI_CONTEXT_LABEL,
@@ -113,10 +114,71 @@ def _build_completion_kwargs(
 # glance which token-param shape is being sent for the configured model
 # without grepping code. Never logs the API key or any prompt content.
 logger.info(
-    "[openai] model=%s token_param=%s",
+    "[openai] model=%s token_param=%s llm_provider=%s openai_key=%s "
+    "anthropic_fallback=%s",
     settings.OPENAI_MODEL or "<unset>",
     _token_param_name(settings.OPENAI_MODEL),
+    settings.LLM_PROVIDER,
+    # Presence only — never the key itself, never its length.
+    "set" if settings.OPENAI_API_KEY else "unset",
+    settings.ANTHROPIC_FALLBACK_TO_OPENAI,
 )
+
+
+# =========================================================================
+# LLM provider switch — Claude setup-token support (2026-07-29)
+# =========================================================================
+#
+# Every LLM call in this codebase funnels through exactly two functions:
+# ``_chat_completion`` (plain text) and ``chat_with_tools`` (tool loop).
+# Routing the provider decision here means the parent/adult engines, the
+# reply composer, the turn analyzer and every test mock keep working
+# untouched — they still import ``openai_service`` and still see an
+# OpenAI-shaped response.
+#
+# ``LLM_PROVIDER=openai`` (the default) short-circuits all of this: the
+# Anthropic branch is never entered and behaviour is bit-identical to
+# before this patch.
+
+# Guard so a misconfigured deploy logs the reason once at first use
+# instead of on every turn.
+_anthropic_misconfig_logged = False
+
+
+def _use_anthropic() -> bool:
+    """True when this call should go to Claude rather than OpenAI.
+
+    A provider of "anthropic" with no usable credential is a
+    configuration mistake, not a reason to fail live traffic: it logs
+    once and falls through to OpenAI.
+    """
+    global _anthropic_misconfig_logged
+
+    if (settings.LLM_PROVIDER or "openai").strip().lower() != "anthropic":
+        return False
+    if not anthropic_service.is_configured():
+        if not _anthropic_misconfig_logged:
+            _anthropic_misconfig_logged = True
+            logger.error(
+                "[llm] LLM_PROVIDER=anthropic but ANTHROPIC_AUTH_TOKEN is "
+                "empty — using OpenAI. Set the token from `claude setup-token`.",
+            )
+        return False
+    return True
+
+
+def _anthropic_failed(where: str, exc: Exception) -> None:
+    """Handle an Anthropic failure: re-raise, or log and let OpenAI take it.
+
+    The exception text is Anthropic's own ``error.message`` (see
+    ``anthropic_service._extract_error``) — it never contains the
+    credential.
+    """
+    if not settings.ANTHROPIC_FALLBACK_TO_OPENAI:
+        raise RuntimeError(f"Anthropic {where} failed: {exc}") from exc
+    logger.warning(
+        "[llm] Anthropic %s failed (%s) — falling back to OpenAI", where, exc,
+    )
 
 
 def _build_system_prompt(segment: str, company_name: str) -> str:
@@ -134,6 +196,61 @@ def _client() -> OpenAI:
 
 
 def _chat_completion(
+    *,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+) -> str:
+    """Single text-completion entry point for the whole codebase.
+
+    Dispatches to Claude when ``LLM_PROVIDER=anthropic``; otherwise (and
+    whenever the Anthropic attempt fails with fallback enabled) runs the
+    original OpenAI path unchanged.
+    """
+    if _use_anthropic():
+        try:
+            return _anthropic_chat_completion(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            _anthropic_failed("completion", exc)
+
+    return _openai_chat_completion(
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+
+
+def _anthropic_chat_completion(
+    *,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+) -> str:
+    """Claude text completion with the same 3-attempt policy as OpenAI."""
+    last_error: Exception | None = None
+
+    for attempt in range(3):
+        try:
+            return anthropic_service.chat_completion(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2:
+                sleep(1)
+
+    raise RuntimeError(
+        f"Anthropic request failed after 3 attempts: {last_error}",
+    ) from last_error
+
+
+def _openai_chat_completion(
     *,
     messages: list[dict[str, str]],
     max_tokens: int,
@@ -413,7 +530,26 @@ def chat_with_tools(
     No retry loop: the engine's own loop catches the exception and falls
     back to the legacy flow. Adding three internal retries here would
     only delay the fallback.
+
+    Provider switch (2026-07-29): under ``LLM_PROVIDER=anthropic`` this
+    returns an OpenAI-SHAPED DICT built by ``anthropic_service`` rather
+    than an SDK object. The engines read responses through duck-typed
+    accessors (``_first_choice`` / ``_choice_message`` / ``_tool_calls``
+    / ``_message_content``) that already handle dicts, so neither engine
+    needs a change.
     """
+    if _use_anthropic():
+        try:
+            return anthropic_service.chat_with_tools(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        except Exception as exc:
+            _anthropic_failed("tool call", exc)
+
     kwargs = _build_completion_kwargs(
         model=settings.OPENAI_MODEL,
         messages=messages,

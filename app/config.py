@@ -14,8 +14,8 @@ ENV_PATH = BASE_DIR / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 ENV_VALUES = dotenv_values(ENV_PATH)
 
-REQUIRED_VARIABLES = (
-    "OPENAI_API_KEY",
+# Required regardless of which LLM backend serves traffic.
+_BASE_REQUIRED_VARIABLES = (
     "GOOGLE_SHEET_ID",
     "GOOGLE_CALENDAR_ID",
     "META_PAGE_ID",
@@ -23,6 +23,12 @@ REQUIRED_VARIABLES = (
     "MESSENGER_PAGE_ACCESS_TOKEN",
     "MESSENGER_VERIFY_TOKEN",
 )
+
+#: Historic name — the requirement set for the default (OpenAI) provider.
+#: The boot check itself now goes through ``_required_variable_groups`` so
+#: the LLM credential requirement follows ``LLM_PROVIDER`` instead of
+#: always demanding an OpenAI key.
+REQUIRED_VARIABLES = ("OPENAI_API_KEY", *_BASE_REQUIRED_VARIABLES)
 
 
 class ConfigurationError(RuntimeError):
@@ -75,6 +81,47 @@ def _parse_bool_optional(name: str, default: bool) -> bool:
     if not value:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _active_llm_provider() -> str:
+    """The configured LLM backend, normalised. Defaults to "openai"."""
+    return (_env("LLM_PROVIDER") or "openai").strip().lower()
+
+
+def _required_variable_groups(provider: str) -> tuple[tuple[str, ...], ...]:
+    """Boot-required variables for *provider*, as alternative groups.
+
+    Each group is satisfied when ANY of its names is set, which is how the
+    ``ANTHROPIC_AUTH_TOKEN`` / ``ANTHROPIC_API_KEY`` alias pair is
+    accepted.
+
+    The LLM credential requirement follows the provider (2026-07-29).
+    Before this, ``OPENAI_API_KEY`` was unconditionally required, so
+    removing it from the Railway dashboard after switching to Claude
+    crash-looped the container at import time:
+
+        app.config.ConfigurationError:
+            Missing required variables in .env: OPENAI_API_KEY
+
+    Under ``LLM_PROVIDER=anthropic`` the OpenAI key is optional — it is
+    only consulted by the fallback path, which disables itself when the
+    key is absent (see ``ANTHROPIC_FALLBACK_TO_OPENAI`` in ``from_env``).
+    """
+    llm_group = (
+        ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+        if provider == "anthropic"
+        else ("OPENAI_API_KEY",)
+    )
+    return (llm_group, *((name,) for name in _BASE_REQUIRED_VARIABLES))
+
+
+def _missing_required(provider: str) -> list[str]:
+    """Names of unsatisfied requirement groups, formatted for the error."""
+    return [
+        " or ".join(group)
+        for group in _required_variable_groups(provider)
+        if not any(_env(name) for name in group)
+    ]
 
 
 def _parse_float_safe(name: str, default: float) -> float:
@@ -188,6 +235,23 @@ class Settings:
     ALLOW_LIVE_WHATSAPP: bool = False
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4.1-mini"
+    # ── LLM provider selection (2026-07-29) ────────────────────────────
+    # "openai" (default) keeps every call on OpenAI exactly as before.
+    # "anthropic" routes both LLM chokepoints — ``_chat_completion`` and
+    # ``chat_with_tools`` — through ``app.services.anthropic_service``.
+    # The default stays OpenAI so a deploy that has not been configured
+    # for Claude behaves identically to today.
+    LLM_PROVIDER: str = "openai"
+    # Accepts EITHER credential shape; the service auto-detects which:
+    #   sk-ant-oat…  a `claude setup-token` (bills the Pro/Max subscription)
+    #   sk-ant-api…  a classic Anthropic API key (bills API credits)
+    ANTHROPIC_AUTH_TOKEN: str = ""
+    ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
+    # When an Anthropic call fails (expired token, quota, network), retry
+    # the same request on OpenAI instead of failing the turn. This is a
+    # live sales agent — a provider outage must not cost a lead. Set
+    # false to surface Anthropic errors instead of masking them.
+    ANTHROPIC_FALLBACK_TO_OPENAI: bool = True
     GOOGLE_SHEETS_CREDENTIALS_JSON: str = "./credentials.json"
     GOOGLE_SHEETS_SPREADSHEET_ID: str = ""
     GOOGLE_SHEETS_LEADS_TAB: str = "Leads"
@@ -623,10 +687,23 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        missing = [name for name in REQUIRED_VARIABLES if not _env(name)]
+        provider = _active_llm_provider()
+
+        missing = _missing_required(provider)
         if missing:
             joined = ", ".join(missing)
-            raise ConfigurationError(f"Missing required variables in .env: {joined}")
+            raise ConfigurationError(
+                f"Missing required variables in .env: {joined} "
+                f"(LLM_PROVIDER={provider})",
+            )
+
+        # The OpenAI fallback needs an OpenAI key. Under
+        # LLM_PROVIDER=anthropic that key is optional, so a deploy that
+        # removed it would otherwise leave the fallback nominally ON and
+        # failing on every retry. Turn it off instead of pretending.
+        anthropic_fallback = _parse_bool_optional("ANTHROPIC_FALLBACK_TO_OPENAI", True)
+        if anthropic_fallback and provider == "anthropic" and not _env("OPENAI_API_KEY"):
+            anthropic_fallback = False
 
         return cls(
             META_VERIFY_TOKEN=_env("META_VERIFY_TOKEN") or _env("MESSENGER_VERIFY_TOKEN"),
@@ -638,6 +715,13 @@ class Settings:
             ALLOW_LIVE_WHATSAPP=_parse_bool_optional("ALLOW_LIVE_WHATSAPP", False),
             OPENAI_API_KEY=_env("OPENAI_API_KEY"),
             OPENAI_MODEL=_env("OPENAI_MODEL") or "gpt-4.1-mini",
+            LLM_PROVIDER=provider,
+            # Accepts the ANTHROPIC_API_KEY alias so an operator who
+            # already exports the conventional name does not have to
+            # rename it just for this project.
+            ANTHROPIC_AUTH_TOKEN=_env("ANTHROPIC_AUTH_TOKEN") or _env("ANTHROPIC_API_KEY"),
+            ANTHROPIC_MODEL=_env("ANTHROPIC_MODEL") or "claude-sonnet-4-6",
+            ANTHROPIC_FALLBACK_TO_OPENAI=anthropic_fallback,
             GOOGLE_SHEETS_CREDENTIALS_JSON=_env("GOOGLE_SHEETS_CREDENTIALS_JSON") or "./credentials.json",
             GOOGLE_SHEETS_SPREADSHEET_ID=_env("GOOGLE_SHEET_ID") or _env("GOOGLE_SHEETS_SPREADSHEET_ID"),
             GOOGLE_SHEETS_LEADS_TAB=_parse_sheet_tab(),
@@ -834,6 +918,15 @@ class Settings:
     @property
     def openai_model(self) -> str:
         return self.OPENAI_MODEL
+
+    @property
+    def llm_provider(self) -> str:
+        """Active LLM backend: "openai" or "anthropic"."""
+        return (self.LLM_PROVIDER or "openai").strip().lower()
+
+    @property
+    def anthropic_model(self) -> str:
+        return self.ANTHROPIC_MODEL
 
     @property
     def openai_system_prompt(self) -> str:
