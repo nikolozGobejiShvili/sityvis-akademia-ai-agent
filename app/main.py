@@ -59,6 +59,14 @@ async def startup():
         "⚙️ USE_PER_PRODUCT_BOOKING="
         f"{getattr(settings, 'USE_PER_PRODUCT_BOOKING', False)}"
     )
+    # Same reason as the flags above: the CRM "Program" column reads this flag to
+    # decide between the readable program NAME and the internal program_id. It was
+    # the one flag in that path with no boot signal, so "is the fix live?" could
+    # only be guessed at. Pure logging, zero behaviour change.
+    print(
+        "⚙️ USE_CONSULTATION_PROGRAM_NAME="
+        f"{getattr(settings, 'USE_CONSULTATION_PROGRAM_NAME', False)}"
+    )
     # Phase 0b (2026-07-20) — boot-log the resolved admin-config directory so
     # operators can see at a glance whether config is being read/written from
     # the repo-default path (ephemeral on Railway) or an operator-mounted

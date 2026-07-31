@@ -3084,9 +3084,22 @@ def _build_context_message(
     adult_target_age = (
         getattr(lead, "adult_target_age", "") or ""
     ).strip()
+    # Booking window travels WITH the turn, like the dates above. The system
+    # prompt states 10:00–21:00 twice, but both statements sit ~15% into a
+    # 52k-char blob; live 2026-07-29 the model announced "10:00 – 17:00" (a
+    # figure that appears nowhere in the repo) and then refused a 17:00 slot
+    # the backend would have accepted. Read from calendar_service so this can
+    # never drift from the window the executor actually enforces.
+    from app.services import calendar_service as _cal
+    booking_window = (
+        f"{_cal.BUSINESS_HOUR_START.strftime('%H:%M')}-"
+        f"{_cal.BUSINESS_HOUR_END.strftime('%H:%M')}"
+    )
     parts = [
         f"today_iso_tbilisi={now_dt.date().isoformat()}",
         f"now_iso_tbilisi={now_dt.isoformat(timespec='minutes')}",
+        f"booking_hours_tbilisi={booking_window}",
+        f"booking_slot_minutes={int(_cal.SLOT_DURATION.total_seconds() // 60)}",
         f"name={(lead.name or '').strip() or '—'}",
         f"phone={(lead.phone or '').strip() or '—'}",
         f"child_age={(lead.child_age or '').strip() or '—'}",

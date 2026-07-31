@@ -926,6 +926,25 @@ class ParentToolExecutor:
         )
 
         if not calendar_free:
+            # Whose block is it? When the busy hour IS this lead's own
+            # consultation, "busy" is true but useless — offering alternatives
+            # invites the agent to move an appointment the parent never asked
+            # to move. Say who owns it instead; no alternatives.
+            if _is_own_existing_booking(self.lead, slot_dt_tz.isoformat()):
+                logger.info(
+                    "[slot_check] available=False reason=already_booked_by_this_lead iso=%s",
+                    slot_dt_tz.isoformat(),
+                )
+                return {
+                    "success": True,
+                    "datetime_iso": slot_dt_tz.isoformat(),
+                    "inside_business_hours": True,
+                    "calendar_available": False,
+                    "available": False,
+                    "reason": "already_booked_by_this_lead",
+                    "booked_datetime_iso": (self.lead.booked_datetime_iso or "").strip(),
+                    "alternative_slots": [],
+                }
             alternatives = self._alternative_slots_for(slot_dt_tz)
             logger.info(
                 "[slot_check] available=False reason=calendar_busy alternatives_count=%d",
@@ -2641,6 +2660,39 @@ def _is_reschedule_scenario(lead: Lead, new_datetime_iso: str) -> bool:
     if old_dt is None or new_dt is None:
         return False
     return old_dt != new_dt
+
+
+def _is_own_existing_booking(lead: Lead, datetime_iso: str) -> bool:
+    """Return True when ``datetime_iso`` names the EXACT moment ``lead`` is
+    already booked for — the mirror of ``_is_reschedule_scenario`` (which
+    answers the DIFFERENT-moment case) with the same conservative guards.
+
+    Live 2026-07-30: after booking 10:00 the parent asked to cover Sunday
+    School in the same visit. The slot was re-checked, Calendar correctly
+    reported the hour busy — with the parent's OWN consultation — and the
+    executor reported plain ``calendar_busy``. The agent then told the parent
+    their own appointment was „ვეღარ ხელმისაწვდომია" and apologised twice.
+    Calendar was right; the answer was wrong because the executor threw away
+    WHO owns the block.
+    """
+    if lead is None:
+        return False
+    if not bool(getattr(lead, "calendly_booked", False)):
+        return False
+    if not (getattr(lead, "calendar_event_id", "") or "").strip():
+        return False
+    old_iso = (getattr(lead, "booked_datetime_iso", "") or "").strip()
+    new_iso = (datetime_iso or "").strip()
+    if not old_iso or not new_iso:
+        return False
+    try:
+        old_dt = _parse_iso_datetime(old_iso)
+        new_dt = _parse_iso_datetime(new_iso)
+    except Exception:
+        return False
+    if old_dt is None or new_dt is None:
+        return False
+    return old_dt == new_dt
 
 
 def _user_requested_verification(message: str) -> bool:
