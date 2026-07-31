@@ -1694,10 +1694,19 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         # dead-end „...ღონისძიებებზე დაგეხმარებით." with NO follow-up — the conversation
         # stopped. Re-apply the SAME always-on guard here so the hoisted handoff turn
         # asks the next question instead of stopping. No-op on any normal program answer.
-        hoisted_engine_out = _ensure_adult_intro_followup_for_parent_flow(
-            conversation, hoisted_engine_out,
-        )
-        return _sanitise_booking_confirmation(conversation, hoisted_engine_out)
+        # Empty-engine symmetry (live 2026-07-31). The main engine call at
+        # L~2012 is guarded by `if engine_response:` and falls through to the
+        # legacy chain when the engine returns "" — the documented contract is
+        # "engine fail/empty → legacy fallback". This hoisted path returned the
+        # empty string straight out instead, and `webhook.py` then logged
+        # „Empty response — skipping send" and sent NOTHING: the parent asked
+        # „რა თარიღი ვერ იპოვე ?" and got silence. Restore the same guard here
+        # so an empty engine turn falls through to the legacy chain below.
+        if hoisted_engine_out:
+            hoisted_engine_out = _ensure_adult_intro_followup_for_parent_flow(
+                conversation, hoisted_engine_out,
+            )
+            return _sanitise_booking_confirmation(conversation, hoisted_engine_out)
 
     # Camp admin-status gate (2026-07-01) — when the operator turns the camp off
     # (`summer_camp.status` != active), a CAMP question is answered with the
@@ -6367,7 +6376,17 @@ def _maybe_handle_camp_registration_link(
 _MANAGER_WORD = "მენეჯერ"
 # Typo seen live (missing the second „ე"): „მენჯერ"/„მენჯერის"/„მენჯერს".
 _MANAGER_WORD_TYPO = "მენჯერ"
-_MANAGER_CONTACT_MARKERS: tuple[str, ...] = ("ნომერ", "ტელეფონ", "კონტაქტ")
+# „ნომრ" is NOT redundant with „ნომერ". Georgian syncopates this noun: the „ე"
+# drops out in the oblique cases — ნომერი → ნომრის / ნომრი / ნომრები — so the
+# nominative stem does not match them. Live 2026-07-31, exact webhook input:
+# „მენჯერის ნომრი რომმომწეროთ" → the manager word matched (the „მენჯერ" typo is
+# already handled), the contact word did NOT, the deterministic disclosure never
+# fired, and the model improvised: it called request_manager_callback instead,
+# which emailed the manager and wrote a Qualified row to the CRM without ever
+# giving the parent the number that `manager_phone=set` proves is configured.
+_MANAGER_CONTACT_MARKERS: tuple[str, ...] = (
+    "ნომერ", "ნომრ", "ტელეფონ", "კონტაქტ",
+)
 # Self-call intent — the parent will phone the manager THEMSELVES, so they want
 # the manager's number; they are NOT leaving their own contact for a callback.
 _SELF_CALL_STEMS: tuple[str, ...] = (
