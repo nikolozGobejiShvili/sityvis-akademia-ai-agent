@@ -187,6 +187,18 @@ def _get_free_slots_for_day(target_date: date, duration_minutes: int) -> list[di
 
     now = datetime.now(TIMEZONE)
     today_tbilisi = now.date()
+
+    # A past day has no free slots. Without this the buffer — which is applied
+    # ONLY when target_date == today — never fires for an earlier date, so a
+    # past day was scanned exactly like a future one and returned a full slate.
+    # Live 2026-07-29: the agent offered "30 ივნისს" slots, then refused the
+    # user's pick from that very list with `past_datetime`. `check_consultation_slot`
+    # and `book_consultation` already reject past datetimes; this closes the
+    # third door so all three agree.
+    if target_date < today_tbilisi:
+        logger.info("[get_free_slots] %s is in the past — no slots", target_date)
+        return []
+
     buffer_applied = target_date == today_tbilisi
     buffer_cutoff = now + SLOT_BUFFER
 
