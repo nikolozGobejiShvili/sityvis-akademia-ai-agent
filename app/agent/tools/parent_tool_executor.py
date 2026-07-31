@@ -320,6 +320,38 @@ class ParentToolExecutor:
         except Exception:
             pass
 
+        # 3. Confirmed-slot anchor (live bug 2026-07-31). On a bare
+        # confirmation turn („კი დაჯავშნე") the parent names NO day and NO
+        # hour, yet the model still re-derives an ISO from scratch — and got
+        # it wrong, by a whole year:
+        #
+        #   [slot_check] requested_datetime=2026-08-01T15:00:00 → available=True
+        #   [slot_check] requested_datetime=2025-07-18T15:00:00 → available=False
+        #                                    reason=past_datetime
+        #
+        # so the slot the parent had just confirmed came back as "past" with
+        # alternatives, and `book_consultation` was never reached. Steps 1-2
+        # cannot catch this: both fire only when the MESSAGE itself names a day
+        # or an hour, and „კი დაჯავშნე" names neither.
+        #
+        # The confirmed slot is already on the conversation — `_check_
+        # consultation_slot` stashed it in pending_booking. When the current
+        # message names no datetime at all, that stash is the only authority
+        # and the model has nothing legitimate to re-derive from. This supplies
+        # the missing fact; it forbids nothing. A message that DOES name a date
+        # or a time is left entirely to steps 1-2.
+        if not _message_names_a_datetime(self.user_message):
+            pending = getattr(self.conversation, "pending_booking", None) or {}
+            if isinstance(pending, dict):
+                pending_iso = (pending.get("requested_datetime_iso") or "").strip()
+                if pending_iso and pending_iso != iso:
+                    logger.info(
+                        "[parent_executor] confirmed-slot anchor: llm=%s "
+                        "pending=%s message_head=%r",
+                        iso, pending_iso, (self.user_message or "")[:60],
+                    )
+                    iso = pending_iso
+
         return iso
 
     def execute(self, tool_name: str, tool_args: dict[str, Any]) -> dict[str, Any]:
@@ -2625,6 +2657,37 @@ RESCHEDULE_INTENT_PHRASES: tuple[str, ...] = (
     "ახალ დროზე ჩამწერეთ",
     "შემიცვალეთ",
 )
+
+
+def _message_names_a_datetime(message: str) -> bool:
+    """True when the message itself carries a day or an hour the parent named.
+
+    Used by the confirmed-slot anchor: only a message that names NOTHING may
+    fall back to the stashed pending_booking slot.
+
+    Deliberately broad — ANY digit, ANY Georgian relative-day word, or ANY
+    month stem counts. A false positive costs nothing: it just defers to the
+    existing relative-date / colloquial-hour passes, i.e. today's behaviour.
+    A false negative is what we must avoid, so anything unparseable is treated
+    as "names a datetime".
+    """
+    text = (message or "").strip()
+    if not text:
+        return False
+    if any(ch.isdigit() for ch in text):
+        return True
+    try:
+        if resolve_relative_datetime(text) is not None:
+            return True
+    except Exception:
+        return True
+    try:
+        from app.flows import parent_flow
+
+        low = text.lower()
+        return any(stem in low for stem in parent_flow.GEORGIAN_MONTH_STEMS)
+    except Exception:
+        return True
 
 
 def _is_reschedule_scenario(lead: Lead, new_datetime_iso: str) -> bool:
