@@ -173,3 +173,62 @@ def test_prompt_tells_the_model_what_the_new_reason_code_means():
     reset_cache()
     text = load_prompt("system_parent_v2")
     assert "already_booked_by_this_lead" in text
+
+
+# ── 5. adjacent user turns must not be glued together ──────────────────────
+
+
+def test_consecutive_same_role_turns_keep_their_boundary():
+    """Anthropic requires alternating roles, so consecutive same-role turns are
+    merged. Merging by extending the block list glued the messages together with
+    nothing between them, and the model read the concatenation:
+
+        „კი" + „კი"                                   -> „კიკი"
+        „ნიკოლოზ გობეჯიშვილი" + „595999733" + „14 წელი"
+                    -> „ნიკოლოზ გობეჯიშვილი59599973314 წელი"
+
+    Live 2026-07-30: the agent asked whether „კიკი" was a name instead of taking
+    the confirmation, so the booking never completed, and it kept re-asking for
+    a name, phone and child age the parent had already given. OpenAI accepts
+    consecutive same-role messages, which is why this appeared only after the
+    provider switch.
+    """
+    from app.services.anthropic_service import split_messages
+
+    _, turns = split_messages([
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "ნიკოლოზ გობეჯიშვილი"},
+        {"role": "user", "content": "595999733"},
+        {"role": "user", "content": "14 წელი"},
+        {"role": "assistant", "content": "ნომერი მივიღე."},
+        {"role": "user", "content": "კი"},
+        {"role": "user", "content": "კი"},
+    ])
+
+    def text_of(turn: dict) -> str:
+        return "".join(b.get("text", "") for b in turn["content"] if b.get("type") == "text")
+
+    contact, _ack, confirm = turns
+    assert "595999733" in contact.get("content")[0]["text"]
+    assert "ნიკოლოზ გობეჯიშვილი595999733" not in text_of(contact)
+    assert "59599973314" not in text_of(contact)
+    assert "კიკი" not in text_of(confirm)
+    assert text_of(confirm).split() == ["კი", "კი"]
+
+
+def test_merging_preserves_non_text_blocks():
+    """A multi-tool round legitimately produces several tool_result blocks in one
+    user turn; only adjacent TEXT blocks get a boundary."""
+    from app.services.anthropic_service import split_messages
+
+    _, turns = split_messages([
+        {"role": "user", "content": "გამარჯობა"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "t", "arguments": "{}"}},
+            {"id": "c2", "type": "function", "function": {"name": "t", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "content": "R1"},
+        {"role": "tool", "tool_call_id": "c2", "content": "R2"},
+    ])
+    kinds = [b.get("type") for b in turns[-1]["content"]]
+    assert kinds == ["tool_result", "tool_result"]
