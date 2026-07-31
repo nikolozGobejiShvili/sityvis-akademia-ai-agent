@@ -27,12 +27,33 @@ def install_mocks() -> dict:
         "post_fetch_calls": 0,
     }
 
+    # Real Settings defaults, captured BEFORE `app.config` is replaced below.
+    # The stub settings object is hand-written, so every flag added to the real
+    # Settings after this script was written raised AttributeError at runtime —
+    # callers swallow it ("admin adult events load failed: ... has no attribute
+    # USE_SECTION_STATUS_GATE") and the ADULT checks below silently stopped
+    # testing anything. Falling back to the real defaults keeps the script
+    # honest as Settings grows; explicit values below still win.
+    try:
+        import importlib as _il
+        _real_settings = _il.import_module("app.config").Settings()
+    except Exception:
+        _real_settings = None
+
+    class _StubSettings(SimpleNamespace):
+        def __getattr__(self, name: str):
+            if _real_settings is not None and hasattr(_real_settings, name):
+                return getattr(_real_settings, name)
+            if name.startswith(("USE_", "ENABLE_", "ALLOW_")):
+                return False
+            raise AttributeError(name)
+
     config = ModuleType("app.config")
     config.DATA_DIR = BASE_DIR / "data"
     config.Settings = object
     config.has_value = lambda value: bool(value and str(value).strip())
     config.csv_values = lambda value: [item.strip() for item in str(value or "").split(",") if item.strip()]
-    config.settings = SimpleNamespace(
+    config.settings = _StubSettings(
         COMPANY_NAME="ტესტ კომპანია",
         COMPANY_TONE_PARENTS="ემპათიური, მშვიდი და პროფესიონალური ტონი.",
         COMPANY_TONE_ADULTS="პრემიუმ, დახვეწილი და კულტურული ტონი.",
@@ -128,16 +149,40 @@ def install_mocks() -> dict:
     sys.modules["app.services.messenger_service"] = messenger_service
 
     calendar_service = ModuleType("app.services.calendar_service")
-    calendar_service.get_available_slots = lambda: [
-        {"date": "15 მაისი", "time": "14:00", "datetime_iso": "2026-05-15T14:00:00+04:00"},
-        {"date": "15 მაისი", "time": "16:00", "datetime_iso": "2026-05-15T16:00:00+04:00"},
-        {"date": "16 მაისი", "time": "11:00", "datetime_iso": "2026-05-16T11:00:00+04:00"},
-    ]
-    calendar_service.get_free_slots = lambda target_date, duration_minutes=30: [
-        {"date": "15 მაისი", "time": "14:00", "datetime_iso": "2026-05-15T14:00:00+04:00"},
-        {"date": "15 მაისი", "time": "16:00", "datetime_iso": "2026-05-15T16:00:00+04:00"},
-        {"date": "16 მაისი", "time": "11:00", "datetime_iso": "2026-05-16T11:00:00+04:00"},
-    ]
+
+    # Clock-relative slot fixture. These were pinned to 2026-05-15/16, which
+    # silently became a past date and made every booking assertion below fail
+    # — the whole downstream chain (state DONE, lead saved, manager notified,
+    # Calendar recorded) collapses once the agent correctly refuses a past
+    # slot. Deriving from "now" keeps the fixture honest at any run date;
+    # weekends are skipped because Sunday is a closed booking day.
+    def _fixture_slots() -> list[dict]:
+        from datetime import date as _date, timedelta as _td
+        from app.agent.services.timestamps import now_tbilisi
+        _MONTHS = {
+            1: "იანვარი", 2: "თებერვალი", 3: "მარტი", 4: "აპრილი",
+            5: "მაისი", 6: "ივნისი", 7: "ივლისი", 8: "აგვისტო",
+            9: "სექტემბერი", 10: "ოქტომბერი", 11: "ნოემბერი", 12: "დეკემბერი",
+        }
+        days: list[_date] = []
+        cursor = now_tbilisi().date() + _td(days=1)
+        while len(days) < 2:
+            if cursor.weekday() != 6:  # Sunday is closed
+                days.append(cursor)
+            cursor += _td(days=1)
+        first, second = days
+        def _slot(d: _date, hour: int) -> dict:
+            return {
+                "date": f"{d.day} {_MONTHS[d.month]}",
+                "time": f"{hour:02d}:00",
+                "datetime_iso": f"{d.isoformat()}T{hour:02d}:00:00+04:00",
+            }
+        return [_slot(first, 14), _slot(first, 16), _slot(second, 11)]
+
+    calendar_service.get_available_slots = lambda: _fixture_slots()
+    calendar_service.get_free_slots = (
+        lambda target_date=None, duration_minutes=30, **kw: _fixture_slots()
+    )
     calendar_service.check_slot_available = lambda slot_datetime, duration_minutes=30: True
     calendar_service.format_slots_for_chat = fake_format_slots_for_chat
 

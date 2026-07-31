@@ -145,6 +145,16 @@ def _force_parent_llm_engine_off(monkeypatch):
         USE_CONSULTATION_PROGRAM_NAME=False,
         USE_PROGRAM_FOLLOWUP=False,
         USE_SAFETY_SPINE=False,
+        # The last four smart-agent flags with no pin here. They are ON in
+        # production, so once `.env` was set to mirror the deploy log the
+        # "stack off is byte-identical" assertions inherited live values and
+        # went red. Pinned for the same reason as every flag above: the suite
+        # must describe the CODE, not the operator's current configuration.
+        # Tests that exercise these paths opt in on top of this LIFO stack.
+        USE_DYNAMIC_PROGRAMS=False,
+        USE_SKILLS=False,
+        USE_LEARNING=False,
+        USE_LEAD_MEMORY=False,
     )
     # Pin the config singleton too, so tests that rebuild settings from
     # `config_module.settings` (rather than the already-pinned module copies) do
@@ -166,6 +176,16 @@ def _force_parent_llm_engine_off(monkeypatch):
     monkeypatch.setattr(_cs, "settings", swapped)
     monkeypatch.setattr(_ple, "settings", swapped)
     monkeypatch.setattr(_ale, "settings", swapped)
+    # `sheets_service` holds its own `settings` binding and reads
+    # USE_PER_PRODUCT_BOOKING to decide the CRM row width (17 vs 18 columns).
+    # It was the one module in this list left unpinned, so its flag-OFF tests
+    # silently depended on the developer's `.env` having the flag off. The
+    # moment `.env` was set to mirror the production boot log (2026-07-30) they
+    # went red — asserting A1:Q1 while the ambient flag produced A1:R1. Pin it
+    # like the rest so the suite states what the CODE does, independent of
+    # whatever configuration the operator is currently reproducing locally.
+    from app.services import sheets_service as _sheets
+    monkeypatch.setattr(_sheets, "settings", swapped)
     # Client ❤️ emoji policy (2026-06-28) defaults ON for live; pin it OFF for
     # every test so the existing greeting/booking/thanks assertions stay
     # byte-identical. The emoji test file opts back in on top of this stack.

@@ -34,7 +34,15 @@ def test_flag_default_off():
 
 
 def test_flag_from_env_default_off(monkeypatch):
+    """With the variable absent from BOTH sources, `from_env` yields the code
+    default. `_env` reads `os.environ` first and falls back to the parsed
+    `.env` file, so deleting only the process variable is not isolation — an
+    operator whose `.env` mirrors production (2026-07-30) made this assert the
+    opposite of what it names."""
     monkeypatch.delenv("USE_PER_PRODUCT_BOOKING", raising=False)
+    monkeypatch.delitem(
+        config_module.ENV_VALUES, "USE_PER_PRODUCT_BOOKING", raising=False,
+    )
     assert config_module.Settings.from_env().USE_PER_PRODUCT_BOOKING is False
 
 
