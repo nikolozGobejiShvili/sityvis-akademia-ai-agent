@@ -39,6 +39,14 @@ ALLOWED_EXACT_TEMPLATE_DIFFS: dict[str, tuple[str, str]] = {
         "ამ ეტაპზე ღონისძიებების განრიგი ზუსტდება.",
         "ამ ეტაპზე აქტიური ღონისძიება სიაში არ მაქვს. თუ გსურთ, მენეჯერთან დაგაკავშირებთ.",
     ),
+    # Live 2026-07-31: the booking confirmation told the parent a *consultant*
+    # would call. The person who calls back is the MANAGER — the agent itself is
+    # the online consultant. Same correction applied in the live prompts, which
+    # had been offering „მენეჯერს/კონსულტანტს" as interchangeable.
+    "parent/ask_phone_only": (
+        "რომ კონსულტანტი დაგიკავშირდეთ",
+        "რომ მენეჯერი დაგიკავშირდეთ",
+    ),
 }
 
 ALLOWED_EXACT_PROMPT_DIFFS: dict[str, tuple[str, str]] = {

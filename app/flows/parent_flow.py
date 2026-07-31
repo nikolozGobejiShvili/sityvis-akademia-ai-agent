@@ -1667,6 +1667,26 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                     conversation, hoisted_camp_status,
                 )
 
+        # Explicit manager-NUMBER request on the HOISTED path (live 2026-07-31).
+        # The seven commitment interceptors live in
+        # `_maybe_handle_contact_commit_chain`, which `_handle_impl` calls at
+        # L~1981 — AFTER this hoist has already returned. So on a per-product
+        # conversation the deterministic disclosure was unreachable and the
+        # engine answered instead:
+        #   in='მენჯერის ნომერი რომ მომწეროთ შეგიძლიათ ?'
+        #   out='სამწუხაროდ, მენეჯერის პირადი ნომრის გაზიარება არ შემიძლია…'
+        # `_render_manager_number_answer` never refuses — that reply could only
+        # come from the model. The detector matches this input; it simply never
+        # ran. Re-apply the SAME handler here, before contact capture, exactly
+        # as the main chain orders it.
+        hoisted_manager_number = _maybe_handle_explicit_manager_request(
+            conversation, message,
+        )
+        if hoisted_manager_number is not None:
+            return _sanitise_booking_confirmation(
+                conversation, hoisted_manager_number,
+            )
+
         # Dynamic contact capture (deterministic, 2026-07-25) — the hoist returns
         # to the engine below, bypassing the deterministic contact-collection
         # handler. Live bug: in a dynamic-product booking a bare „595999733" was

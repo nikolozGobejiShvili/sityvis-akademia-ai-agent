@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -1014,6 +1015,7 @@ class ParentToolExecutor:
             if isinstance(self.conversation.pending_booking, dict):
                 is_reschedule = _is_reschedule_scenario(
                     self.lead, slot_dt_tz.isoformat(),
+                    conversation=self.conversation,
                 )
                 if is_reschedule:
                     self.conversation.pending_booking["source"] = "reschedule"
@@ -1188,6 +1190,17 @@ class ParentToolExecutor:
             )
             name = ""
         phone_raw = (args.get("phone") or "").strip()
+        # Live 2026-07-31: the model read the MASKED phone „595***733" out of
+        # its own previous message and handed it back as the real one —
+        #   tool_call args={'phone': '595***733'}
+        #   [book_consultation] phone_valid=False phone=
+        #   BLOCKED reason=invalid_phone
+        # — so the parent was asked to retype a number the lead already held. A
+        # mask is a display artefact, never a phone. Dropping it lets the
+        # existing `phone_raw or self.lead.phone` fallback do its job.
+        if phone_raw and _is_masked_phone(phone_raw):
+            logger.info("[book_consultation] ignoring masked phone argument")
+            phone_raw = ""
         datetime_iso = (args.get("datetime_iso") or "").strip()
         # Booking Date Parse Patch (2026-06-04) — re-resolve a Georgian
         # relative-day phrase from the user message so "ხვალ 11 საათზე"
@@ -1493,7 +1506,10 @@ class ParentToolExecutor:
         # all `_book_consultation` validations pass (phone, age, etc.)
         # so the safe-ordering inside `_reschedule_booking` (book new
         # → verify event_id → THEN cancel old) takes over.
-        if _is_reschedule_scenario(self.lead, slot_dt_tz.isoformat()):
+        if _is_reschedule_scenario(
+            self.lead, slot_dt_tz.isoformat(),
+            conversation=self.conversation,
+        ):
             logger.info(
                 "[book_consultation] reschedule scenario — rerouting to "
                 "_reschedule_booking: old_event_id=%s old_iso=%s new_iso=%s",
@@ -2659,6 +2675,20 @@ RESCHEDULE_INTENT_PHRASES: tuple[str, ...] = (
 )
 
 
+def _is_masked_phone(value: str) -> bool:
+    """True when the value is a masked phone for DISPLAY (e.g. 595***733).
+
+    `_mask_phone` produces these for the logs and the agent echoes them back to
+    the parent, so the model can read one and mistake it for the real number.
+    """
+    return any(ch in (value or "") for ch in ("*", "•", "×"))
+
+
+# Nine or more digits, optionally separated — a phone, never a date or an hour.
+# („17:00" is two runs of two; „1 აგვისტო 10 საათი" is separated by letters.)
+_PHONE_LIKE_RUN_RE = re.compile(r"(?:\d[\s\-().]*){9,}")
+
+
 def _message_names_a_datetime(message: str) -> bool:
     """True when the message itself carries a day or an hour the parent named.
 
@@ -2674,7 +2704,14 @@ def _message_names_a_datetime(message: str) -> bool:
     text = (message or "").strip()
     if not text:
         return False
-    if any(ch.isdigit() for ch in text):
+    # A bare phone number is not a date. Live 2026-07-31: the parent answered a
+    # phone request with „595999733", the blanket digit test read that as
+    # "names a datetime", the anchor stood down, and the model's invented ISO
+    # survived — [slot_check] requested_datetime=2025-07-16T17:00:00 →
+    # past_datetime — so a slot offered seconds earlier came back unavailable.
+    # Strip phone-length digit runs before asking whether a number is present.
+    probe = _PHONE_LIKE_RUN_RE.sub(" ", text)
+    if any(ch.isdigit() for ch in probe):
         return True
     try:
         if resolve_relative_datetime(text) is not None:
@@ -2690,7 +2727,47 @@ def _message_names_a_datetime(message: str) -> bool:
         return True
 
 
-def _is_reschedule_scenario(lead: Lead, new_datetime_iso: str) -> bool:
+def _booking_is_for_a_different_program(
+    conversation: Any | None, lead: Lead,
+) -> bool:
+    """True when THIS consultation belongs to a DIFFERENT program than the one
+    the lead's existing booking was made for.
+
+    Operator rule: one consultation per program. Naming a new time for the SAME
+    program moves that booking (a parent must not hold Monday AND Tuesday for
+    one program); a consultation for ANOTHER program is a separate appointment
+    and must never cancel the first.
+
+    `lead.consultation_program_name` is written at booking commit, so during a
+    later booking it still names the EARLIER one. The current program is read
+    through the very same resolver the commit uses — one source of truth, no
+    parallel matching logic here.
+
+    Returns False whenever either side is unknown, so an unresolvable case keeps
+    the previous same-program behaviour instead of silently changing it.
+    """
+    previous = (getattr(lead, "consultation_program_name", "") or "").strip()
+    if not previous or conversation is None:
+        return False
+    try:
+        from app.flows import parent_flow
+
+        current = (
+            parent_flow._resolve_consultation_program_name(conversation, lead) or ""
+        ).strip()
+    except Exception:  # pragma: no cover — defensive → same-program behaviour
+        return False
+    if not current:
+        return False
+    return current.casefold() != previous.casefold()
+
+
+def _is_reschedule_scenario(
+    lead: Lead,
+    new_datetime_iso: str,
+    *,
+    conversation: Any | None = None,
+) -> bool:
     """Return True when ``lead`` currently holds an active booking and
     ``new_datetime_iso`` names a DIFFERENT moment than the current
     booked datetime.
@@ -2722,7 +2799,27 @@ def _is_reschedule_scenario(lead: Lead, new_datetime_iso: str) -> bool:
         return False
     if old_dt is None or new_dt is None:
         return False
-    return old_dt != new_dt
+    if old_dt == new_dt:
+        return False
+
+    # Live 2026-07-31 — this branch DELETED a confirmed booking. The parent had
+    # a Disneyland consultation at 15:00, then asked for a SUNDAY SCHOOL
+    # consultation. "already booked + a different time" was read as "move it":
+    #
+    #   [book_consultation] reschedule scenario — rerouting to _reschedule_booking:
+    #                       old_event_id=klq48ir1… old_iso=…15:00 new_iso=…10:00
+    #   [CALENDAR] ✅ Event cancelled: event_id=klq48ir1…
+    #
+    # and the Disneyland appointment disappeared from the calendar. With
+    # USE_PER_PRODUCT_BOOKING a parent may legitimately hold one consultation
+    # per program, so a second booking is not evidence of a move.
+    #
+    # One consultation PER PROGRAM: a new time for the same program still moves
+    # that booking, but a consultation for another program is its own
+    # appointment. Callers that pass no `conversation` keep the old behaviour.
+    if _booking_is_for_a_different_program(conversation, lead):
+        return False
+    return True
 
 
 def _is_own_existing_booking(lead: Lead, datetime_iso: str) -> bool:
