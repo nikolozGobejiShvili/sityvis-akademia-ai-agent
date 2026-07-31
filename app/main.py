@@ -1,4 +1,31 @@
 import asyncio
+import logging
+import os
+import sys
+
+# Observability (2026-07-31 live test): the app never configured logging, so
+# Python fell back to `logging.lastResort` — a WARNING-only stderr handler.
+# Every `logger.info` diagnostic already written in this codebase was therefore
+# dropped in production: `[slot_check]`, `[book_consultation] datetime_parsed=`,
+# and `[messenger_debug] turn ... in=... out=...`. A live booking failure could
+# not be traced from the Railway logs at all — only `print()` output survived.
+#
+# This adds no new log call; it only lets the existing ones out. `basicConfig`
+# is a no-op when a handler is already installed (pytest's caplog), so test
+# capture is unaffected.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    stream=sys.stdout,
+)
+# Third-party loggers stay at WARNING. Their INFO lines are noise and some of
+# them echo request URLs — which must never reach the logs (never log a token).
+for _noisy_logger in (
+    "httpx", "httpcore", "urllib3", "openai", "anthropic",
+    "google", "googleapiclient", "googleapiclient.discovery_cache",
+    "apscheduler", "gspread",
+):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
 
 from fastapi import FastAPI
 from app.routes.admin import router as admin_router
@@ -35,6 +62,23 @@ async def startup():
     print(f"✅ {settings.COMPANY_NAME} AI Agent started")
     print(f"📚 Knowledge base loaded: {len(settings.KNOWLEDGE_BASE)} chars")
     print(f"🎭 Events loaded: {len(settings.EVENTS)} chars")
+    # Boot marker for the log-visibility fix. Doubles as a build discriminator:
+    # the 2026-07-31 arc showed USE_CONSULTATION_PROGRAM_NAME was NOT one (it
+    # shipped a PR earlier), so a stuck deploy looked live. This line is new, so
+    # its absence in a boot log proves an older container is still serving.
+    print(f"⚙️ LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}")
+    # Live 2026-07-31: the agent refused to give the manager's number four
+    # times. `get_manager_phone()` reads Admin Config ONLY (sections.yaml on the
+    # Railway volume, then the manager_contacts mirror) and deliberately ignores
+    # MANAGER_PHONE_NUMBER, returning "" when unset — so an empty volume config
+    # silently removes the number. Presence only; the value is never logged.
+    try:
+        from app.services import admin_config_service
+
+        _mgr = (admin_config_service.get_manager_phone() or "").strip()
+        print(f"⚙️ manager_phone={'set' if _mgr else 'NOT set (Admin Config has none)'}")
+    except Exception as exc:  # pragma: no cover — diagnostic must never block boot
+        print(f"⚙️ manager_phone=UNKNOWN ({type(exc).__name__})")
     # Phase 3.9+ — surface feature-flag state at boot so operators can see at
     # a glance whether the deterministic-first router + LLM analyzer are in
     # the live runtime, without grepping the env or settings.

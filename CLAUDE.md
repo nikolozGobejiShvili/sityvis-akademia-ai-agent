@@ -1,5 +1,143 @@
 # AI Sales Agent — სიტყვის აკადემია
 
+## 🟢 CURRENT STATE — 2026-07-31 — live-test arc, 4 commits, ALL PUSHED + MERGED (PR #18)
+
+Branch `feat/dynamic-programs` → merged into `feat/camp-topic-facts` (PR #18, deploy `d3eef9db`).
+**HEAD `3f3adee`.** Gates at every commit: `pytest tests/ -q` = **1 failed / 5555 passed / 28 skipped**
+— the single failure `test_approved_copy_service_2026_07_11::test_parent_flow_start_book_intent_uses_fast_track_and_advances_state`
+is PRE-EXISTING and unrelated. `python -m evals.run_evals` = **93/100** (offline, unchanged);
+`--llm --judge` = **84/100** · 🇬🇪 125/132 — but see "eval is measuring a closed funnel" below.
+
+**Operator rule that governed every fix in this arc (BINDING):** never fix by adding a prohibition
+or a new deterministic path — that is what turned 1 bug into 2–10. Every change below is a deletion,
+a symmetry restoration, or supplying a FACT the model was missing. Not one banned phrase was added.
+
+### `3f3adee` — per-program follow-up was unreachable + reply medium was never stated
+* **Follow-up dead for EVERY admin-panel program.** `followup_service._followup_program_eligibility`
+  returned early on `segment == "PARENT"` (`is_dynamic=False`), which shadowed the `program_id`
+  lookup below it. Disneyland / Sunday School are served by the PARENT flow, so they were classified
+  as CAMP leads and then silenced by the camp-registration gate the moment the operator closed the
+  camp. Measured: Disneyland lead, 25h idle, `USE_PROGRAM_FOLLOWUP=true` → `[followup] skipped
+  reason=camp_registration_closed`. Fixed by running the dynamic-product lookup FIRST. After:
+  `sent`, `stage → first_24h`. Camp path untouched; flag-off byte-identical.
+  ⚠️ `USE_PROGRAM_FOLLOWUP` is NOT printed at boot — confirm it is `true` on Railway or the fix is inert.
+* **Agent sent Markdown to Meta.** Live: `**კონსულტაცია წარმატებით დაიჯავშნა!**` and a `| … |---|`
+  table — Messenger shows the raw characters. No live prompt stated the medium, while the prompts
+  themselves carry 537 `*` and 13 `**` pairs the model imitates. Per-turn context now carries
+  `reply_channel` + `reply_rendering=plain_text`. ⚠️ **NOT verified against a live model** — logic
+  only. Confirm on the next live test.
+
+### `cabfa84` — ⭐ the big one: adjacent same-role turns were GLUED for Anthropic
+`anthropic_service._normalize_turns` merges consecutive same-role turns (Anthropic demands
+alternating roles; OpenAI does not). It merged by `content.extend(...)`, and two adjacent TEXT
+blocks are read contiguously — so the turn boundary was silently deleted:
+
+```
+„კი" + „კი"                                     -> „კიკი"
+„ნიკოლოზ გობეჯიშვილი" + „595999733" + „14 წელი" -> „ნიკოლოზ გობეჯიშვილი59599973314 წელი"
+```
+
+**This ONE defect produced all three live symptoms** (docx 2026-07-30 proves the user sent exactly
+`კი`, one run, and the agent echoed `კიკი`, one run): confirmation misread as a name change →
+booking never completed; name/phone/age arrived as one unparsable run → agent kept re-asking for
+details already given. Adjacent TEXT blocks are now joined with `\n`; non-text blocks
+(`tool_result` after a multi-tool round) untouched. **Provider-switch regression — absent on
+gpt-4.1-mini.** Whenever a symptom is "new since `LLM_PROVIDER=anthropic`", suspect this layer.
+
+### `7ce29df` — four booking defects proven by the Railway logs of 2026-07-29/30
+1. **Literal example dates removed** (15 lines: 14 in `system_parent_v2.md`, 1 in `parent_lean.md`).
+   „27 მაისს" appeared 9× and was the prompt's most-repeated string; the model copied it into a tool
+   call → `[book_consultation] BLOCKED reason=datetime_in_past slot=2026-05-27T10:00`. Examples are
+   now relative („ხვალ"), which the backend resolves, so a copied example degrades to a valid future
+   date. A test now fails if ANY literal Georgian month+day returns to a live prompt.
+2. **A past day returned a full slate.** `calendar_service._get_free_slots_for_day` applies
+   SLOT_BUFFER only when `target_date == today`, so an earlier date was scanned like a future one.
+   Live: offered „30 ივნისს" slots on 29 July, then refused the user's pick from that list as past.
+   RED-checked: without the guard `2026-06-30` yields **11** slots; with it, **0**.
+3. **Business hours were prompt-only.** The prompt states 10:00–21:00 twice, but both sit ~15% into a
+   52k-char blob; live the model announced „10:00 – 17:00" (a figure that appears NOWHERE in the
+   repo) and refused a 17:00 slot the executor would accept. Now `booking_hours_tbilisi` +
+   `booking_slot_minutes` travel in the per-turn context beside the dates, read from
+   `calendar_service` so they cannot drift from what the executor enforces.
+4. **The lead's own booking was reported as a conflict.** After booking 10:00 a parent asked to also
+   cover Sunday School; the re-check hit their OWN consultation and the executor returned plain
+   `calendar_busy` → agent said „ვეღარ ხელმისაწვდომია" about their own appointment, then apologised
+   twice. New `_is_own_existing_booking` (mirror of `_is_reschedule_scenario`) yields
+   `already_booked_by_this_lead`, no alternatives; contract line added to the prompt's reason-code
+   list. One consultation covers several programs.
+
+New file `tests/test_live_booking_fixes_2026_07_30.py` (10 tests) pins the FACT each defect got
+wrong, not the wording. Both new guards were RED-checked — disabled, the old behaviour returns.
+
+### `1e20a4d` — the suite now describes the CODE, not the operator's `.env`
+`.env` was set to mirror the Railway boot log (see below) and **13 tests went red** — none were
+testing what they claimed. `conftest` pinned `USE_PER_PRODUCT_BOOKING=False` on config/parent_flow/
+conversation_service/both engines but NOT on `sheets_service`, which holds its own `settings` and
+reads that flag for the CRM row width (A1:Q1 vs A1:R1). Four smart-agent flags
+(`USE_DYNAMIC_PROGRAMS`, `USE_SKILLS`, `USE_LEARNING`, `USE_LEAD_MEMORY`) had no pin at all.
+`test_flag_from_env_default_off` deleted only the process var — `_env` falls back to the parsed
+`.env`, so that was never isolation. All fixed. Also `test_agent.py` (standalone, NOT collected by
+`pytest tests/`): slot fixture was pinned to `2026-05-15` (date-bomb) → now clock-relative; its stub
+settings was a hand-written `SimpleNamespace` that raised `AttributeError` for every flag added
+since (`USE_SECTION_STATUS_GATE`), silently voiding 6 ADULT checks → now falls back to real
+`Settings` defaults.
+
+### ⚠️ The camp is OFF by operator decision — this is NOT a bug
+Every camp stream is past and camp registration is closed **deliberately**. So:
+* every camp question correctly answers „ბანაკის ბოლო ნაკადი უკვე დაიწყო და რეგისტრაცია დასრულებულია."
+* `test_agent.py` fails **31/68** for that single reason — its expectations date from when the camp
+  was live. **CLAUDE.md's old „68 mocked end-to-end checks ✅" line is STALE.**
+* the `--llm --judge` eval scores **84/100**, but **14 of its 23 failing checks are that one line**
+  (`[U7] actual: [0/3] sample: ბანაკის ბოლო ნაკადი…`). 84/100 measures a deliberately closed funnel,
+  not the agent's judgement. Re-point the eval cases at the live programs before trusting the number.
+* live programs are now **დისნეილენდი** + **საკვირაო სკოლა** only (adult events also off).
+
+### `.env` now mirrors production; local ≠ server was hiding real behaviour
+Five flags differed; four were OFF locally but ON in the Railway boot log — every earlier local test
+exercised a different agent. Now 14/14 match: `USE_DYNAMIC_PROGRAMS`/`USE_SKILLS`/
+`USE_DYNAMIC_WELCOME`/`USE_PER_PRODUCT_BOOKING`=true, `CONVERSATION_TRACE_DEBUG`=false.
+**`pytest` is deliberately hermetic and can NEVER show where the live agent is** — that is correct
+and must stay. The tool that mirrors production is the **eval harness** (it starts from live
+settings via `dataclasses.replace`).
+
+### Railway MCP is connected (2026-07-31)
+`claude mcp add --scope user railway --transport http https://mcp.railway.com`. Project
+`brilliant-vision` `fae52cbf-2960-45fb-bfd6-2908aebc9740`, service `web`
+`38c9f623-8555-423d-a5f6-3f2fa420de30`, env `production` `82c8602a-ed1f-4a43-bc5e-bd4e35c69a18`.
+⚠️ Connected via **OAuth**, so `list-variables` returns **names only** (`valuesRedacted: true`) —
+flag VALUES must still be read from the boot log. Secrets are not exposed to the agent.
+
+### OPEN — next session starts here
+1. **Read the boot log of deploy `d3eef9db`** and confirm: the NEW line `⚙️ USE_CONSULTATION_PROGRAM_NAME=…`
+   (absent before this arc ⇒ if missing, an OLD container is serving), and whether
+   `USE_PROGRAM_FOLLOWUP` is true.
+2. **Markdown fix is UNVERIFIED against a live model.** Check a real reply for `**`, `|`, `#`.
+3. **A date defect may remain.** Live docx: „ხვალ 12:00 თავისუფალია" → on confirm → „სისტემა წარსულ
+   თარიღად ხედავს". „ხვალ" is future, so this is wrong. HYPOTHESIS ONLY: the „კიკი" corruption made
+   the model lose the date thread, so `cabfa84` may already fix it. **NOT PROVEN** — re-test.
+4. **`/data/admin_config/sections.yaml` is on a Railway volume, NOT in the repo.** Disneyland and
+   Sunday School cannot be reproduced locally without it. Pull it via Railway MCP / CLI.
+5. `summary.md` was restructured (transcript first, task + output contract last, 3 worked examples)
+   to address the bloated CRM „Conversation Summary" cell — **but 12 live runs on claude-sonnet-4-6
+   across the old AND new prompt came back clean, so the reported bloat was never reproduced.** Kept
+   because the contract is better specified, NOT because it is proven. Do not claim it fixed.
+6. `app/agent/skills/*.md` is a FOURTH live prompt layer (`USE_SKILLS=true`) that the prompt audit
+   never covered. Also live and undocumented here: `USE_DYNAMIC_PROGRAMS`, `USE_PER_PRODUCT_BOOKING`,
+   `USE_DYNAMIC_WELCOME`.
+7. Audit artefacts (uncommitted): `reports/prompt-audit/` (AUDIT.md, PLAN.md, classification.csv of
+   718 lines, `fix_literal_dates.py`), `reports/AUDIT_2026_07_30.md`.
+
+**Method note that repeatedly paid off this arc:** the Railway logs and the live `.docx` transcript
+found root causes that screenshots and reasoning did not. Ask for logs first. And any character-level
+claim made through a shell pipe is inadmissible — Georgian mangles to cp1252; read files in Python
+with explicit UTF-8.
+
+## 🟢 CURRENT STATE — 2026-07-01 — READ `HANDOFF.md` TOP FIRST
+Branch `feat/camp-topic-facts`, **HEAD `a160d9b`**. Live mode unchanged (engine ON, planner/slim OFF). Committed this arc: `a160d9b` today-first availability (Asia/Tbilisi) · `932383d` camp topic facts refine · `f0855d7` parent-contact greeting-strip + emoji + medical. **TWO uncommitted bodies of work AWAIT the user's approval** (separate commits; stage explicitly; NEVER stage `sections.yaml`/`evals/`): (1) **Batch A** Georgian time E7/E8/E9 (`app/agent/services/timestamps.py` + its 2026-06-29 test); (2) **Client QA fix** topic-specific unknown-detail fallback + approved intro/price/CTA/food wording + blue-heart `💙` policy (`parent_flow.py`, `app/reasoning/camp_topic_facts.py`, `camp_topic_facts.yaml`, `system_parent_v2.md` + 3 test files). Full suite `3296 passed / 17 failed` — all 17 pre-existing/unrelated (date-bombs + dirty `sections.yaml`; confirmed by stash). `evals/baseline.json` = 90/100 — do NOT overwrite. **Next: Batch B multi-intent fixes** (audit done; U4/R8/R9 + decline-info-drop; structured intent-extraction, not regex). Details: `HANDOFF.md` top + memory `arc_state_2026_07_01` / `multi_intent_audit_batch_b`.
+
+## 🔴 CURRENT STATE — 2026-06-29 — (eval-harness banner; HEAD/state SUPERSEDED by the 2026-07-01 banner above)
+New infra: an **eval harness** at `evals/` (READ-ONLY; `python -m evals.run_evals` free/offline, or `--llm --judge` for real OpenAI + Claude grammar judge; best-of-3). It measures the agent's understanding in 3 metrics — 🧠 Intelligence · ⚙️ Mechanics · 🇬🇪 Georgian Grammar. **Current adversarial baseline (51 cases): 90/100 · 🧠 92% · ⚙️ 86% · 🇬🇪 100%** (`evals/baseline.json`). The agent code/prompt is UNCHANGED by this work (HEAD `7b30f9b`, branch `feat/camp-topic-facts`; eval tree uncommitted). **Open findings** (`evals/findings/`): understanding bugs `U4/U9/R8/R9/Q9` → fix with **STRUCTURED INTENT-EXTRACTION, not a regex/substring guard** (U4's root cause IS such a guard; U8 passes / U4 fails on word order alone); parser bugs `E7/E8/E9` (time/date) → code/regex is correct there. Every fix must be proven by the eval (finding 0/3 → 3/3, no regressions). Full details + the critical fix-layer decision are in the **`## 🔴 CURRENT STATE — 2026-06-29` section at the top of `HANDOFF.md`**.
+
 ## ⚠️ CURRENT STATUS (2026-06-28) — READ FIRST (LEGACY MODE)
 **Newest handoff:** [`docs/HANDOFF_LEGACY_STABILIZATION_2026_06_28.md`](docs/HANDOFF_LEGACY_STABILIZATION_2026_06_28.md) (supersedes the 2026-06-25 handoff for current status). HEAD = `01b0d2a`.
 
