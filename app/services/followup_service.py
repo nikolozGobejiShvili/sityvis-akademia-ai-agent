@@ -305,8 +305,16 @@ def _followup_program_eligibility(
     segment = getattr(conversation, "segment", "") or ""
     if not getattr(settings, "USE_PROGRAM_FOLLOWUP", False):
         return (segment == "PARENT", "", False, "")
-    if segment == "PARENT":
-        return (True, "", False, "")  # camp lead — unchanged copy
+    # A lead tagged to a dynamic admin product is a DYNAMIC lead whatever its
+    # segment — so this is checked before the camp branch. Kids' programs
+    # (Disneyland, Sunday School) are served by the PARENT flow, so the old
+    # `segment == "PARENT"` early return classified them as camp leads
+    # (`is_dynamic=False`) and the camp-registration gate below then silenced
+    # their follow-ups the moment the operator closed the camp. Measured
+    # 2026-07-30: with the camp off, `[followup] skipped
+    # reason=camp_registration_closed` for a Disneyland lead even with
+    # USE_PROGRAM_FOLLOWUP=true — i.e. per-program follow-up was unreachable
+    # for every program the operator adds from the panel.
     try:
         from app.domain.decision.models import reserved_program_ids
         lead = getattr(conversation, "lead", None)
@@ -319,6 +327,8 @@ def _followup_program_eligibility(
             )
     except Exception:  # pragma: no cover — defensive
         pass
+    if segment == "PARENT":
+        return (True, "", False, "")  # camp lead — unchanged copy
     return (False, "", False, "")
 
 

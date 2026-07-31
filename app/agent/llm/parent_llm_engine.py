@@ -3100,6 +3100,14 @@ def _build_context_message(
         f"now_iso_tbilisi={now_dt.isoformat(timespec='minutes')}",
         f"booking_hours_tbilisi={booking_window}",
         f"booking_slot_minutes={int(_cal.SLOT_DURATION.total_seconds() // 60)}",
+        # What the reply is rendered in. Meta DMs show the raw characters, so
+        # `**text**`, `# heading` and `| table |` reach the customer as literal
+        # asterisks, hashes and pipes — live 2026-07-30 sent
+        # „**კონსულტაცია წარმატებით დაიჯავშნა!**" and a markdown table. Nothing
+        # in the prompt said what the medium was, so the model reasonably
+        # assumed a renderer; this states the medium as a fact of the turn.
+        f"reply_channel={(getattr(conversation, 'platform', '') or 'messenger')}",
+        "reply_rendering=plain_text (markup characters are shown literally)",
         f"name={(lead.name or '').strip() or '—'}",
         f"phone={(lead.phone or '').strip() or '—'}",
         f"child_age={(lead.child_age or '').strip() or '—'}",

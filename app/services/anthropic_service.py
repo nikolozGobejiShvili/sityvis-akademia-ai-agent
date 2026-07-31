@@ -97,6 +97,49 @@ _CC_BILLING_HEADER = (
 _CONVERSATION_START_MARKER = "[conversation start]"
 
 
+# ── Per-model request shape ─────────────────────────────────────────────
+#
+# Newer model families changed the request surface. Sending the old shape is
+# a hard 400, not a soft degradation — so switching ANTHROPIC_MODEL to a
+# current model would break every call unless the body adapts.
+
+#: These reject ``temperature`` / ``top_p`` / ``top_k`` outright. Every call
+#: site in this codebase sets a non-default temperature (0.0–0.7), so the
+#: parameter has to be dropped rather than clamped.
+_NO_SAMPLING_PARAMS = (
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
+#: These think by default, and thinking shares the ``max_tokens`` budget with
+#: the reply. This agent caps replies at 200–500 tokens, so without headroom
+#: the answer is truncated mid-sentence — the model spends the budget
+#: thinking and never finishes speaking.
+#:
+#: Disabling thinking instead would be worse here: on those models a
+#: thinking-disabled request can emit a tool call as plain text, which the
+#: turn then reports as success while the tool never runs. This agent is
+#: entirely tool-driven, so a silently-skipped `save_lead_info` loses the
+#: lead. Low effort plus headroom keeps thinking on and cheap.
+_THINKS_BY_DEFAULT = (
+    "claude-opus-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
+#: Extra output budget granted to thinking-by-default models.
+_THINKING_HEADROOM_TOKENS = 4000
+
+
+def _model_matches(model: str | None, family: tuple[str, ...]) -> bool:
+    name = (model or "").strip().lower()
+    return any(name.startswith(prefix) for prefix in family)
+
+
 # ── Credentials ─────────────────────────────────────────────────────────
 
 
@@ -300,7 +343,28 @@ def _normalize_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     for turn in turns:
         if merged and merged[-1]["role"] == turn["role"]:
-            merged[-1]["content"].extend(turn["content"])
+            previous = merged[-1]["content"]
+            incoming = list(turn["content"])
+            # Two adjacent TEXT blocks are read contiguously by the model, so
+            # extending the list glues the messages together with nothing in
+            # between: „კი" + „კი" arrived as „კიკი" and the model asked whether
+            # that was a name; „ნიკოლოზ გობეჯიშვილი" + „595999733" + „14 წელი"
+            # arrived as „ნიკოლოზ გობეჯიშვილი59599973314 წელი", which no name or
+            # phone parser can read — so the agent kept re-asking for details the
+            # user had already given (live test 2026-07-30). Merging is still
+            # required (Anthropic demands alternating roles, unlike OpenAI); what
+            # was missing is the turn boundary. Join the text, keep every
+            # non-text block (tool_result after a multi-tool round) untouched.
+            if (
+                previous and incoming
+                and previous[-1].get("type") == "text"
+                and incoming[0].get("type") == "text"
+            ):
+                head = incoming.pop(0)
+                previous[-1] = _text_block(
+                    f"{previous[-1].get('text', '')}\n{head.get('text', '')}"
+                )
+            previous.extend(incoming)
         else:
             merged.append({"role": turn["role"], "content": list(turn["content"])})
 
@@ -462,15 +526,22 @@ def _post(
     if not turns:
         raise RuntimeError("Anthropic request has no user turns")
 
+    model = settings.ANTHROPIC_MODEL
     body: dict[str, Any] = {
-        "model": settings.ANTHROPIC_MODEL,
+        "model": model,
         "max_tokens": max_tokens,
         "system": _apply_billing_attribution(system_prompt, token),
         "messages": turns,
+    }
+
+    if not _model_matches(model, _NO_SAMPLING_PARAMS):
         # Anthropic's range is 0..1; the OpenAI call sites use 0..0.7 but
         # clamp anyway so a future caller cannot 400 the request.
-        "temperature": max(0.0, min(1.0, float(temperature))),
-    }
+        body["temperature"] = max(0.0, min(1.0, float(temperature)))
+
+    if _model_matches(model, _THINKS_BY_DEFAULT):
+        body["max_tokens"] = max_tokens + _THINKING_HEADROOM_TOKENS
+        body["output_config"] = {"effort": "low"}
 
     if tools:
         body["tools"] = translate_tools(tools)
