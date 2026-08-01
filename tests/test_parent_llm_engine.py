@@ -3079,8 +3079,12 @@ def test_patch5_engine_context_exposes_pending_booking(
 
     parent_flow.handle(fresh_conversation, "მთხოვს კონსულტაცია?")
     assert seen
-    system_blocks = [m["content"] for m in seen[0] if m.get("role") == "system"]
-    joined = "\n".join(system_blocks)
+    # The guarantee is that the pending slot REACHES the model, not which role
+    # carries it. Measured 2026-08-01: the model ignored lead facts delivered in
+    # a system block and used the identical text delivered as a user message, so
+    # the block moved roles; asserting on system blocks alone pinned the
+    # transport rather than the contract.
+    joined = "\n".join(m.get("content") or "" for m in seen[0])
     assert "pending_booking_iso" in joined
     assert "2030-05-27T13:00:00+04:00" in joined
 

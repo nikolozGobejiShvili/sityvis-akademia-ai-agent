@@ -2619,6 +2619,16 @@ def run_parent_llm_turn(
         conversation, lead, user_message,
     )
 
+    # Lead facts ride in a USER-role message, not a system one. Measured
+    # 2026-08-01: asked „ჩემი სახელი იცი?" with `name=…` sitting in the system
+    # context block, the model answered „არ ვიცი — ამ საუბარში არ გამიზიარებიათ".
+    # Offset 0, a 27k lean prompt and an explicit „trust these facts" preamble
+    # each changed nothing; the identical text carried as a user message was
+    # used immediately. The delimiters keep it from reading as the customer's
+    # own words — folding it into the user's text made the model switch to
+    # informal „შენ".
+    lead_facts_block = ""
+
     if _use_slim_prompts():
         # Slim mode: inject ONLY the planner policy + selected_state (topic-
         # scoped) instead of the full lead-context + giant sales context.
@@ -2634,15 +2644,24 @@ def run_parent_llm_turn(
         sales_context = _build_sales_context(conversation, lead, user_message)
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "system", "content": context_message},
             {"role": "system", "content": sales_context},
         ]
+        lead_facts_block = (
+            "[SYSTEM DATA — ეს არ არის მომხმარებლის შეტყობინება, არამედ "
+            "ბექენდის მიერ მოწოდებული მიმდინარე ფაქტები]\n"
+            + context_message
+            + "\n[/SYSTEM DATA]"
+        )
         _trace_prompt_mode("giant", None)
     messages.extend(_recent_history(conversation))
     # Reasoning directive (a SEPARATE system message — never concatenated into
     # the giant prompt). Present only when the flag-gated pass produced a plan.
     if _reason_directive:
         messages.append({"role": "system", "content": _reason_directive})
+    # Immediately before the customer's turn: same role the model demonstrably
+    # reads, own message so it is never mistaken for what the customer said.
+    if lead_facts_block:
+        messages.append({"role": "user", "content": lead_facts_block})
     messages.append({"role": "user", "content": user_message})
 
     executor = ParentToolExecutor(
