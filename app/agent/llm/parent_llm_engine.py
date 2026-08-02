@@ -3139,11 +3139,17 @@ def _build_context_message(
         # ever told it who it is, so it filled the blank. Supplying the fact —
         # including the fact that the builder is genuinely unknown — leaves
         # nothing to fill.
+        # Stated as facts, never as commands. Written in the second-person
+        # singular („არ დაასახელო", „თქვი") these two lines cost H03: the model
+        # picked the informal register up out of its own context and addressed
+        # an angry parent with „გესმის შენი განცდა" instead of the polite form
+        # the brand requires. Every other line here is a bare `key=value`; the
+        # missing fact is what stops the invention, the imperative never was.
         "assistant_identity=AI აგენტი, კომპანია: "
         f"{(getattr(settings, 'COMPANY_NAME', '') or 'სიტყვის აკადემია')}",
-        "assistant_builder=UNKNOWN — ვინ ან რომელმა კომპანიამ ააგო ეს აგენტი, "
-        "ბექენდში ფაქტად არ არსებობს; კომპანიის/მოდელის სახელი არ დაასახელო, "
-        "თქვი რომ კომპანიის AI აგენტი ხარ და საუბარს დაუბრუნდი",
+        "assistant_builder=UNKNOWN — ბექენდში არ არსებობს ფაქტი იმის შესახებ, "
+        "ვინ ან რომელმა კომპანიამ ააგო ეს აგენტი; დამამზადებლის, ვენდორის ან "
+        "მოდელის სახელი მონაცემებში არ არის",
         f"name={(lead.name or '').strip() or '—'}",
         f"phone={(lead.phone or '').strip() or '—'}",
         f"child_age={(lead.child_age or '').strip() or '—'}",
