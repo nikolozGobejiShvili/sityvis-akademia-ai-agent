@@ -83,12 +83,35 @@ def to_plain_text(text: str) -> str:
     return _BLANK_RUN_RE.sub("\n\n", "\n".join(lines)).strip()
 
 
+# Profile lookups are per-process cached (2026-08-02). The webhook and
+# parent_flow both call this on EVERY turn, so a conversation costs one Graph
+# round-trip per message before the reply can go out.
+#
+# The negative half matters more than the positive one: Meta answers 400 for
+# any sender who is not an app role-holder, which is every real customer until
+# App Review completes. One live conversation from an outside profile spent 24
+# failed round-trips re-asking a question whose answer cannot change while the
+# process lives. A redeploy clears the cache, so a granted permission takes
+# effect on the next release.
+#
+# Only 4xx is remembered — a timeout or 5xx is transient and must be retried.
+_PROFILE_CACHE: dict[tuple[str, str], dict] = {}
+_PROFILE_DENIED: set[tuple[str, str]] = set()
+
+
 def get_user_profile(sender_id: str, platform: str) -> dict:
     token = settings.MESSENGER_PAGE_ACCESS_TOKEN or settings.META_ACCESS_TOKEN
     if not token:
         logger.warning(
             "[messenger] get_user_profile skipped — no access token configured",
         )
+        return {}
+
+    cache_key = (platform, sender_id)
+    cached = _PROFILE_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
+    if cache_key in _PROFILE_DENIED:
         return {}
 
     logger.info(
@@ -115,6 +138,11 @@ def get_user_profile(sender_id: str, platform: str) -> dict:
             "[messenger] get_user_profile failed for sender_id=%s platform=%s: %s",
             sender_id, platform, _mask_access_token(exc),
         )
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if isinstance(status, int) and 400 <= status < 500:
+            # Permission / identity, not a hiccup: asking again this process
+            # cannot change the answer.
+            _PROFILE_DENIED.add(cache_key)
         return {}
 
     if platform == "instagram":
@@ -140,6 +168,7 @@ def get_user_profile(sender_id: str, platform: str) -> dict:
         "[messenger] Profile fetched: name=%r username=%r",
         result.get("name", ""), result.get("username", ""),
     )
+    _PROFILE_CACHE[cache_key] = dict(result)
     return result
 
 

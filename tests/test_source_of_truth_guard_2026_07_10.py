@@ -394,5 +394,9 @@ def test_parent_identity_helper_current_copy_is_frozen():
         "ვინ ხარ?",
     )
 
-    assert response == parent_flow._IDENTITY_ANSWER
-    assert "ონლაინ-კონსულტანტი" in response
+    assert response == parent_flow._render_identity_answer()
+    # „AI აგენტი" is the operator's wording (2026-08-02); „ონლაინ-კონსულტანტი"
+    # was the frozen copy. The genitive must be „აკადემიის", never the glued
+    # „აკადემია-ის" a naive f-string produces.
+    assert "AI აგენტი" in response
+    assert "-ის AI" not in response

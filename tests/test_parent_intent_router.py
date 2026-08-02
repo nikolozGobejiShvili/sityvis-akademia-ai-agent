@@ -163,7 +163,9 @@ def test_2_identity_question_at_ask_challenge_preserves_state(driver):
         sender, "შენ ვინ ხარ?", "instagram",
     )
     # Identity answer must mention what the bot is/does.
-    assert "ასისტენტი" in response or "კონსულტანტი" in response  # identity wording (2026-07-07)
+    # Identity vocabulary is „AI აგენტი" since 2026-08-02 (operator wording);
+    # the contract is that the reply says what the agent IS, not which noun.
+    assert any(w in response for w in ("აგენტი", "ასისტენტი", "კონსულტანტი"))
     # Must not repeat the segment-routing menu.
     assert "ბავშვების საზაფხულო ბანაკი" not in response
     assert "ზრდასრულთა კულტურული საღამოები" not in response
@@ -187,7 +189,9 @@ def test_3_identity_wins_over_price_at_ask_deeper(driver):
         sender, "შენ ვინ ხარ და ბანაკი რა ღირს?", "instagram",
     )
     # Identity (priority 3) wins over price (priority 4).
-    assert "ასისტენტი" in response or "კონსულტანტი" in response  # identity wording (2026-07-07)
+    # Identity vocabulary is „AI აგენტი" since 2026-08-02 (operator wording);
+    # the contract is that the reply says what the agent IS, not which noun.
+    assert any(w in response for w in ("აგენტი", "ასისტენტი", "კონსულტანტი"))
     # Critically: bare-price stems must not be the headline — the
     # identity reply is the entire response, no price digits.
     assert "2150" not in response

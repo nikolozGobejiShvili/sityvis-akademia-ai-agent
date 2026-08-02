@@ -96,8 +96,12 @@ def _dynamic_programs_prompt_suffix() -> str:
     if not others:
         return ""
     names = ", ".join(f"{s.get('name')} (id: {s.get('id')})" for s in others if s.get("id"))
+    # „გარდა ბანაკისა" presented the live programs as an addendum to the camp —
+    # which the operator closed. The agent inherited that framing and answered
+    # „ვეხმარები საბავშვო ბანაკთან დაკავშირებით" while Disneyland and Sunday
+    # School were the only things on sale. These are THE programs, not extras.
     suffix = (
-        "\n\n[დინამიური პროგრამები] გარდა ბანაკისა, აქტიურია: " + names +
+        "\n\n[დინამიური პროგრამები] ამ წუთში აქტიურია: " + names +
         ". ამ პროგრამებზე ნებისმიერ კითხვაზე ჯერ გამოიძახე list_programs, "
         "შემდეგ get_program_info(program_id). ფაქტები მხოლოდ ხელსაწყოს პასუხიდან "
         "აიღე — არასდროს მოიგონო."

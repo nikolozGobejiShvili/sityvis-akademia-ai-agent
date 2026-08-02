@@ -5008,10 +5008,32 @@ def _maybe_handle_parent_contact_visit(
 # ADDITIONAL LIVE BUG (2026-07-07) — identity / bot self questions must get the
 # brand consultant answer, never the politics refusal and never a camp-age
 # question. Deterministic, runs before the political / off-topic guard + engine.
+# Fail-safe only — `_render_identity_answer` builds the live wording. This
+# frozen sentence hardcodes the company name and offers „ბანაკისა და
+# ღონისძიებების", both of which the operator has closed.
 _IDENTITY_ANSWER: str = (
-    "მე სიტყვის აკადემიის ონლაინ-კონსულტანტი ვარ და ბანაკისა და ღონისძიებების "
-    "შესახებ დაგეხმარებით."
+    "მე სიტყვის აკადემიის AI აგენტი ვარ და ჩვენს პროგრამებზე დაგეხმარებით."
 )
+# The genitive form is „აკადემიის", never „აკადემია-ის" — see
+# `_render_identity_answer`.
+
+
+def _render_identity_answer() -> str:
+    """Who the agent is, and what is actually on sale while it answers.
+
+    Company name from settings, programs read at reply time — so the answer
+    survives both a rebrand and a program being closed in the admin panel.
+    """
+    company = (getattr(settings, "COMPANY_NAME", "") or "სიტყვის აკადემია").strip()
+    # Georgian genitive: a brand ending in „ა" takes „ის", not „-ის" glued on.
+    # „სიტყვის აკადემია" + „-ის" reads as „აკადემია-ის"; the correct form is
+    # „აკადემიის". Same rule as `conversation_service._maybe_identity_reply`.
+    company_gen = company[:-1] + "ის" if company.endswith("ა") else company
+    names = _active_program_names()
+    intro = f"მე {company_gen} AI აგენტი ვარ."
+    if not names:
+        return intro + " ჩვენს პროგრამებზე დაგეხმარებით."
+    return intro + " დაგეხმარებით: " + ", ".join(names) + "."
 # Markers each carry a self-reference („ხარ"/„ხართ") or a model/AI name, so an
 # organizer question („ვინ არის ორგანიზატორი?", handled by the operational
 # defer) is not matched.
@@ -5040,10 +5062,10 @@ def _maybe_handle_identity(
     if not _is_identity_question(message):
         return None
     logger.info(
-        "[parent_flow] identity/bot question → consultant identity (sender=%s)",
+        "[parent_flow] identity/bot question → agent identity (sender=%s)",
         conversation.sender_id,
     )
-    return _IDENTITY_ANSWER
+    return _render_identity_answer()
 
 
 def _maybe_handle_political(
