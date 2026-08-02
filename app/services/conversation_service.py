@@ -345,11 +345,20 @@ def _maybe_identity_reply(message_text: str) -> str | None:
         company_gen = company[:-1] + "ის"
     else:
         company_gen = company
-    return (
-        f"{company_gen} ვირტუალური ასისტენტი ვარ — ვეხმარები ბანაკისა და "
-        "ღონისძიებების შესახებ ინფორმაციით. გვითხარით, რა გაინტერესებთ — "
-        "ბავშვების საზაფხულო ბანაკი თუ ზრდასრულთა კულტურული საღამოები?"
-    )
+    # „AI აგენტი", not „ვირტუალური ასისტენტი" — the operator's wording.
+    intro = f"{company_gen} AI აგენტი ვარ."
+    # The menu is read at reply time. The previous text named the summer camp
+    # and the adult evenings; both are closed, and neither of the two live
+    # programs appeared — so the answer advertised nothing that could be sold.
+    try:
+        from app.flows.parent_flow import _active_program_names
+        names = _active_program_names()
+    except Exception:  # pragma: no cover - defensive, never break the reply
+        names = []
+    if not names:
+        return intro + " გვითხარით, რა გაინტერესებთ."
+    bullets = "\n".join(f"— {n}" for n in names)
+    return f"{intro}\n\nგვითხარით, რა გაინტერესებთ:\n{bullets}"
 
 
 def _classify_segment(message_text: str) -> str:
