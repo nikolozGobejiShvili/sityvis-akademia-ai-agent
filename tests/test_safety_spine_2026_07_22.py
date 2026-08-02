@@ -40,12 +40,26 @@ def _conv(program_id: str = ""):
 # ── flag + _safety_spine composition ──────────────────────────────────────
 
 
-def test_flag_default_off():
-    assert config_module.Settings().USE_SAFETY_SPINE is False
+def test_flag_default_on():
+    """Default flipped to True on 2026-08-02.
+
+    The spine now also carries identity and the manager's-number disclosure, and
+    a replay of that day's live conversation showed both were unreachable on the
+    hoist path: with a per-product booking active, „თქვენ ვინ ხართ?" was answered
+    by the model as „ვირტუალური ასისტენტი … საბავშვო ბანაკის შესახებ" — a program
+    the operator had closed. Shipped OFF, the fix would be inert.
+    """
+    assert config_module.Settings().USE_SAFETY_SPINE is True
 
 
-def test_flag_from_env_default_off(monkeypatch):
+def test_flag_from_env_default_on(monkeypatch):
     monkeypatch.delenv("USE_SAFETY_SPINE", raising=False)
+    assert config_module.Settings.from_env().USE_SAFETY_SPINE is True
+
+
+def test_flag_can_still_be_turned_off(monkeypatch):
+    """The escape hatch has to keep working — it is the rollback."""
+    monkeypatch.setenv("USE_SAFETY_SPINE", "false")
     assert config_module.Settings.from_env().USE_SAFETY_SPINE is False
 
 

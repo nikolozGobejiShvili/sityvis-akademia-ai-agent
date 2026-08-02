@@ -1220,8 +1220,24 @@ def _safety_spine(conversation: Conversation, message: str) -> str | None:
     lone hoist call (byte-identity when swapped in). The guard names resolve at
     CALL time (they are defined later in this module).
     """
+    # Identity and the manager's number joined the spine on 2026-08-02. Both are
+    # program-agnostic sole-enforcer answers — „who are you?" and „give me the
+    # manager's number" have one correct reply regardless of which program the
+    # turn is about — and both were reachable ONLY from the non-hoisted chain
+    # (`_maybe_handle_pre_engine_guards` L1454, `_maybe_handle_contact_commit_chain`
+    # L1379). A replay of the live conversation of 2026-08-02 shows the cost: once
+    # a per-product booking is active every later turn takes the hoist, so
+    # „თქვენ ვინ ხართ?" was answered by the model („ვირტუალური ასისტენტი …
+    # საბავშვო ბანაკის შესახებ" — a closed program) and „მენეჯერის ნომერი
+    # მომწერეთ" got an invented policy instead of the number.
+    #
+    # Order matters: identity BEFORE political, so „შენ ვინ ხარ?" is answered as
+    # identity; and the manager's number before political too, since a parent
+    # asking for a phone number is not making a political statement.
     for guard in (
         _maybe_handle_offtopic_injection,
+        _maybe_handle_identity,
+        _maybe_handle_explicit_manager_request,
         _maybe_handle_political,
         _maybe_memory_info_reply,
     ):

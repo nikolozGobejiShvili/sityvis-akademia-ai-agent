@@ -592,7 +592,16 @@ class Settings:
     # OFF ⇒ the hoist runs exactly _maybe_handle_offtopic_injection as today
     # (byte-identical). Distinct from USE_REASONING_* — this is pure safety
     # routing, no LLM.
-    USE_SAFETY_SPINE: bool = False
+    #
+    # Default flipped to True on 2026-08-02. The spine now also carries identity
+    # and the manager's-number disclosure, and a replay of the live conversation
+    # of that day showed both were unreachable on the hoist path: with a
+    # per-product booking active, „თქვენ ვინ ხართ?" was answered by the model as
+    # „ვირტუალური ასისტენტი … საბავშვო ბანაკის შესახებ" — a program the operator
+    # had closed. Left OFF, this fix ships inert, which is how USE_PROGRAM_FOLLOWUP
+    # spent weeks doing nothing. Set USE_SAFETY_SPINE=false to restore the old
+    # hoist behaviour.
+    USE_SAFETY_SPINE: bool = True
     # Reasoning loop (Phase 2, 2026-07): analyze→ground→answer→reflect in the
     # PARENT engine — the model plans, grounds only needed facts, then verifies
     # its answer's facts (REFLECT). OFF ⇒ engine path byte-identical. Distinct
@@ -851,7 +860,7 @@ class Settings:
             USE_PROGRAM_FOLLOWUP=_parse_bool_optional(
                 "USE_PROGRAM_FOLLOWUP", False,
             ),
-            USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", False),
+            USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", True),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
             USE_OBJECTION_ENGINE_ROUTING=_parse_bool_optional(
                 "USE_OBJECTION_ENGINE_ROUTING", False,
