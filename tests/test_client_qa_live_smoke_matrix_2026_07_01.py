@@ -149,7 +149,10 @@ _PC_KEY = "მშობლებს ყოველდღიურად გა�
 _DISCOUNT_LINE = "დედმამიშვილებისთვის მოქმედებს 10%-იანი ფასდაკლება."
 _ORG_PREFIX = "ეს არის სიტყვის აკადემიის AI ასისტენტი."
 _POL_1 = "პოლიტიკურ თემებზე პასუხს არ ვცემ"
-_POL_2 = "ბანაკთან დაკავშირებულ კითხვებზე დაგეხმარებით"
+# The political redirect stopped naming the camp on 2026-08-02 — „ქოცებ" is a
+# political marker, so a question about the COMPANY lands here and used to be
+# answered by offering a program the operator had closed.
+_POL_2 = "ჩვენს პროგრამებთან დაკავშირებით"
 _UNCLEAR = (
     "გთხოვთ, განმიმარტეთ, რას გულისხმობთ „ხელა ბავშვებში“, "
     "რომ უკეთესად შევძლო თქვენი დახმარება."

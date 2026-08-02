@@ -794,7 +794,11 @@ def test_ed8b_multi_price_seats(engine_on, camp_registration_open):
 def test_ed9_political_qoc(engine_on, camp_registration_open):
     out = parent_flow.handle(_conv("ed9", child_age=""), "ქოცები ხართ თქვენ?")
     assert "პოლიტიკურ თემებზე პასუხს არ ვცემ" in out
-    assert "ბანაკთან დაკავშირებულ კითხვებზე დაგეხმარებით" in out
+    # The redirect no longer names the camp (2026-08-02): „ქოცებ" is a political
+    # marker, so a question about the COMPANY („სიტყვის აკადემია ქოცების არის?")
+    # lands here — and live it was answered by offering a closed program.
+    assert "ჩვენს პროგრამებთან დაკავშირებით" in out
+    assert "ბანაკთან დაკავშირებულ" not in out
     assert "მსურს დაგეხმაროთ" not in out
     assert "რამდენი წლის" not in out and "ასაკი" not in out
     assert _no_hearts(out)

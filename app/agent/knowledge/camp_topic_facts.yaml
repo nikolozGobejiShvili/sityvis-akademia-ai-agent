@@ -430,7 +430,14 @@ camp_age_group_count_topic_template: "{age} წლის ბავშვებ�
 # ── Political / party-identity bait → neutral redirect (client 2026-06-30) ────
 # Never claim a political identity, never get defensive, no child-age question,
 # no consultation offer. Uses „დაგეხმარებით" (NOT „მსურს დაგეხმაროთ").
-camp_political_reply: "პოლიტიკურ თემებზე პასუხს არ ვცემ. ბანაკთან დაკავშირებულ კითხვებზე დაგეხმარებით."
+#
+# 2026-08-02: the redirect used to end „ბანაკთან დაკავშირებულ კითხვებზე
+# დაგეხმარებით" — it offered the summer camp, which the operator has closed.
+# „ქოცებ" is a political marker, so „სიტყვის აკადემია ქოცების არის?" lands here:
+# live, the agent answered a question about its OWN COMPANY by declining politics
+# and offering a dead program. The wording now matches `_OFFTOPIC_POLITICAL_NEW`
+# in parent_llm_engine, which already rewrites the prompt's copy of this line.
+camp_political_reply: "პოლიტიკურ თემებზე პასუხს არ ვცემ. სიამოვნებით დაგეხმარებით ჩვენს პროგრამებთან დაკავშირებით."
 camp_political_markers: [ქოცი, ქოცებ, ნაცი, ნაცებ, ნაცნ ხარ, პარტიას უჭერ, რომელ პარტია, პოლიტიკ, ოპოზიცი, ხელისუფლებას უჭერ]
 
 # ── Unclear-phrase clarification wording (client 2026-06-30) ─────────────────
