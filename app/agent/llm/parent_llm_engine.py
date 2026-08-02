@@ -3127,6 +3127,23 @@ def _build_context_message(
         # assumed a renderer; this states the medium as a fact of the turn.
         f"reply_channel={(getattr(conversation, 'platform', '') or 'messenger')}",
         "reply_rendering=plain_text (markup characters are shown literally)",
+        # One worked example instead of another rule. The model copies the
+        # shape it is shown, and a long list of prohibitions is exactly what
+        # makes replies read like recited text. `messenger_service.to_plain_text`
+        # is the net for whatever still slips through.
+        'reply_rendering_example=ასე კი — "💰 ფასი: 4 000 ლარი"; '
+        'ასე არა — "💰 **ფასი:** 4 000 ლარი"',
+        # Who the agent is. Live 2026-08-02, „შენ ვინ აგაწყო?" produced
+        # „შევქმენი Optio.ge-ის გუნდმა" — a company that appears nowhere in this
+        # repository. The model was not inventing out of mischief; no turn had
+        # ever told it who it is, so it filled the blank. Supplying the fact —
+        # including the fact that the builder is genuinely unknown — leaves
+        # nothing to fill.
+        "assistant_identity=AI აგენტი, კომპანია: "
+        f"{(getattr(settings, 'COMPANY_NAME', '') or 'სიტყვის აკადემია')}",
+        "assistant_builder=UNKNOWN — ვინ ან რომელმა კომპანიამ ააგო ეს აგენტი, "
+        "ბექენდში ფაქტად არ არსებობს; კომპანიის/მოდელის სახელი არ დაასახელო, "
+        "თქვი რომ კომპანიის AI აგენტი ხარ და საუბარს დაუბრუნდი",
         f"name={(lead.name or '').strip() or '—'}",
         f"phone={(lead.phone or '').strip() or '—'}",
         f"child_age={(lead.child_age or '').strip() or '—'}",

@@ -121,7 +121,12 @@ def test_hoisted_injection_turn_gets_redirect_and_never_reaches_engine(
 
     out = pf._handle_core(conv, _HOISTED_INJECTION_MSG)
 
-    assert out == pf._PARENT_OFFTOPIC_INJECTION_REPLY
+    # The redirect is BUILT from the sections that are active right now, not
+    # read from a frozen sentence: the old constant went on naming the camp and
+    # the adult evenings for weeks after the operator closed both, so an
+    # equality check against it pinned a stale offer as correct.
+    assert out == pf._render_offtopic_injection_reply()
+    assert _ROBOTICS["name"] in out, "the redirect must offer what is on sale now"
     assert engine_spy == [], "the LLM engine must never see an injection attempt"
     # No internal detail leaked.
     assert "system prompt" not in out.lower()
@@ -170,7 +175,8 @@ def test_non_hoisted_injection_turn_unchanged(monkeypatch, engine_spy):
 
     out = pf._handle_core(conv, _PLAIN_INJECTION_MSG)
 
-    assert out == pf._PARENT_OFFTOPIC_INJECTION_REPLY
+    assert out == pf._render_offtopic_injection_reply()
+    assert _CAMP["name"] in out, "the redirect must offer what is on sale now"
     assert engine_spy == []
 
 

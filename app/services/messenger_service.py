@@ -26,6 +26,63 @@ def _graph_base_url() -> str:
     return f"{settings.META_GRAPH_API_BASE_URL}/{settings.META_GRAPH_API_VERSION}"
 
 
+# Markdown → plain text (2026-08-02). A Meta DM has no renderer: `**bold**`,
+# `| tables |` and `---` arrive as literal asterisks, pipes and dashes. The
+# per-turn context already states the medium and the prompt now shows a worked
+# example, but guidance is probabilistic — the live log of 13:12:40 still sent
+# „- **ბანაკი (2026)** — …". So this sits in the RENDERING layer, where the
+# constraint actually lives: a channel that cannot display markup.
+#
+# It converts, it does not forbid. Nothing is deleted from the reply's meaning
+# and emoji are untouched — the model keeps its own voice, the channel gets
+# characters it can show.
+_MD_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_MD_BOLD_UNDERSCORE_RE = re.compile(r"__(.+?)__", re.DOTALL)
+# Single-asterisk emphasis, but never a „* item" bullet: the character after
+# the opening `*` must not be a space.
+_MD_ITALIC_RE = re.compile(r"(?<![\*\w])\*([^\s*][^*\n]*?)\*(?![\*\w])")
+_MD_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_MD_HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+", re.MULTILINE)
+_MD_RULE_RE = re.compile(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$", re.MULTILINE)
+_MD_TABLE_SEP_RE = re.compile(
+    r"^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)+\|?[ \t]*$",
+    re.MULTILINE,
+)
+_BLANK_RUN_RE = re.compile(r"\n{3,}")
+
+
+def to_plain_text(text: str) -> str:
+    """Strip Markdown syntax the DM channel would show literally.
+
+    Table rows become „cell — cell" lines; the `|---|---|` separator and any
+    `---` rule are dropped. Bold/italic/code/heading markers are removed and
+    a `[label](url)` link becomes „label (url)" so the URL still travels.
+
+    Returns the text unchanged when it carries none of the marker characters,
+    so the overwhelmingly common clean reply is untouched.
+    """
+    if not text or not any(ch in text for ch in "*_`#|["):
+        return text
+    out = _MD_LINK_RE.sub(r"\1 (\2)", text)
+    out = _MD_BOLD_RE.sub(r"\1", out)
+    out = _MD_BOLD_UNDERSCORE_RE.sub(r"\1", out)
+    out = _MD_ITALIC_RE.sub(r"\1", out)
+    out = _MD_INLINE_CODE_RE.sub(r"\1", out)
+    out = _MD_HEADING_RE.sub("", out)
+    out = _MD_TABLE_SEP_RE.sub("", out)
+    out = _MD_RULE_RE.sub("", out)
+
+    lines = []
+    for line in out.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2:
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            line = " — ".join(c for c in cells if c)
+        lines.append(line)
+    return _BLANK_RUN_RE.sub("\n\n", "\n".join(lines)).strip()
+
+
 def get_user_profile(sender_id: str, platform: str) -> dict:
     token = settings.MESSENGER_PAGE_ACCESS_TOKEN or settings.META_ACCESS_TOKEN
     if not token:
@@ -172,6 +229,10 @@ def send_private_reply(comment_id: str, text: str) -> bool:
 
 
 def send_message(sender_id: str, platform: str, text: str) -> bool:
+    # Last stop before the channel — every outbound DM (engine reply,
+    # deterministic answer, follow-up) passes here, so this is the one place
+    # that can guarantee the customer never sees raw markup.
+    text = to_plain_text(text)
     base_url = _graph_base_url()
     if platform in {"instagram", "messenger"}:
         url = f"{base_url}/me/messages"
