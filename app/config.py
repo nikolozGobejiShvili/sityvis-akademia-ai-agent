@@ -602,6 +602,13 @@ class Settings:
     # spent weeks doing nothing. Set USE_SAFETY_SPINE=false to restore the old
     # hoist behaviour.
     USE_SAFETY_SPINE: bool = True
+    # Prompt v3 (2026-08-02): load `parent_v3.md` — the 13 rules the inventory
+    # marked KEEP, plus role/tone/grammar — instead of the 53k
+    # `system_parent_v2.md`, which says „ბანაკ" 51 times, „დისნეილენდი" 0 and
+    # „საკვირაო" once. Program facts come from the tools, so a program the
+    # operator closes stops being sold without a prompt edit. OFF ⇒ v2 loads,
+    # byte-identical. Measured before it is turned on, never assumed.
+    USE_PROMPT_V3: bool = False
     # Reasoning loop (Phase 2, 2026-07): analyze→ground→answer→reflect in the
     # PARENT engine — the model plans, grounds only needed facts, then verifies
     # its answer's facts (REFLECT). OFF ⇒ engine path byte-identical. Distinct
@@ -861,6 +868,7 @@ class Settings:
                 "USE_PROGRAM_FOLLOWUP", False,
             ),
             USE_SAFETY_SPINE=_parse_bool_optional("USE_SAFETY_SPINE", True),
+            USE_PROMPT_V3=_parse_bool_optional("USE_PROMPT_V3", False),
             USE_REASONING_PASS=_parse_bool_optional("USE_REASONING_PASS", False),
             USE_OBJECTION_ENGINE_ROUTING=_parse_bool_optional(
                 "USE_OBJECTION_ENGINE_ROUTING", False,

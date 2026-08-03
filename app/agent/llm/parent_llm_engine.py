@@ -2845,6 +2845,28 @@ def _use_lean_prompt() -> bool:
     return bool(getattr(settings, "USE_LEAN_PROMPT", False))
 
 
+def _use_v3_prompt() -> bool:
+    """Prompt v3 (2026-08-02). Loads `parent_v3.md` — the 13 rules the inventory
+    marked KEEP, plus role, tone and grammar — instead of the 53k
+    `system_parent_v2.md`.
+
+    v2 says „ბანაკ" 51 times, „დისნეილენდი" 0 and „საკვირაო" once, so the agent's
+    whole idea of what it sells is a program the operator closed. A replay of the
+    live conversation of 2026-08-02 shows the cost: asked what it helps with, it
+    answered „ბანაკის შესახებ ინფორმაცია" while Sunday School and Disneyland were
+    the only things on sale. v3 names no program at all — every program fact comes
+    from `list_programs` / `get_program_info`, which is where the operator's edits
+    actually live.
+
+    Two thirds of v2 is not rules: 4.4k describes the eight tools whose
+    descriptions the model already receives in the tool schema, and 3.2k is a
+    banned-phrase list that `sanitise_response_wording` enforces in code with 183
+    entries. Neither is carried over.
+
+    Default OFF ⇒ v2 loads, byte-identical."""
+    return bool(getattr(settings, "USE_PROMPT_V3", False))
+
+
 # Off-topic intelligence (USE_OFFTOPIC_INTELLIGENCE, 2026-07-25) — rewrite the two
 # camp-specific off-topic scripts in the loaded prompt to be PROGRAM-AGNOSTIC and
 # logic-oriented. Targeted substring swaps (no tricky Georgian quotes) so an exact
@@ -2904,6 +2926,8 @@ def _build_system_prompt(message: str = "", segment: str = "") -> str:
     # exactly as before (do NOT load system_parent_v2.md when slim/lean).
     if _use_slim_prompts():
         prompt_name = "parent_core"
+    elif _use_v3_prompt():
+        prompt_name = "parent_v3"
     elif _use_lean_prompt():
         prompt_name = "parent_lean"
     else:
