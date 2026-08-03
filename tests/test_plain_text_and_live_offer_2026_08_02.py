@@ -73,6 +73,31 @@ def test_masked_phone_is_not_treated_as_bold():
     assert ms.to_plain_text(text) == text
 
 
+def test_bolded_masked_phone_leaves_no_stray_asterisks():
+    """A BOLDED mask is where the lazy bold rule used to break.
+
+    `_mask_phone_for_recall` renders `595***733`, the model quotes it back and
+    bolds it, and `**595***733**` is ambiguous: a lazy `\\*\\*(.+?)\\*\\*`
+    closes at the first following pair — inside the mask — so the parent
+    received `595*733**`. Measured 2026-08-03 on eval case B05-past-date, in a
+    reply the markdown fix was supposed to have already cleaned.
+    """
+    out = ms.to_plain_text("ნომერი უკვე გვაქვს: **595***733** — ნიკოლოზ.")
+    assert out == "ნომერი უკვე გვაქვს: 595***733 — ნიკოლოზ."
+    # Not `"**" not in out` — the mask's own „***" contains it. Three is the
+    # mask; the four bold markers are what had to go.
+    assert out.count("*") == 3
+
+
+def test_two_bold_spans_on_one_line_stay_independent():
+    """The non-asterisk-edge rule must not turn the fix into a greedy match."""
+    assert ms.to_plain_text("**ფასი** და **თარიღი**") == "ფასი და თარიღი"
+
+
+def test_bold_still_stripped_across_a_newline():
+    assert ms.to_plain_text("**პირველი\nმეორე**") == "პირველი\nმეორე"
+
+
 def test_asterisk_bullet_is_not_read_as_italic():
     text = "* პირველი\n* მეორე"
     assert ms.to_plain_text(text) == text

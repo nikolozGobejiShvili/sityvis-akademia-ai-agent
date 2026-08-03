@@ -37,7 +37,14 @@ def _graph_base_url() -> str:
 # and emoji are untouched — the model keeps its own voice, the channel gets
 # characters it can show.
 _MD_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
-_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+# The bold span may not open or close on an asterisk, and may not be followed
+# by one. A lazy `\*\*(.+?)\*\*` closes at the FIRST following pair, which for
+# a bolded privacy mask — `**595***733**`, produced whenever the model quotes
+# `_mask_phone_for_recall` back — closes inside the mask and delivers the
+# mangled `595*733**` to the parent (measured 2026-08-03, eval B05-past-date).
+# Requiring non-asterisk edges makes the span close at the real end instead,
+# and still matches each span separately in „**a** და **b**".
+_MD_BOLD_RE = re.compile(r"\*\*(?!\s)([^*]|[^*].*?[^*])\*\*(?!\*)", re.DOTALL)
 _MD_BOLD_UNDERSCORE_RE = re.compile(r"__(.+?)__", re.DOTALL)
 # Single-asterisk emphasis, but never a „* item" bullet: the character after
 # the opening `*` must not be a space.
