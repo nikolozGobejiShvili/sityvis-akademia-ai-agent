@@ -510,7 +510,9 @@ def test_11_identity_during_pending_preserves_pending(driver):
 
     convo = conversation_service.conversations[sender]
     # Identity reply.
-    assert "ასისტენტი" in response or "კონსულტანტი" in response  # identity wording (2026-07-07)
+    # Identity vocabulary is „AI აგენტი" since 2026-08-02 (operator wording);
+    # the contract is that the reply says what the agent IS, not which noun.
+    assert any(w in response for w in ("აგენტი", "ასისტენტი", "კონსულტანტი"))
     # Pending preserved.
     assert convo.pending_booking is not None
     # State preserved.

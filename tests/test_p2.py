@@ -287,7 +287,9 @@ def test_6_done_identity_question(driver, monkeypatch):
     sender = "p2-done-6"
     _drive_to_booked(driver, sender, monkeypatch)
     response = conversation_service.process_message(sender, "შენ ვინ ხარ?", "instagram")
-    assert "ასისტენტი" in response or "კონსულტანტი" in response  # identity wording (2026-07-07)
+    # Identity vocabulary is „AI აგენტი" since 2026-08-02 (operator wording);
+    # the contract is that the reply says what the agent IS, not which noun.
+    assert any(w in response for w in ("აგენტი", "ასისტენტი", "კონსულტანტი"))
     # Not the legacy DONE template.
     assert "კონსულტანტი მალე დაგიკავშირდებათ — შვილზე" not in response
 
@@ -300,7 +302,9 @@ def test_7_done_name_question(driver, monkeypatch):
     _drive_to_booked(driver, sender, monkeypatch)
     response = conversation_service.process_message(sender, "შენ რა გქვია?", "instagram")
     # Either explains identity or that it has no personal name.
-    assert "ასისტენტი" in response or "კონსულტანტი" in response  # identity wording (2026-07-07)
+    # Identity vocabulary is „AI აგენტი" since 2026-08-02 (operator wording);
+    # the contract is that the reply says what the agent IS, not which noun.
+    assert any(w in response for w in ("აგენტი", "ასისტენტი", "კონსულტანტი"))
 
 
 # -- test 8. DONE + "ჩავეწერე?" ------------------------------------------

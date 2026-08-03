@@ -318,10 +318,18 @@ def test_parent_prompt_documents_sensitive_needs_response():
     assert "კავშირს მოგიწყობთ" in text  # documented as banned
 
 
-def test_parent_prompt_no_emoji_rule_present():
+def test_parent_prompt_allows_meaningful_emoji():
+    """The blanket ban was lifted by the operator on 2026-08-02.
+
+    It never held anyway: the live agent shipped 💙 🎉 🙏 😄 while the prompt
+    banned 🌿 😊 ✨ ✅ ❌ — a five-item list the model simply walked around. What
+    the operator wants is emoji that carry meaning (📍 place, 💰 price), so the
+    rule is now a positive one and this test pins that, not the old ban.
+    """
     text = _read_prompt("system_parent_v2")
-    # The new rule line forbids emojis explicitly.
-    assert "არასოდეს* გამოიყენო ემოჯი" in text
+    assert "ემოჯი დასაშვებია" in text
+    assert "დეკორაციად არა" in text
+    assert "არასოდეს* გამოიყენო ემოჯი" not in text
 
 
 def test_adult_prompt_no_emoji_rule_present():

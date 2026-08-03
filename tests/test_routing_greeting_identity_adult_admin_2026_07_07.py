@@ -115,7 +115,10 @@ def test_bug2_first_turn_greeting_kept():
 ])
 def test_bug3_identity_answer(msg):
     out = parent_flow._maybe_handle_identity(_conv(), msg)
-    assert out == parent_flow._IDENTITY_ANSWER
+    # Compared against the RENDERED identity, not the frozen constant: the
+    # programs half is read from the active sections now, so a program the
+    # operator closes stops being offered without a code edit.
+    assert out == parent_flow._render_identity_answer()
     assert "პოლიტიკ" not in out
 
 
@@ -129,7 +132,10 @@ def test_bug3_identity_e2e_preempts_engine(engine):
                    lambda c, m: "პოლიტიკურ თემებზე პასუხს არ ვცემ.")
     conv = _conv("id", history=[{"role": "assistant", "content": "_prior"}])
     out = parent_flow.handle(conv, "შენ gpt ხარ?")
-    assert out == parent_flow._IDENTITY_ANSWER
+    # Compared against the RENDERED identity, not the frozen constant: the
+    # programs half is read from the active sections now, so a program the
+    # operator closes stops being offered without a code edit.
+    assert out == parent_flow._render_identity_answer()
     assert "პოლიტიკ" not in out
     assert "რამდენი წლის" not in out
 

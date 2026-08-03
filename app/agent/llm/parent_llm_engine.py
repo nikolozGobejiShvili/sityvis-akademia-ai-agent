@@ -96,8 +96,12 @@ def _dynamic_programs_prompt_suffix() -> str:
     if not others:
         return ""
     names = ", ".join(f"{s.get('name')} (id: {s.get('id')})" for s in others if s.get("id"))
+    # „გარდა ბანაკისა" presented the live programs as an addendum to the camp —
+    # which the operator closed. The agent inherited that framing and answered
+    # „ვეხმარები საბავშვო ბანაკთან დაკავშირებით" while Disneyland and Sunday
+    # School were the only things on sale. These are THE programs, not extras.
     suffix = (
-        "\n\n[დინამიური პროგრამები] გარდა ბანაკისა, აქტიურია: " + names +
+        "\n\n[დინამიური პროგრამები] ამ წუთში აქტიურია: " + names +
         ". ამ პროგრამებზე ნებისმიერ კითხვაზე ჯერ გამოიძახე list_programs, "
         "შემდეგ get_program_info(program_id). ფაქტები მხოლოდ ხელსაწყოს პასუხიდან "
         "აიღე — არასდროს მოიგონო."
@@ -2100,6 +2104,64 @@ def _apply_dynamic_fact_normalisations(text: str) -> str:
     return out
 
 
+# Polite-address normalisation (2026-08-02). Georgian has a singular „შენ" and a
+# polite „თქვენ", and the brand uses only the polite form. The model slips into
+# the singular when a parent writes emotionally — measured on R41-angry-user and
+# T04-conditions, and live in „ნიკოლოზ, გესმის შენი უკმაყოფილება".
+#
+# This is NOT another entry in the forbidden-phrase table. The rule was stated in
+# the prompt and ignored at BOTH prompt sizes: 53k, and 4.6k where it is spelled
+# out with the wrong form named and a worked example. A rule the model ignores at
+# every size is not a prompt problem — it is a mechanical grammatical rewrite,
+# the same category as the „აკადემიაის" -> „აკადემიის" genitive fix that already
+# runs here, so it lives beside that one and the prohibition table stays at 183.
+#
+# Word-boundary matched: `\b` is Unicode-aware in Python 3, so „ხარ" never
+# matches inside „ხართ" and „შენი" never matches inside a longer word.
+#
+# „გესმის" is the odd one out: it is not informal but wrong-person — it tells the
+# parent that THEY understand. The empathic first person is „მესმის" / „გვესმის"
+# (system_base.md:6, a rule that never reached the live prompt because
+# `_build_system_prompt` does not load that file).
+_POLITE_ADDRESS_REWRITES: tuple[tuple[str, str], ...] = (
+    # Person fix first, so the pronoun rewrite below sees the corrected verb.
+    (r"გესმის", "გვესმის"),
+    # Pronouns / possessives.
+    (r"შენი", "თქვენი"),
+    (r"შენს", "თქვენს"),
+    (r"შენთვის", "თქვენთვის"),
+    (r"შენთან", "თქვენთან"),
+    (r"შენ", "თქვენ"),
+    # Second-person singular verb forms seen in the measured replies.
+    (r"გაქვს", "გაქვთ"),
+    (r"ხარ", "ხართ"),
+    (r"იცი", "იცით"),
+    (r"გინდა", "გსურთ"),
+    (r"გსურს", "გსურთ"),
+    (r"შეგიძლია", "შეგიძლიათ"),
+    (r"გირჩევნია", "გირჩევნიათ"),
+    (r"მითხარი", "მითხარით"),
+    (r"გვეუბნები", "გვეუბნებით"),
+    (r"გეტყვი", "გეტყვით"),
+)
+_POLITE_ADDRESS_PATTERNS: tuple[tuple[re.Pattern, str], ...] = tuple(
+    (re.compile(r"\b%s\b" % needle), replacement)
+    for needle, replacement in _POLITE_ADDRESS_REWRITES
+)
+
+
+def _normalise_polite_address(text: str) -> str:
+    """Rewrite second-person-singular address to the polite form. Idempotent —
+    every replacement's output is already the polite form, so a second pass
+    matches nothing."""
+    if not text:
+        return text
+    out = text
+    for pattern, replacement in _POLITE_ADDRESS_PATTERNS:
+        out = pattern.sub(replacement, out)
+    return out
+
+
 def sanitise_response_wording(text: str) -> str:
     """Apply the forbidden-phrase rewrite list to an outgoing reply.
 
@@ -2122,6 +2184,10 @@ def sanitise_response_wording(text: str) -> str:
     # so the fact-free „სრულად ერგება N–M …" rewrite precedes the generic
     # „სრულად ერგება" entry. NONE of these hardcode a camp fact.
     out = _apply_dynamic_fact_normalisations(out)
+    # Polite address (2026-08-02) — runs before the literal table so an entry
+    # written in the polite form still matches a reply the model produced in the
+    # singular.
+    out = _normalise_polite_address(out)
     # Phase 4, Task 4 — flag OFF (default) applies the FULL table; flag ON
     # applies the SAFETY subset only (same objects, same relative order).
     table = (
@@ -2841,6 +2907,28 @@ def _use_lean_prompt() -> bool:
     return bool(getattr(settings, "USE_LEAN_PROMPT", False))
 
 
+def _use_v3_prompt() -> bool:
+    """Prompt v3 (2026-08-02). Loads `parent_v3.md` — the 13 rules the inventory
+    marked KEEP, plus role, tone and grammar — instead of the 53k
+    `system_parent_v2.md`.
+
+    v2 says „ბანაკ" 51 times, „დისნეილენდი" 0 and „საკვირაო" once, so the agent's
+    whole idea of what it sells is a program the operator closed. A replay of the
+    live conversation of 2026-08-02 shows the cost: asked what it helps with, it
+    answered „ბანაკის შესახებ ინფორმაცია" while Sunday School and Disneyland were
+    the only things on sale. v3 names no program at all — every program fact comes
+    from `list_programs` / `get_program_info`, which is where the operator's edits
+    actually live.
+
+    Two thirds of v2 is not rules: 4.4k describes the eight tools whose
+    descriptions the model already receives in the tool schema, and 3.2k is a
+    banned-phrase list that `sanitise_response_wording` enforces in code with 183
+    entries. Neither is carried over.
+
+    Default OFF ⇒ v2 loads, byte-identical."""
+    return bool(getattr(settings, "USE_PROMPT_V3", False))
+
+
 # Off-topic intelligence (USE_OFFTOPIC_INTELLIGENCE, 2026-07-25) — rewrite the two
 # camp-specific off-topic scripts in the loaded prompt to be PROGRAM-AGNOSTIC and
 # logic-oriented. Targeted substring swaps (no tricky Georgian quotes) so an exact
@@ -2900,6 +2988,8 @@ def _build_system_prompt(message: str = "", segment: str = "") -> str:
     # exactly as before (do NOT load system_parent_v2.md when slim/lean).
     if _use_slim_prompts():
         prompt_name = "parent_core"
+    elif _use_v3_prompt():
+        prompt_name = "parent_v3"
     elif _use_lean_prompt():
         prompt_name = "parent_lean"
     else:
