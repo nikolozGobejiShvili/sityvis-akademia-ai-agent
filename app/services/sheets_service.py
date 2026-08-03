@@ -459,13 +459,34 @@ def _worksheet() -> Any:
 
 
 def _ensure_headers(worksheet: Any) -> None:
+    """Keep the header row in sync — GROWING the sheet only, never shrinking.
+
+    `worksheet.resize(cols=N)` deletes every cell beyond column N in EVERY row
+    at once. The header width is flag-dependent — `_active_leads_headers()`
+    returns 18 columns with `USE_PER_PRODUCT_BOOKING` on („Program" in R) and
+    17 with it off — and this runs on every read and every write. So a single
+    call made while the flag was off resized the live sheet to 17 columns and
+    destroyed the Program value of every lead ever written, which is what the
+    operator saw as „the programs column disappears, and what an earlier lead
+    had is gone" (reported 2026-08-03).
+
+    A feature flag being off is a reason to stop WRITING a column, never a
+    reason to delete the operator's data. The header row is still rewritten so
+    a genuine rename lands; only the destructive shrink is gone.
+    """
     headers = _active_leads_headers()
     current_headers = worksheet.row_values(1)
-    if current_headers != headers:
-        last_col = chr(ord("A") + len(headers) - 1)
+    if current_headers == headers:
+        return
+    current_cols = int(getattr(worksheet, "col_count", 0) or 0)
+    if current_cols < len(headers):
         worksheet.resize(cols=len(headers))
-        worksheet.update(f"A1:{last_col}1", [headers])
-        logger.info("[SHEETS] Header row updated (cols=A1:%s1)", last_col)
+    last_col = chr(ord("A") + len(headers) - 1)
+    worksheet.update(f"A1:{last_col}1", [headers])
+    logger.info(
+        "[SHEETS] Header row updated (cols=A1:%s1, sheet_cols=%s -> %s)",
+        last_col, current_cols, max(current_cols, len(headers)),
+    )
 
 
 def _next_id(worksheet: Any) -> int:
