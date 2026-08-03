@@ -1049,8 +1049,26 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
         # re-sending the routing menu. Stays on-policy (no engine
         # mention, no model name).
         identity_reply = _maybe_identity_reply(message_text)
+        # The manager's number is the same kind of question as the identity
+        # one: the two-option menu cannot answer it, so it must not swallow it.
+        # Measured 2026-08-03 — asked mid-conversation the agent answers
+        # „მენეჯერის ნომერია: 558 67 47 33"; asked as the FIRST message the
+        # same parent got the menu, because a fresh turn classifies as UNCLEAR
+        # and never reaches parent_flow. This delegates to the handler that
+        # already owns the answer rather than adding a second one.
+        manager_reply = parent_flow._maybe_handle_explicit_manager_request(
+            conversation, message_text)
         if identity_reply is not None:
             response = identity_reply
+        elif manager_reply is not None:
+            _trace.set_route_decision(
+                route_owner="parent_flow",
+                domain="manager",
+                intent="manager_number_request",
+                answer_source="deterministic_handler",
+                deterministic_reason="unclear_manager_number_request",
+            )
+            response = manager_reply
         elif _is_registration_link_request(message_text):
             # Registration/link request with NO clear target (UNCLEAR
             # segment). When camp registration is closed, fail closed to the
