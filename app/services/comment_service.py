@@ -1503,7 +1503,28 @@ async def send_dm_from_comment(
             list_dm = _build_active_adult_events_list_dm()
             message = list_dm or ADULT_NO_EVENTS_DM
         else:
-            message = UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip()
+            # Same live-programs menu the DM greeting already sends. Measured
+            # 2026-08-03: this branch shipped the raw UNCLEAR_ROUTING text,
+            # which offers „ბავშვების საზაფხულო ბანაკი" and „ზრდასრულთა
+            # კულტურული საღამოები" — BOTH ended — while Sunday School and
+            # Disneyland, the only programs on sale, went unmentioned. The
+            # branch is reached whenever the post caption cannot be fetched
+            # (Meta answers 400 for a page the app cannot read yet), so it is
+            # not a rare corner: every such commenter is offered dead programs.
+            #
+            # `conversation_service` wraps the same constant in
+            # `_maybe_dynamic_welcome` at both of its call sites; only this one
+            # was missed when the data-driven menu landed. Reusing that wrapper
+            # keeps ONE implementation — flag off or no active programs still
+            # yields the hardcoded menu byte-identically. Late import mirrors
+            # the wrapper's own and avoids an import cycle.
+            fallback_menu = UNCLEAR_ROUTING.format(
+                company_name=settings.COMPANY_NAME).strip()
+            try:
+                from app.services.conversation_service import _maybe_dynamic_welcome
+                message = _maybe_dynamic_welcome(fallback_menu)
+            except Exception:  # pragma: no cover - never break the comment DM
+                message = fallback_menu
 
     # PATCH 2 — choose the outbound channel.
     use_private_reply = (

@@ -39,6 +39,15 @@ ALLOWED_EXACT_TEMPLATE_DIFFS: dict[str, tuple[str, str]] = {
         "ამ ეტაპზე ღონისძიებების განრიგი ზუსტდება.",
         "ამ ეტაპზე აქტიური ღონისძიება სიაში არ მაქვს. თუ გსურთ, მენეჯერთან დაგაკავშირებთ.",
     ),
+    # Operator wording, 2026-08-03: the human a parent is handed to is „მენეჯერი".
+    # The templates called them „კონსულტანტი", which is also how the prompt
+    # describes the AGENT's own manner — so live the agent said „ჩვენი
+    # კონსულტანტი განგიმარტავთ" and the parent could not tell whether it meant a
+    # person or itself. One word for the person, everywhere.
+    "parent/ask_phone_only": (
+        "კონსულტანტი დაგიკავშირდეთ",
+        "მენეჯერი დაგიკავშირდეთ",
+    ),
 }
 
 ALLOWED_EXACT_PROMPT_DIFFS: dict[str, tuple[str, str]] = {
