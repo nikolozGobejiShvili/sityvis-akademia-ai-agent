@@ -2104,6 +2104,64 @@ def _apply_dynamic_fact_normalisations(text: str) -> str:
     return out
 
 
+# Polite-address normalisation (2026-08-02). Georgian has a singular „შენ" and a
+# polite „თქვენ", and the brand uses only the polite form. The model slips into
+# the singular when a parent writes emotionally — measured on R41-angry-user and
+# T04-conditions, and live in „ნიკოლოზ, გესმის შენი უკმაყოფილება".
+#
+# This is NOT another entry in the forbidden-phrase table. The rule was stated in
+# the prompt and ignored at BOTH prompt sizes: 53k, and 4.6k where it is spelled
+# out with the wrong form named and a worked example. A rule the model ignores at
+# every size is not a prompt problem — it is a mechanical grammatical rewrite,
+# the same category as the „აკადემიაის" -> „აკადემიის" genitive fix that already
+# runs here, so it lives beside that one and the prohibition table stays at 183.
+#
+# Word-boundary matched: `\b` is Unicode-aware in Python 3, so „ხარ" never
+# matches inside „ხართ" and „შენი" never matches inside a longer word.
+#
+# „გესმის" is the odd one out: it is not informal but wrong-person — it tells the
+# parent that THEY understand. The empathic first person is „მესმის" / „გვესმის"
+# (system_base.md:6, a rule that never reached the live prompt because
+# `_build_system_prompt` does not load that file).
+_POLITE_ADDRESS_REWRITES: tuple[tuple[str, str], ...] = (
+    # Person fix first, so the pronoun rewrite below sees the corrected verb.
+    (r"გესმის", "გვესმის"),
+    # Pronouns / possessives.
+    (r"შენი", "თქვენი"),
+    (r"შენს", "თქვენს"),
+    (r"შენთვის", "თქვენთვის"),
+    (r"შენთან", "თქვენთან"),
+    (r"შენ", "თქვენ"),
+    # Second-person singular verb forms seen in the measured replies.
+    (r"გაქვს", "გაქვთ"),
+    (r"ხარ", "ხართ"),
+    (r"იცი", "იცით"),
+    (r"გინდა", "გსურთ"),
+    (r"გსურს", "გსურთ"),
+    (r"შეგიძლია", "შეგიძლიათ"),
+    (r"გირჩევნია", "გირჩევნიათ"),
+    (r"მითხარი", "მითხარით"),
+    (r"გვეუბნები", "გვეუბნებით"),
+    (r"გეტყვი", "გეტყვით"),
+)
+_POLITE_ADDRESS_PATTERNS: tuple[tuple[re.Pattern, str], ...] = tuple(
+    (re.compile(r"\b%s\b" % needle), replacement)
+    for needle, replacement in _POLITE_ADDRESS_REWRITES
+)
+
+
+def _normalise_polite_address(text: str) -> str:
+    """Rewrite second-person-singular address to the polite form. Idempotent —
+    every replacement's output is already the polite form, so a second pass
+    matches nothing."""
+    if not text:
+        return text
+    out = text
+    for pattern, replacement in _POLITE_ADDRESS_PATTERNS:
+        out = pattern.sub(replacement, out)
+    return out
+
+
 def sanitise_response_wording(text: str) -> str:
     """Apply the forbidden-phrase rewrite list to an outgoing reply.
 
@@ -2126,6 +2184,10 @@ def sanitise_response_wording(text: str) -> str:
     # so the fact-free „სრულად ერგება N–M …" rewrite precedes the generic
     # „სრულად ერგება" entry. NONE of these hardcode a camp fact.
     out = _apply_dynamic_fact_normalisations(out)
+    # Polite address (2026-08-02) — runs before the literal table so an entry
+    # written in the polite form still matches a reply the model produced in the
+    # singular.
+    out = _normalise_polite_address(out)
     # Phase 4, Task 4 — flag OFF (default) applies the FULL table; flag ON
     # applies the SAFETY subset only (same objects, same relative order).
     table = (
