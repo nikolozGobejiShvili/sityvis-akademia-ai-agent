@@ -2162,6 +2162,52 @@ def _normalise_polite_address(text: str) -> str:
     return out
 
 
+# Brand vocabulary the model keeps getting wrong in FREE text, where the
+# templates it was given are correct. Measured on the Railway logs of
+# 2026-08-03 21:11-21:17, the first conversation on the deploy that carried the
+# terminology fix — the templates said „მენეჯერი", the model still wrote
+# „კონსულტანტი დაგიკავშირდებათ" three times.
+#
+# Each entry is a REWRITE, not a ban: the sentence keeps its meaning and its
+# place, one word changes. FORBIDDEN_PHRASE_REPLACEMENTS stays at 183.
+#
+# „შემომწერეთ" is the sharpest of these — it does not mean „write to me", it
+# means „subscribe to me". The agent was closing every conversation by inviting
+# the parent to subscribe.
+#
+# NOTE on „კონსულტანტი": the word is legitimate for the AGENT's own manner
+# („გაყიდვების კონსულტანტი ვარ"), so only the forms that can ONLY denote the
+# PERSON a parent is handed to are rewritten — the oblique cases and the
+# explicit contact verbs. The bare nominative is deliberately left alone.
+_BRAND_TERM_REWRITES: tuple[tuple[str, str], ...] = (
+    (r"შემომწერეთ", "მომწერეთ"),
+    (r"შემომწერე\b", "მომწერე"),
+    (r"კონსულტანტთან", "მენეჯერთან"),
+    (r"კონსულტანტს", "მენეჯერს"),
+    (r"კონსულტანტმა", "მენეჯერმა"),
+    (r"კონსულტანტის", "მენეჯერის"),
+    (r"კონსულტანტი (დაგიკავშირდებათ|მოგცემთ|განგიმარტავთ|გიპასუხებთ"
+     r"|დაგიზუსტებთ|მოგიყვებათ|გელოდებათ)", r"მენეჯერი \1"),
+    (r"ჩაწერა წარმატებით დასრულდა", "კონსულტაცია ჩაგინიშნეთ"),
+    (r"კონსულტაციები მიმდინარეობს", "კონსულტაციები ტარდება"),
+    (r"ნახვამდის და წარმატებულ კონსულტაციას გისურვებთ", "შეხვედრამდე"),
+    (r"წარმატებულ კონსულტაციას გისურვებთ", "შეხვედრამდე"),
+)
+_BRAND_TERM_PATTERNS = tuple(
+    (re.compile(n), r) for n, r in _BRAND_TERM_REWRITES)
+
+
+def _normalise_brand_terms(text: str) -> str:
+    """Rewrite the brand's own vocabulary in free model text. Idempotent — every
+    replacement's output is already the brand form."""
+    if not text:
+        return text
+    out = text
+    for pattern, replacement in _BRAND_TERM_PATTERNS:
+        out = pattern.sub(replacement, out)
+    return out
+
+
 def sanitise_response_wording(text: str) -> str:
     """Apply the forbidden-phrase rewrite list to an outgoing reply.
 
@@ -2188,6 +2234,10 @@ def sanitise_response_wording(text: str) -> str:
     # written in the polite form still matches a reply the model produced in the
     # singular.
     out = _normalise_polite_address(out)
+    # Brand vocabulary (2026-08-04) — same place, same reason as the polite
+    # address: the templates were already right and the model still wrote its
+    # own word in free text.
+    out = _normalise_brand_terms(out)
     # Phase 4, Task 4 — flag OFF (default) applies the FULL table; flag ON
     # applies the SAFETY subset only (same objects, same relative order).
     table = (
