@@ -230,8 +230,11 @@ def test_live_parent_tool_keeps_price_but_limits_current_facts():
         platform=conv.platform,
     )
 
+    # Price is no longer exempt from the closed-camp limit (2026-08-04) — a live
+    # parent asking Disneyland's price was given the closed camp's 2150.
     price = executor.execute(TOOL_GET_CAMP_INFO, {"topic": "price"})
-    assert price["success"] is True
+    assert price["success"] is False
+    assert price["reason"] == "camp_public_info_limited"
     assert price["topic"] == "price"
 
     location = executor.execute(TOOL_GET_CAMP_INFO, {"topic": "location"})
