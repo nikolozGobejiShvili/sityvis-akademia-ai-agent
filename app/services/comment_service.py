@@ -1270,6 +1270,15 @@ _SS_COMMENT_ACTIVE_HANDOFF = (
     "თუ გსურთ, დაგაკავშირებთ."
 )
 
+# The same closing line for ANY other program. The program is not named here on
+# purpose: naming it needs the Georgian instrumental („საკვირაო სკოლ-ით",
+# „დისნეილენდ-ით"), and a generated case ending is how bad Georgian gets into
+# live copy. The description above it already names the program.
+_PROGRAM_COMMENT_HANDOFF = (
+    "დაინტერესებისთვის მადლობა. დეტალებს მენეჯერი გაგაცნობთ — "
+    "თუ გსურთ, დაგაკავშირებთ."
+)
+
 
 def _is_sunday_school_section(section: dict | None) -> bool:
     """True when the resolved comment section is the Sunday-School program.
@@ -1290,10 +1299,17 @@ def _is_sunday_school_section(section: dict | None) -> bool:
     )
 
 
-def _build_ss_active_comment_dm(section: dict | None) -> str:
-    """Active Sunday-School comment DM built ONLY from populated operator fields
-    (never invented), always ending with a safe manager-handoff offer. Empty
-    fields are skipped so no blank „ფასი: " labels appear. Never Camp content."""
+def _build_program_fields_dm(
+    section: dict | None, *, handoff: str = _PROGRAM_COMMENT_HANDOFF,
+) -> str:
+    """A program's comment DM built ONLY from populated operator fields (never
+    invented), always ending with a safe manager-handoff offer. Empty fields are
+    skipped so no blank „ფასი: " labels appear. Never Camp content.
+
+    Nothing here is program-specific — it reads the generic section fields every
+    admin-panel program has, so a program added tomorrow renders with no code
+    change. Sunday School passes its own named closing line.
+    """
     section = section or {}
 
     def _f(key: str) -> str:
@@ -1315,8 +1331,24 @@ def _build_ss_active_comment_dm(section: dict | None) -> str:
         parts.append("\n".join(facts))
     if _f("registration_url"):
         parts.append(f"რეგისტრაციის ბმული: {_f('registration_url')}")
-    parts.append(_SS_COMMENT_ACTIVE_HANDOFF)
+    parts.append(handoff)
     return "\n\n".join(parts)
+
+
+def _build_program_comment_dm(section: dict | None) -> str:
+    """Comment DM for any admin-panel program that is not the camp and not the
+    adult-events catalogue — Disneyland today, whatever the operator adds next.
+
+    Status-aware: only an `active` program shows its price / schedule / link. A
+    `coming_soon` / `ended` / `hidden` / `full` program gets the manager offer
+    alone, so a comment on an old post never surfaces a dead program's price —
+    the same class of defect the closed camp produced on 2026-08-04.
+    """
+    section = section or {}
+    status = (section.get("status") or "").strip().lower()
+    if status and status != "active":
+        return _PROGRAM_COMMENT_HANDOFF
+    return _build_program_fields_dm(section)
 
 
 def _build_sunday_school_comment_dm(section: dict | None) -> str:
@@ -1343,7 +1375,9 @@ def _build_sunday_school_comment_dm(section: dict | None) -> str:
     if status == "full":
         return _SS_COMMENT_FULL
     if status == "active":
-        return _build_ss_active_comment_dm(section)
+        return _build_program_fields_dm(
+            section, handoff=_SS_COMMENT_ACTIVE_HANDOFF,
+        )
     return _SS_COMMENT_ACTIVE_HANDOFF
 
 
@@ -1459,13 +1493,18 @@ async def send_dm_from_comment(
             # the Summer-Camp rich DM. Route SS to its own status-aware DM builder
             # (never Camp content). Camp (`type=camp`) is unaffected.
             message = _build_sunday_school_comment_dm(admin_section)
-        elif section_type in {"camp", "kids_program"} and segment == "PARENT":
-            # Existing PARENT path covers summer_camp via admin_config. Send a
-            # comment-aware Camp DM (price / dates / location / intro) that
-            # bridges into the Camp flow, instead of the generic category menu
-            # (2026-07-04). Sunday School (kids_program) is already handled by
-            # the `_is_sunday_school_section` branch ABOVE, so this only reaches
-            # the actual Summer-Camp section.
+        elif section_type == "camp" and segment == "PARENT":
+            # Send a comment-aware Camp DM (price / dates / location / intro)
+            # that bridges into the Camp flow, instead of the generic category
+            # menu (2026-07-04).
+            #
+            # `kids_program` used to be matched here too, which meant EVERY
+            # children's program shipped the Summer-Camp DM. Sunday School was
+            # rescued from it on 2026-07-02 by name (`_is_sunday_school_section`
+            # above) — and Disneyland, added later with the same
+            # `type=kids_program`, fell straight back in: a „ფასი?" comment on a
+            # Disneyland post answered with the CLOSED camp's price block. The
+            # per-program rescue does not scale; matching only the camp does.
             message = _build_camp_comment_dm(comment_text)
         elif section_type == "adult_events" and segment == "ADULT":
             # Generic Adult Event Comment Patch (2026-06-09).
@@ -1474,8 +1513,9 @@ async def send_dm_from_comment(
             list_dm = _build_active_adult_events_list_dm()
             message = list_dm or ADULT_NO_EVENTS_DM
         else:
-            # New / unknown section type → render the section's own
-            # template directly. This is the operator-extension path.
+            # Every other program → its own operator-written template when one
+            # is set, otherwise its own populated fields. This is the path that
+            # has to work with NO code change for a program added tomorrow.
             try:
                 message = admin_config_service.build_section_dm(admin_section)
             except Exception as exc:
@@ -1483,6 +1523,14 @@ async def send_dm_from_comment(
                     "[COMMENT] admin section build_section_dm failed for %s: %s",
                     admin_section.get("id"), exc, exc_info=True,
                 )
+            if not message:
+                # `build_section_dm` returns "" when the program has no
+                # `auto_dm_template_id` — the normal state for a program created
+                # from the panel, since that field is optional there. Without
+                # this the empty result fell through to the PARENT fallback
+                # below, which is the Camp DM again, so fixing the branch above
+                # alone would have changed nothing for Disneyland.
+                message = _build_program_comment_dm(admin_section)
 
     if not message:
         # COMMENT FLOW PATCH 3 fallback: PARENT uses canonical camp knowledge;
