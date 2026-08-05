@@ -780,10 +780,16 @@ def test_get_camp_info_price(fresh_conversation):
         sender_id="sender_p3c",
         platform="instagram",
     )
+    # This runs against the shipped admin config, where the camp's registration
+    # is CLOSED — so what it actually pinned was the „price is exempt from the
+    # closed-camp limit" rule, not the price payload. That exemption is gone
+    # (2026-08-04): a live parent asking Disneyland's price was handed the
+    # closed camp's 2150. The open-camp payload shape is pinned by the tests
+    # that explicitly open registration.
     result = executor.execute(TOOL_GET_CAMP_INFO, {"topic": "price"})
-    assert result["success"] is True
-    assert result["price_gel"] == 2150
-    assert "ტრანსპორტი" in result["includes"]
+    assert result["success"] is False
+    assert result["reason"] == "camp_public_info_limited"
+    assert "2150" not in str(result)
 
 
 # =========================================================================

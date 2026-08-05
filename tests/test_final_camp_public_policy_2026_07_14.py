@@ -243,9 +243,13 @@ def test_final_policy_router_detail_fallbacks_are_limited(
     _assert_no_sales_entry(out)
 
 
-def test_final_policy_tool_fallback_limits_non_price_facts_but_keeps_price(
+def test_final_policy_tool_fallback_limits_every_fact_including_price(
     closed_registration,
 ):
+    """Price used to be exempt. It no longer is — see the 2026-08-04 note in
+    `parent_tool_executor._get_camp_info`: a parent asking Disneyland's price
+    received the closed camp's 2150 with its full sales card, because the tool
+    still handed the model that number."""
     conv = _conversation("tool-final")
     executor = ParentToolExecutor(
         conversation=conv,
@@ -255,8 +259,10 @@ def test_final_policy_tool_fallback_limits_non_price_facts_but_keeps_price(
     )
 
     price = executor.execute(TOOL_GET_CAMP_INFO, {"topic": "price"})
-    assert price["success"] is True
+    assert price["success"] is False
+    assert price["reason"] == "camp_public_info_limited"
     assert price["topic"] == "price"
+    assert "2150" not in str(price)
 
     location = executor.execute(TOOL_GET_CAMP_INFO, {"topic": "location"})
     assert location == {

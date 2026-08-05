@@ -606,8 +606,19 @@ class ParentToolExecutor:
         if not registration_open:
             if topic == "registration":
                 return _registration_closed_tool_result(topic="registration")
-            if topic != "price":
-                return _camp_public_info_limited_tool_result(topic)
+            # „price" used to be exempt here, so a closed camp still handed the
+            # model its 2150 block. Railway, 2026-08-04 19:07 — a parent wrote
+            # „გამარჯობა დისნელენდის ფასი რა არის?" (Disneyland, misspelled) and
+            # received: „ბანაკის ფასი 2 150 ლარია" with the inclusions, the
+            # sibling discount and the 6-month installment. A closed program's
+            # price quoted to someone asking about a live one.
+            #
+            # Every other topic already returned the closed-camp result; price
+            # was the only hole. Closing it removes the number from the model's
+            # reach — it cannot quote what it was never given. The parent who
+            # genuinely asks „ბანაკის ფასი" still gets the camp-ended answer,
+            # which is what the other topics have always returned.
+            return _camp_public_info_limited_tool_result(topic)
         # Config-unification patch: read camp facts from the admin-first
         # helper so an operator price/location/streams edit in the
         # Admin Panel takes effect immediately for the LLM's
