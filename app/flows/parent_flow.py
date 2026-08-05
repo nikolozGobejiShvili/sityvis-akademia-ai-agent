@@ -2859,6 +2859,11 @@ def _has_any_child_age_question(text: str) -> bool:
     low = (text or "").lower()
     return bool(contains_child_age_question(low) or _CHILD_AGE_Q_EXTRA_RE.search(low))
 
+# A sentence-final question mark — „?" at the end of the text or before
+# whitespace. A „?" inside a URL query string (`...?form=1`) is followed by a
+# non-space character, so a registration link never reads as a question.
+_REPLY_ALREADY_ASKS_RE = re.compile(r"\?(?=\s|$)")
+
 # When the reply is a terminal handoff / adult redirect, do NOT append a
 # camp age question onto it.
 _CAMP_AGE_SKIP_MARKERS: tuple[str, ...] = (
@@ -2899,6 +2904,14 @@ def _ensure_camp_age_question(
     # Reply already asks for the age (any phrasing, incl. „ასაკი რამდენია?") →
     # leave it (never append a second age question).
     if _has_any_child_age_question(response):
+        return response
+    # Railway 2026-08-05 10:08 — a Sunday-School price answer already ended by
+    # putting a question to the parent („გაქვთ დამატებითი კითხვები? მაგალითად,
+    # გრაფიკი, ადგილმდებარეობა ან რეგისტრაცია…") and this guard grafted the age
+    # question on top, so one message carried two asks. The guard exists for a
+    # reply that asks NOTHING; when the reply already opens a thread, the age
+    # arrives from the parent's own next turn (it did, on the very next message).
+    if _REPLY_ALREADY_ASKS_RE.search(response):
         return response
     # Don't graft the question onto a terminal handoff / adult redirect.
     if any(marker in response for marker in _CAMP_AGE_SKIP_MARKERS):
