@@ -2192,6 +2192,21 @@ _BRAND_TERM_REWRITES: tuple[tuple[str, str], ...] = (
     (r"კონსულტაციები მიმდინარეობს", "კონსულტაციები ტარდება"),
     (r"ნახვამდის და წარმატებულ კონსულტაციას გისურვებთ", "შეხვედრამდე"),
     (r"წარმატებულ კონსულტაციას გისურვებთ", "შეხვედრამდე"),
+    # Live 2026-08-05 18:40 — the agent offered to cancel the booking but put
+    # the verb in the SECOND person: „ჯავშანი გააუქმოთ, თუ გნებავთ?" — „YOU
+    # cancel", which reads as an instruction to the parent rather than an offer.
+    # It cancels through `manage_consultation_booking` itself, so the offer
+    # belongs in the first person. Anchored to the offer's own punctuation, so a
+    # sentence that genuinely tells a parent to cancel something themselves is
+    # left alone. („თუ გნებავთ" is NOT touched — it is approved PARENT wording,
+    # used throughout the prompt and templates; only ADULT bans it.)
+    (r"ჯავშანი გააუქმოთ, თუ გნებავთ\?", "გსურთ, ჯავშანი გავაუქმო?"),
+    (r"ჯავშან[ის] გააუქმოთ\?", "გსურთ, ჯავშანი გავაუქმო?"),
+    # Live 2026-08-05 18:33 — „სასიამოვნოა, ხვალ 6 აგვისტოს 17:00 თავისუფალია!"
+    # A free slot is a fact, not a pleasure. The opener carries no information
+    # and reads as translated-sounding Georgian; the sentence after it is
+    # already complete. Sentence-initial only.
+    (r"(?m)^სასიამოვნოა[,.!]\s*", ""),
 )
 _BRAND_TERM_PATTERNS = tuple(
     (re.compile(n), r) for n, r in _BRAND_TERM_REWRITES)
@@ -2257,6 +2272,10 @@ def sanitise_response_wording(text: str) -> str:
     out = re.sub(r"\s+\.", ".", out)
     out = re.sub(r"\s+,", ",", out)
     out = re.sub(r"\.{2,}", ".", out)
+    # Live 2026-08-05 18:41 — „თუ რამე დაგჭირდებათ,. ნახვამდის!" A comma left
+    # touching a period is a typo to whoever reads it. Same class as the runs
+    # above, and it belongs in the same place: mechanics, not wording.
+    out = re.sub(r",\s*\.", ".", out)
     return out.strip()
 
 
