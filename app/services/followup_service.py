@@ -14,9 +14,23 @@ in-flight conversations — so the actual delivery channel was often
 guessed.
 
 This module is now driven by the Conversation snapshot. The cadence
-(24h → 72h → 168h) lives in `app/agent/knowledge/followup_strategy.yaml`.
+(22h → 72h → 168h) lives in `app/agent/knowledge/followup_strategy.yaml`.
 Stage names match that file's keys: ``first_24h`` → ``second_3d`` →
-``third_7d`` → ``stopped``. After the third stage the conversation's
+``third_7d`` → ``stopped``.
+
+⚠️ ``first_24h`` is an IDENTIFIER, not a delay. It is persisted on every
+Conversation in Redis, is the admin template id (``followup_24h``), and is
+a key in `followup_strategy.yaml` — renaming it to match the 22h delay
+would strand every live conversation mid-cadence. The delay lives in
+`_PRODUCTION_FIRST_DELAY`; the name does not track it.
+
+⚠️ Only stage 1 can actually deliver. Meta's standard messaging window
+closes 24h after the user's last message and we send with no message tag,
+so the 72h and 168h stages are outside it BY DEFINITION and are always
+refused with `(#10)`. That is a platform policy limit, not a bug in this
+module, and no delay tuning fixes it. They still advance the stage (see
+the send path) so a lead reaches ``followup_exhausted`` having received
+only the first message. After the third stage the conversation's
 ``followup_blocked_reason`` is set to ``followup_exhausted`` so a
 future patch (Sentry / error monitoring) can surface this as a final
 state rather than a silent stop.
@@ -66,7 +80,25 @@ logger = logging.getLogger(__name__)
 # `FOLLOWUP_TEST_MODE` + `FOLLOWUP_FIRST_DELAY_SECONDS` operator
 # overrides take effect WITHOUT mutating the module-level constant.
 # Production cadence stages 2 and 3 (72h / 168h) are never overridden.
-_PRODUCTION_FIRST_DELAY: timedelta = timedelta(hours=24)
+#
+# 2026-08-26 — why 22h and not 24h. Meta closes the standard messaging
+# window exactly 24h after the USER's last message, and we send
+# `messaging_type="RESPONSE"` with no message tag
+# (`messenger_service.send_message`), so a send past that mark is
+# refused with `(#10) ... outside the allowed window`. A 24h delay could
+# never land, for two reasons that stack:
+#   * the delay is measured from `last_bot_message_at` — the bot's reply,
+#     which lands SECONDS AFTER the user's message that opened the window;
+#   * the APScheduler tick runs hourly (`app/main.py`), adding 0-60min.
+# Measured on the live test page: parent wrote 2026-08-24 16:08:41, the
+# follow-up fired 2026-08-25 16:40:52 — 24h32m, refused. Eight sends were
+# attempted between 2026-08-12 and 2026-08-25 and all eight were refused;
+# `[FOLLOWUP] sent` appears nowhere in those logs. 22h leaves 1-2h of
+# headroom after the worst-case tick lag.
+# Stages 2 and 3 (72h / 168h) are past that window BY DEFINITION and
+# cannot be made to deliver by tuning this constant — see the module
+# docstring.
+_PRODUCTION_FIRST_DELAY: timedelta = timedelta(hours=22)
 _FOLLOWUP_CADENCE: list[dict[str, Any]] = [
     {
         "from_stage": "",
