@@ -24,8 +24,15 @@ global_rules:
     - "არასაპრესინგო"
 
 stages:
+  # `first_24h` is an IDENTIFIER (the value persisted in Redis as the
+  # conversation's followup_stage, and the `followup_24h` admin template
+  # id) — not the delay. The scheduler reads the real delay from
+  # `_PRODUCTION_FIRST_DELAY` in `app/services/followup_service.py`, never
+  # from `delay_hours` here; this key is documentation kept in sync by hand.
+  # 2026-08-26: 24 -> 22, because Meta refuses a tagless send more than 24h
+  # after the user's last message and the hourly tick can add up to 60min.
   first_24h:
-    delay_hours: 24
+    delay_hours: 22
     goal: "დიალოგის რბილად დაბრუნება"
     when:
       - "მომხმარებელი დაინტერესდა ბანაკით"

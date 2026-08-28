@@ -86,7 +86,10 @@ def test_first_delay_falls_back_when_override_zero(monkeypatch):
         FOLLOWUP_FIRST_DELAY_SECONDS=0,
     )
     delay = followup_service._first_delay()
-    assert delay == timedelta(hours=24)
+    # Assert the CONTRACT (falls back to the production delay), not the
+    # number — the value itself is pinned once, in
+    # `test_production_first_delay_stays_inside_meta_window`.
+    assert delay == followup_service._PRODUCTION_FIRST_DELAY
 
 
 def test_first_delay_falls_back_when_override_negative(monkeypatch):
@@ -96,7 +99,10 @@ def test_first_delay_falls_back_when_override_negative(monkeypatch):
         FOLLOWUP_FIRST_DELAY_SECONDS=-1,
     )
     delay = followup_service._first_delay()
-    assert delay == timedelta(hours=24)
+    # Assert the CONTRACT (falls back to the production delay), not the
+    # number — the value itself is pinned once, in
+    # `test_production_first_delay_stays_inside_meta_window`.
+    assert delay == followup_service._PRODUCTION_FIRST_DELAY
 
 
 def test_first_delay_falls_back_when_test_mode_off(monkeypatch):
@@ -108,7 +114,10 @@ def test_first_delay_falls_back_when_test_mode_off(monkeypatch):
     delay = followup_service._first_delay()
     # Production cadence is preserved even when seconds are set —
     # test mode must be ON to engage the override.
-    assert delay == timedelta(hours=24)
+    # Assert the CONTRACT (falls back to the production delay), not the
+    # number — the value itself is pinned once, in
+    # `test_production_first_delay_stays_inside_meta_window`.
+    assert delay == followup_service._PRODUCTION_FIRST_DELAY
 
 
 def test_first_delay_invalid_type_does_not_crash(monkeypatch):
@@ -127,7 +136,37 @@ def test_first_delay_invalid_type_does_not_crash(monkeypatch):
         })(),
     ):
         delay = followup_service._first_delay()
-    assert delay == timedelta(hours=24)
+    # Assert the CONTRACT (falls back to the production delay), not the
+    # number — the value itself is pinned once, in
+    # `test_production_first_delay_stays_inside_meta_window`.
+    assert delay == followup_service._PRODUCTION_FIRST_DELAY
+
+
+def test_production_first_delay_stays_inside_meta_window():
+    """The first-stage delay must leave room for the hourly tick INSIDE
+    Meta's 24h messaging window.
+
+    We send `messaging_type="RESPONSE"` with no message tag, so Meta
+    refuses anything sent more than 24h after the user's last message
+    with `(#10) ... outside the allowed window`. Two lags stack on top of
+    this delay before the DM actually leaves:
+
+      * the delay is measured from `last_bot_message_at` (the bot's reply,
+        seconds after the user's message that opened the window);
+      * the APScheduler tick is hourly, so up to 60min more.
+
+    A 24h delay therefore never delivered — measured live, eight sends
+    between 2026-08-12 and 2026-08-25, all eight refused. This test fails
+    if anyone raises the delay back into that dead zone.
+    """
+    meta_window = timedelta(hours=24)
+    worst_case_tick_lag = timedelta(hours=1)  # `app/main.py`: interval, hours=1
+    assert (
+        followup_service._PRODUCTION_FIRST_DELAY + worst_case_tick_lag
+        < meta_window
+    )
+    # Current value, pinned so the change is deliberate and reviewable.
+    assert followup_service._PRODUCTION_FIRST_DELAY == timedelta(hours=22)
 
 
 def test_effective_cadence_overrides_only_first_stage(monkeypatch):

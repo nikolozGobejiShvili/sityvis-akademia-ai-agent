@@ -309,16 +309,21 @@ def test_skip_unsupported_platform(send_recorder, camp_registration_open, platfo
 # =========================================================================
 
 
-def test_stage_1_not_sent_before_24h(send_recorder, camp_registration_open):
-    conv = _make_conversation(last_bot_offset=timedelta(hours=23))
+def test_stage_1_not_sent_before_first_delay(send_recorder, camp_registration_open):
+    # Derived from the constant rather than hardcoded, so retuning the
+    # first-stage delay (24h -> 22h on 2026-08-26, to stay inside Meta's
+    # 24h messaging window) does not silently invert this boundary test.
+    too_early = followup_service._PRODUCTION_FIRST_DELAY - timedelta(hours=1)
+    conv = _make_conversation(last_bot_offset=too_early)
     conversation_service.conversations[conv.sender_id] = conv
     followup_service.check_and_send_followups()
     assert send_recorder.calls == []
     assert conv.followup_stage == ""
 
 
-def test_stage_1_sent_at_24h(send_recorder, camp_registration_open):
-    conv = _make_conversation(last_bot_offset=timedelta(hours=25))
+def test_stage_1_sent_after_first_delay(send_recorder, camp_registration_open):
+    just_past = followup_service._PRODUCTION_FIRST_DELAY + timedelta(hours=1)
+    conv = _make_conversation(last_bot_offset=just_past)
     conversation_service.conversations[conv.sender_id] = conv
     followup_service.check_and_send_followups()
     assert len(send_recorder.calls) == 1
