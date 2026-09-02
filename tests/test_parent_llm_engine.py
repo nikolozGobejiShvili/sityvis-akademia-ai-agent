@@ -1851,7 +1851,17 @@ def test_patch3_engine_does_not_inject_raw_source_documents(
     # Raised 48 KB -> 56 KB after route-decision/source-of-truth rules expanded
     # the curated system prompt. This still catches accidental raw source-document
     # injection while accepting the current canonical prompt size.
-    assert len(full_prompt) < 56_000, (
+    # Raised 56 KB -> 57 KB (2026-09-02) by the „საკუთარი სიტყვის წესი" block —
+    # ~0.5 KB of curated policy added after the agent gave the manager's number
+    # and then, one turn later, told the parent that sharing it was outside its
+    # competence. The guard's purpose is unchanged: a raw source document is
+    # tens of KB, so it is still caught with room to spare.
+    #
+    # ⚠️ The curated prompt is now ~56 KB and this ceiling has been raised seven
+    # times. Before adding the next rule, prefer replacing an existing one —
+    # `docs/` already flags the un-probed "lost in the middle" risk for a prompt
+    # this long, and a rule the model never reads is worse than no rule.
+    assert len(full_prompt) < 57_000, (
         f"engine prompt too large: {len(full_prompt)} chars"
     )
 
