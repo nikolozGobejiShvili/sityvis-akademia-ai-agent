@@ -907,7 +907,18 @@ def maybe_capture_challenge_fallback(lead: Lead, message: str) -> None:
 # prompt-token cost predictable.
 HISTORY_WINDOW = 10
 
-DEFAULT_MAX_TOKENS = 500
+# 2026-09-02 — raised 500 -> 900 because Georgian answers were being cut
+# mid-word. Live on the test page: a „პედაგოგებზე დეტალურად" answer stopped at
+# „...ინდივიდუალურ მ" and the reply logged `reply_len=677`, far below Meta's own
+# 2000-char limit — the cap that bit was this one. Georgian costs several times
+# more tokens per character than Latin script, so a reply that reads as medium
+# length in the chat window is already near 500 output tokens. A program whose
+# `description_full` carries the schedule, age groups and staffing (the only
+# field the admin panel offers for them) cannot be summarised inside that.
+# 900 leaves headroom for those answers while staying well under the model's
+# limit; the tone rule "1-3 sentences unless a tool result needs more" still
+# governs LENGTH — this only stops a wanted answer being truncated.
+DEFAULT_MAX_TOKENS = 900
 DEFAULT_TEMPERATURE = 0.7
 
 
