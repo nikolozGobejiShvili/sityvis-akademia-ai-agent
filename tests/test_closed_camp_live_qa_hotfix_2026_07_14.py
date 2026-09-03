@@ -62,7 +62,19 @@ def test_closed_camp_price_keeps_facts_but_suppresses_consultation_cta(closed_re
         "რეგისტრაციის ლინკი გამომიგზავნეთ",
     ],
 )
-def test_unclear_registration_requests_return_closed_camp_answer(closed_registration, message):
+def test_unclear_registration_requests_ask_which_program(closed_registration, message):
+    """An ambiguous registration request asks WHICH programme.
+
+    This test used to assert the opposite — that it returns the camp's
+    closed-registration answer and must NOT ask. That was answering about a
+    programme the parent never mentioned: live 2026-09-03 a bare „როგორ
+    დავრეგისტრირდე?" came back „ბანაკის ბოლო ნაკადი უკვე დაიწყო და რეგისტრაცია
+    დასრულებულია", and the operator's instruction is that with no programme
+    named the agent asks rather than assumes camp.
+
+    What the original test protected is kept and still asserted: the reply is
+    deterministic and never invents a registration link.
+    """
     conversation_service.conversations.clear()
 
     out = conversation_service.process_message(
@@ -72,10 +84,9 @@ def test_unclear_registration_requests_return_closed_camp_answer(closed_registra
         page_id="page-live",
     )
 
-    assert out == parent_flow._camp_registration_closed_short_answer()
-    assert "http" not in out.lower()
-    assert "რომელი მიმართულების" not in out
-    assert "საკვირაო" not in out
+    assert out == conversation_service._registration_link_clarification()
+    assert "http" not in out.lower()          # never a guessed link
+    assert "ნაკადი უკვე დაიწყო" not in out    # not the camp lifecycle answer
 
 
 def test_stream_date_question_uses_current_stream_lifecycle_fact(current_stream_clock, closed_registration):

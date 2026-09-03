@@ -504,6 +504,29 @@ _REGISTRATION_LINK_CLARIFICATION = (
 )
 
 
+def _registration_link_clarification() -> str:
+    """Ask WHICH programme, naming the ones actually on sale.
+
+    The frozen text above offers „ბანაკის თუ კონკრეტული ღონისძიების?" — both of
+    which the operator has switched off. Reading the names at reply time means a
+    programme that closes stops being offered and one that opens starts, with no
+    code edit; `parent_flow._active_program_names` is the single source the rest
+    of the „here is what we can help with" copy already uses.
+
+    Falls back to the shipped constant when nothing is active, so the reply is
+    never empty. Never raises.
+    """
+    try:
+        names = parent_flow._active_program_names()
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("[conversation] active program names unavailable (%s)", exc)
+        names = []
+    if not names:
+        return _REGISTRATION_LINK_CLARIFICATION
+    listed = " თუ ".join(names) if len(names) == 2 else ", ".join(names)
+    return f"რომელ პროგრამაზე გაინტერესებთ რეგისტრაცია: {listed}?"
+
+
 def _is_registration_link_request(message_text: str) -> bool:
     """True when the message asks for a registration / sign-up link or form.
 
@@ -1098,23 +1121,25 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
             )
             response = manager_reply
         elif _is_registration_link_request(message_text):
-            # Registration/link request with NO clear target (UNCLEAR
-            # segment). When camp registration is closed, fail closed to the
-            # canonical camp lifecycle answer instead of asking for a linkable
-            # program and risking a stale registration CTA.
-            if not parent_flow._is_camp_registration_open():
-                _trace.set_route_decision(
-                    route_owner="conversation_service",
-                    domain="camp",
-                    intent="camp_registration",
-                    sub_intent="registration_link",
-                    answer_source="deterministic_handler",
-                    approved_copy_id="camp_registration_closed",
-                    deterministic_reason="unclear_closed_registration_request",
-                )
-                response = parent_flow._camp_registration_closed_short_answer()
-            else:
-                response = _REGISTRATION_LINK_CLARIFICATION
+            # Registration/link request with NO programme named (UNCLEAR
+            # segment). This used to fail closed to the CAMP lifecycle answer,
+            # which answers about a programme the parent never mentioned: live
+            # 2026-09-03 a bare „როგორ დავრეგისტრირდე?" came back „ბანაკის ბოლო
+            # ნაკადი უკვე დაიწყო და რეგისტრაცია დასრულებულია".
+            #
+            # Nothing here knows which programme is meant, so the honest reply is
+            # to ask — naming what is actually on sale. The camp is one candidate
+            # among the active programmes, not the default, and when it is off it
+            # simply is not on the list.
+            _trace.set_route_decision(
+                route_owner="conversation_service",
+                domain="program",
+                intent="registration",
+                sub_intent="registration_link",
+                answer_source="deterministic_handler",
+                deterministic_reason="unclear_registration_request_needs_program",
+            )
+            response = _registration_link_clarification()
         else:
             response = _maybe_dynamic_welcome(
             UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip())
