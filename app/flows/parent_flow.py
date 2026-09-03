@@ -915,6 +915,43 @@ def _conversation_names_other_program(conversation: Conversation) -> bool:
     return False
 
 
+def _msg_declines_camp(message: str) -> bool:
+    """The parent is saying the camp is NOT what they want.
+
+    A camp word makes every camp detector read the message as a camp question,
+    so „ბანაკი არ მაინტერესებს" was answered with the camp status. Live
+    2026-09-03 16:04 the parent wrote exactly that — after already being given
+    the camp answer once — and got it a second time.
+
+    The negation has to attach to WANTING, not to any verb: „ბანაკი არ
+    დამთავრებულა?" is a camp question that happens to contain „არ" and must stay
+    camp. So this needs a camp word AND an explicit refusal, and it defers to
+    `_DECLINE_OVERRIDE_INTEREST` exactly as the decline handler does — „ბანაკი არ
+    მინდა, მაგრამ ძვირია" is a price objection, not a refusal.
+
+    Reuses the shipped `_DECLINE_PHRASES`; only the „მაინტერესებს" family is
+    added, because a refusal of INTEREST („არ მაინტერესებს") appears in none of
+    the existing lists, which are built around „არ მინდა".
+    """
+    low = (message or "").lower()
+    if not any(k in low for k in _CAMP_WORD_STEMS):
+        return False
+    if any(m in low for m in _DECLINE_OVERRIDE_INTEREST):
+        return False
+    if any(p in low for p in _DECLINE_PHRASES):
+        return True
+    return any(p in low for p in _NOT_INTERESTED_PHRASES)
+
+
+# Refusal of INTEREST rather than of an offer. `_DECLINE_PHRASES` is built
+# around „არ მინდა" and has no „მაინტერესებს" form, which is what the parent
+# actually wrote.
+_NOT_INTERESTED_PHRASES: tuple[str, ...] = (
+    "არ მაინტერესებს", "აღარ მაინტერესებს",
+    "არ მაინტერესებდა", "არ მჭირდება", "აღარ მჭირდება",
+)
+
+
 def _msg_is_dissatisfaction(message: str) -> bool:
     """A harsh complaint / insult about the company — a ROUTING signal, not a handler.
     The de-escalation RESPONSE is the operator-editable `dissatisfied-customer` SKILL at
@@ -950,6 +987,16 @@ def _maybe_handle_camp_status(
     # `dissatisfied-customer` skill answers with empathy + manager, not „camp ended".
     # Advisory de-escalation lives in the skill layer, not in this deterministic gate.
     if _msg_is_dissatisfaction(message):
+        return None
+
+    # „ბანაკი არ მაინტერესებს" names the camp only to rule it out. Answering it
+    # with the camp status tells the parent something they just said they did
+    # not want, and on 2026-09-04 it was the SECOND camp answer in a row.
+    if _msg_declines_camp(message):
+        logger.info(
+            "[parent_flow] camp-status deferred — the parent declined camp "
+            "(sender=%s)", getattr(conversation, "sender_id", "?"),
+        )
         return None
 
     # Program-aware (2026-07-26 live test): a price/topic question that NAMES a non-camp
