@@ -121,3 +121,43 @@ def test_decline_predicate_needs_a_camp_word(monkeypatch):
     """The predicate is scoped to the camp — a bare refusal is somebody else's job."""
     assert pf._msg_declines_camp("არ მაინტერესებს") is False
     assert pf._msg_declines_camp("ბანაკი არ მაინტერესებს") is True
+
+
+# --- the camp's age qualifier is the camp's, not every kids' programme's ---
+
+_IN_CAMP = (
+    ("user", "ბანაკი მაინტერესებს"),
+    ("assistant", "ბანაკის ნაკადები: 23-29 ივნისი."),
+)
+
+
+def _age_question(monkeypatch, history, message, reply):
+    monkeypatch.setattr("app.services.admin_config_service.get_active_sections",
+                        lambda: list(_SECTIONS))
+    out = pf._ensure_camp_age_question(_conv(history), message, reply)
+    return "რამდენი წლისაა" in out
+
+
+def test_age_question_is_not_appended_in_another_program(monkeypatch):
+    """Live 2026-09-04: three consecutive Sunday-School replies each ended
+    „…თქვენი შვილი რამდენი წლისაა?", one of them grafted onto a registration
+    link the parent had just been given.
+
+    The camp needs the age to answer at all — it admits 9–17 and the question
+    decides eligibility. Sunday School's answers and its registration link do
+    not depend on it, so the question is an interruption there.
+    """
+    reply = "რეგისტრაცია მარტივია! გადადით ბმულზე: https://wordacademy.ge/course/sakvirao-skola/#124"
+    assert _age_question(monkeypatch, _IN_SUNDAY_SCHOOL, "როგორ დავრეგისტრირდე?", reply) is False
+
+
+def test_age_question_still_appended_for_the_camp(monkeypatch):
+    """The other half — the camp keeps its qualifier."""
+    assert _age_question(
+        monkeypatch, _IN_CAMP, "ბანაკზე როგორ ჩავეწერო?", "ბანაკის ინფორმაცია აქ არის.",
+    ) is True
+
+
+def test_age_question_still_appended_when_no_program_is_named(monkeypatch):
+    """Nothing named ⇒ the camp qualifier behaves exactly as it always has."""
+    assert _age_question(monkeypatch, (), "ფასი რა არის?", "ფასი 2150 ლარია.") is True

@@ -3002,6 +3002,23 @@ def _ensure_camp_age_question(
     # before routing here for camp traffic.
     if getattr(conversation, "segment", "") != "PARENT":
         return response
+    # …but PARENT is not the camp. Every kids' programme is served by the PARENT
+    # flow, so this camp-era qualifier was appended to all of them. The camp
+    # needs the age to answer at all — it admits 9–17 and the question decides
+    # eligibility. Sunday School answers, and its registration link, do not
+    # depend on it, so the question arrived as an interruption: live 2026-09-04
+    # three consecutive Sunday-School replies each ended „…თქვენი შვილი რამდენი
+    # წლისაა?", one of them appended to a registration link the parent had just
+    # been given.
+    #
+    # A patch for the same symptom already exists a few lines below
+    # (`_REPLY_ALREADY_ASKS_RE`, added after a Railway 2026-08-05 Sunday-School
+    # price answer got the age grafted on). This addresses the cause instead.
+    #
+    # The camp keeps the question: a camp conversation names camp, so neither
+    # predicate fires and the qualifier is untouched.
+    if _msg_names_other_program(message) or _conversation_names_other_program(conversation):
+        return response
     # Reply already asks for the age (any phrasing, incl. „ასაკი რამდენია?") →
     # leave it (never append a second age question).
     if _has_any_child_age_question(response):
