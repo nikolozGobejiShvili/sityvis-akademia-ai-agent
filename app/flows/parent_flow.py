@@ -884,6 +884,74 @@ def _msg_names_other_program(message: str) -> bool:
         return False
 
 
+def _conversation_names_other_program(conversation: Conversation) -> bool:
+    """True when the newest programme the PARENT named is an active non-camp one.
+
+    Walks the user turns newest-first and stops at the first that names
+    something: camp wins if the parent said camp more recently, otherwise an
+    active non-camp programme settles it. Only user turns are read — the agent's
+    own replies name whatever it happened to answer, including a wrong
+    programme, which would pin the mistake in place.
+
+    `lead.program_id` is deliberately NOT used here. Measured on the live
+    2026-09-03 session: the „მშობელთან უკუკავშირი იქნება?" failure was at
+    16:02:29 and `get_program_info` did not run until 16:03:40, so the tag was
+    still empty at the moment it was needed. The parent had named the programme
+    at 15:58:58 — the history had the answer all along.
+
+    Never raises → False, which leaves the camp chain exactly as it was.
+    """
+    try:
+        for turn in reversed(list(getattr(conversation, "history", None) or [])):
+            if not isinstance(turn, dict) or (turn.get("role") or "") != "user":
+                continue
+            text = str(turn.get("content") or "")
+            if any(k in text.lower() for k in _CAMP_STATUS_KEYWORDS):
+                return False
+            if _msg_names_other_program(text):
+                return True
+    except Exception:  # pragma: no cover — defensive
+        return False
+    return False
+
+
+def _msg_declines_camp(message: str) -> bool:
+    """The parent is saying the camp is NOT what they want.
+
+    A camp word makes every camp detector read the message as a camp question,
+    so „ბანაკი არ მაინტერესებს" was answered with the camp status. Live
+    2026-09-03 16:04 the parent wrote exactly that — after already being given
+    the camp answer once — and got it a second time.
+
+    The negation has to attach to WANTING, not to any verb: „ბანაკი არ
+    დამთავრებულა?" is a camp question that happens to contain „არ" and must stay
+    camp. So this needs a camp word AND an explicit refusal, and it defers to
+    `_DECLINE_OVERRIDE_INTEREST` exactly as the decline handler does — „ბანაკი არ
+    მინდა, მაგრამ ძვირია" is a price objection, not a refusal.
+
+    Reuses the shipped `_DECLINE_PHRASES`; only the „მაინტერესებს" family is
+    added, because a refusal of INTEREST („არ მაინტერესებს") appears in none of
+    the existing lists, which are built around „არ მინდა".
+    """
+    low = (message or "").lower()
+    if not any(k in low for k in _CAMP_WORD_STEMS):
+        return False
+    if any(m in low for m in _DECLINE_OVERRIDE_INTEREST):
+        return False
+    if any(p in low for p in _DECLINE_PHRASES):
+        return True
+    return any(p in low for p in _NOT_INTERESTED_PHRASES)
+
+
+# Refusal of INTEREST rather than of an offer. `_DECLINE_PHRASES` is built
+# around „არ მინდა" and has no „მაინტერესებს" form, which is what the parent
+# actually wrote.
+_NOT_INTERESTED_PHRASES: tuple[str, ...] = (
+    "არ მაინტერესებს", "აღარ მაინტერესებს",
+    "არ მაინტერესებდა", "არ მჭირდება", "აღარ მჭირდება",
+)
+
+
 def _msg_is_dissatisfaction(message: str) -> bool:
     """A harsh complaint / insult about the company — a ROUTING signal, not a handler.
     The de-escalation RESPONSE is the operator-editable `dissatisfied-customer` SKILL at
@@ -921,6 +989,16 @@ def _maybe_handle_camp_status(
     if _msg_is_dissatisfaction(message):
         return None
 
+    # „ბანაკი არ მაინტერესებს" names the camp only to rule it out. Answering it
+    # with the camp status tells the parent something they just said they did
+    # not want, and on 2026-09-04 it was the SECOND camp answer in a row.
+    if _msg_declines_camp(message):
+        logger.info(
+            "[parent_flow] camp-status deferred — the parent declined camp "
+            "(sender=%s)", getattr(conversation, "sender_id", "?"),
+        )
+        return None
+
     # Program-aware (2026-07-26 live test): a price/topic question that NAMES a non-camp
     # program („დისნეილენდის ფასი რა არის?", „ფორმულა 1-ის ფასი") is about THAT program,
     # not camp — the camp price/topic detectors below over-fire on „ფასი" and would answer
@@ -945,6 +1023,29 @@ def _maybe_handle_camp_status(
         and not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS)
     ):
         return None
+
+    # `_msg_has_camp_intent` is two different things in one predicate. An
+    # explicit camp word is unambiguous. The rest — price, topic facts,
+    # operational, exact-detail — describe questions ANY programme can be asked,
+    # and they claim them for camp whatever the conversation is about.
+    #
+    # Measured 2026-09-03: „მშობელთან უკუკავშირი იქნება?" carries no camp word
+    # and matches `camp_topic_facts.detect_camp_topic` as topic
+    # `parent_communication`. Deep in a Sunday-School conversation it came back
+    # „ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია", and the parent asked
+    # „საიდან მოიტანე ბანაკი?".
+    #
+    # So the generic tier only counts when the conversation is not demonstrably
+    # on another active programme. A message that says camp is untouched and
+    # still gets the honest approved status; so is a conversation with no other
+    # programme in it, which is every camp-only fixture in the suite.
+    if not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS):
+        if _msg_names_other_program(message) or _conversation_names_other_program(conversation):
+            logger.info(
+                "[parent_flow] camp-status deferred — conversation names another "
+                "active program (sender=%s)", getattr(conversation, "sender_id", "?"),
+            )
+            return None
 
     has_camp = _msg_has_camp_intent(message)
     is_child_offering = _msg_is_child_offering(message)

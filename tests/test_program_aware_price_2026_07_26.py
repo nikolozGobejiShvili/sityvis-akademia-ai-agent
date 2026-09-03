@@ -66,7 +66,22 @@ def test_genuine_camp_question_still_camp(monkeypatch):
     assert "დასრულებულია" in (ask("ბანაკი დამთავრდა?") or "")
 
 
-def test_off_is_byte_identical(monkeypatch):
+def test_other_program_defers_with_the_flag_off_too(monkeypatch):
+    """Program awareness no longer depends on USE_PROGRAM_ISOLATION.
+
+    This test used to assert the opposite — that with the flag off „დისნეილენდის
+    ფასი რა არის?" still hit the camp gate, the behaviour the flag was added to
+    fix. Keeping a bug reachable behind a flag is what it cost live on
+    2026-09-03: the camp answered questions about the programme the parent was
+    actually discussing, and the operator's instruction was that every camp
+    handler be subject to program resolution, not to a flag.
+
+    The correct behaviour with the flag ON is still pinned by
+    `test_disneyland_price_defers_to_engine`; this pins that the flag no longer
+    changes it. A hard camp keyword is unaffected — see `test_camp_price_still_camp`.
+    """
     ask = _status(monkeypatch, isolation=False)
-    # OLD behaviour: a non-camp program price still hit the camp gate
-    assert "დასრულებულია" in (ask("დისნეილენდის ფასი რა არის?") or "")
+    assert ask("დისნეილენდის ფასი რა არის?") is None
+    assert ask("ფორმულა 1-ის ფასი რა არის?") is None
+    # The camp itself is untouched by the change.
+    assert "დასრულებულია" in (ask("ბანაკის ფასი რა არის?") or "")
