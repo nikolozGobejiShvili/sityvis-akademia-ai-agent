@@ -6444,6 +6444,15 @@ _SELF_CALL_STEMS: tuple[str, ...] = (
     "დავურეკავ",                        # „მე (თვითონ) დავურეკავ" — I'll call
     "დავუკავშირდები", "დავკავშირდები",  # I'll get in touch myself
     "თვითონ დავ", "თავად დავ",          # myself / on my own + (call/contact)
+    # „როგორ დავუკავშირდე?" — asking HOW to reach the manager is the same
+    # request as asking for the number: the parent intends to make the call.
+    # Live 2026-09-03: „თქვენს მენეჯერთან მსურს დაკავშირება და როგორ
+    # დავუკავშირდე?" carried no „ნომერი"/„ტელეფონი"/„კონტაქტი" word, so
+    # `_MANAGER_CONTACT_MARKERS` missed it, the deterministic disclosure never
+    # ran, and the model asked for the PARENT's number instead of giving the
+    # manager's. First person only — „დამიკავშირდეს" (contact me) is a callback
+    # request and must keep routing to contact collection.
+    "დავუკავშირდე", "დაგიკავშირდეთ",
 )
 
 
@@ -7127,6 +7136,13 @@ def _build_active_programs_welcome() -> str | None:
         names = [n for n in names if n]
         if not names:
             return None
+        # One program on sale — there is nothing to choose between, so the menu
+        # form („გვითხარით, რა გაინტერესებთ: — საკვირაო სკოლა") offers a choice
+        # of one and reads oddly. Client feedback, 2026-09-03. Open with the
+        # plain question instead; the moment a second program goes active in the
+        # panel the list comes back on its own, with no code change.
+        if len(names) == 1:
+            return "გამარჯობა.\n\nრით შემიძლია დაგეხმაროთ?"
         bullets = "\n".join(f"— {n}" for n in names)
         return f"გამარჯობა.\n\nგვითხარით, რა გაინტერესებთ:\n{bullets}"
     except Exception as exc:  # pragma: no cover - defensive, never break the welcome
