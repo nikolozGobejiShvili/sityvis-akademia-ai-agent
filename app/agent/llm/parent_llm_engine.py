@@ -3297,9 +3297,16 @@ def _active_program_name(conversation: Conversation, user_message: str = "") -> 
         if not probe_sections:
             return ""
 
+        # The WHOLE history, not the model's `HISTORY_WINDOW` slice. A parent
+        # names the program once and then asks about it for the rest of the
+        # hour: in the live 2026-09-03 session „საკვირაო სკოლა" was named on
+        # user turn 2 and the turn that broke was 13 user turns later — 27
+        # history entries back. A windowed scan returned "" there, which is
+        # exactly the case this field exists for. Only the newest mention is
+        # needed, so the walk stops at the first hit and the cost is a few
+        # token splits over a conversation that Redis already caps.
         candidates = [str(user_message or "")]
-        history = list(getattr(conversation, "history", None) or [])
-        for turn in reversed(history[-HISTORY_WINDOW:]):
+        for turn in reversed(list(getattr(conversation, "history", None) or [])):
             if not isinstance(turn, dict):
                 continue
             if (turn.get("role") or "") != "user":
