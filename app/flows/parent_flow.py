@@ -884,6 +884,37 @@ def _msg_names_other_program(message: str) -> bool:
         return False
 
 
+def _conversation_names_other_program(conversation: Conversation) -> bool:
+    """True when the newest programme the PARENT named is an active non-camp one.
+
+    Walks the user turns newest-first and stops at the first that names
+    something: camp wins if the parent said camp more recently, otherwise an
+    active non-camp programme settles it. Only user turns are read — the agent's
+    own replies name whatever it happened to answer, including a wrong
+    programme, which would pin the mistake in place.
+
+    `lead.program_id` is deliberately NOT used here. Measured on the live
+    2026-09-03 session: the „მშობელთან უკუკავშირი იქნება?" failure was at
+    16:02:29 and `get_program_info` did not run until 16:03:40, so the tag was
+    still empty at the moment it was needed. The parent had named the programme
+    at 15:58:58 — the history had the answer all along.
+
+    Never raises → False, which leaves the camp chain exactly as it was.
+    """
+    try:
+        for turn in reversed(list(getattr(conversation, "history", None) or [])):
+            if not isinstance(turn, dict) or (turn.get("role") or "") != "user":
+                continue
+            text = str(turn.get("content") or "")
+            if any(k in text.lower() for k in _CAMP_STATUS_KEYWORDS):
+                return False
+            if _msg_names_other_program(text):
+                return True
+    except Exception:  # pragma: no cover — defensive
+        return False
+    return False
+
+
 def _msg_is_dissatisfaction(message: str) -> bool:
     """A harsh complaint / insult about the company — a ROUTING signal, not a handler.
     The de-escalation RESPONSE is the operator-editable `dissatisfied-customer` SKILL at
@@ -945,6 +976,29 @@ def _maybe_handle_camp_status(
         and not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS)
     ):
         return None
+
+    # `_msg_has_camp_intent` is two different things in one predicate. An
+    # explicit camp word is unambiguous. The rest — price, topic facts,
+    # operational, exact-detail — describe questions ANY programme can be asked,
+    # and they claim them for camp whatever the conversation is about.
+    #
+    # Measured 2026-09-03: „მშობელთან უკუკავშირი იქნება?" carries no camp word
+    # and matches `camp_topic_facts.detect_camp_topic` as topic
+    # `parent_communication`. Deep in a Sunday-School conversation it came back
+    # „ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია", and the parent asked
+    # „საიდან მოიტანე ბანაკი?".
+    #
+    # So the generic tier only counts when the conversation is not demonstrably
+    # on another active programme. A message that says camp is untouched and
+    # still gets the honest approved status; so is a conversation with no other
+    # programme in it, which is every camp-only fixture in the suite.
+    if not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS):
+        if _msg_names_other_program(message) or _conversation_names_other_program(conversation):
+            logger.info(
+                "[parent_flow] camp-status deferred — conversation names another "
+                "active program (sender=%s)", getattr(conversation, "sender_id", "?"),
+            )
+            return None
 
     has_camp = _msg_has_camp_intent(message)
     is_child_offering = _msg_is_child_offering(message)
