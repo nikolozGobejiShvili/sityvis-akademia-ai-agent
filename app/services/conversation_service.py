@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from string import Formatter
@@ -827,11 +828,24 @@ def process_message(sender_id: str, message_text: str, platform: str, page_id: s
     logger.info(
         "[conversation] start platform=%s sender=%s", platform, masked,
     )
+    # Diagnostics for the silent turn (2026-09-03). Twice that day a turn logged
+    # „start", reached the engine, and then produced nothing at all — no
+    # „completed", no error, no send, and the parent never got a reply. Every
+    # in-code return logs „completed" and every `Exception` logs „error", so the
+    # signature was not reproducible from the code; what was missing was a line
+    # that fires no matter HOW the frame is left. `BaseException` covers what
+    # `except Exception` cannot — `asyncio.CancelledError`, `SystemExit`,
+    # `KeyboardInterrupt` — and the `finally` covers even that. Logging only,
+    # nothing is caught or suppressed: both handlers re-raise.
+    _completed = False
+    _started_at = time.monotonic()
     try:
         response = _process_message_impl(sender_id, message_text, platform, page_id)
+        _completed = True
         logger.info(
-            "[conversation] completed platform=%s sender=%s reply_len=%d",
+            "[conversation] completed platform=%s sender=%s reply_len=%d took_ms=%d",
             platform, masked, len(response or ""),
+            int((time.monotonic() - _started_at) * 1000),
         )
         return response
     except Exception as exc:
@@ -851,6 +865,20 @@ def process_message(sender_id: str, message_text: str, platform: str, page_id: s
             },
         )
         raise
+    except BaseException as exc:  # noqa: BLE001 — logged and re-raised, never swallowed
+        logger.error(
+            "[conversation] ABORTED platform=%s sender=%s exc=%s took_ms=%d",
+            platform, masked, type(exc).__name__,
+            int((time.monotonic() - _started_at) * 1000),
+        )
+        raise
+    finally:
+        if not _completed:
+            logger.error(
+                "[conversation] NO REPLY platform=%s sender=%s took_ms=%d — the "
+                "turn left this frame without completing; the parent got nothing",
+                platform, masked, int((time.monotonic() - _started_at) * 1000),
+            )
 
 
 def _process_message_impl(sender_id: str, message_text: str, platform: str, page_id: str = "") -> str:
