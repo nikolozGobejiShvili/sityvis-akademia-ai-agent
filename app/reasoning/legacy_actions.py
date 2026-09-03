@@ -71,18 +71,52 @@ def _is_manager_contact_request(low: str) -> bool:
 
 
 def _camp_context(conversation) -> bool:
-    """True when the CURRENT topic is camp — a sticky PARENT segment OR a recent
-    camp/registration assistant turn. Deliberately does NOT use the long-lived
-    ``lead.child_age`` (it stays set after a switch to adult events and would
-    wrongly force camp context for a bare adult-context link request)."""
+    """True when the CURRENT topic is camp.
+
+    PARENT is NOT evidence of camp. Every kids' program — Sunday School,
+    Disneyland, whatever the operator adds next — is served by the PARENT flow,
+    so `segment == "PARENT"` was true for all of them and this returned camp for
+    all of them. `followup_service` found and fixed the same false rule
+    („the old `segment == "PARENT"` early return classified them as camp leads");
+    it survived here.
+
+    What it cost, live 2026-09-03: deep in a Sunday-School conversation „როგორ
+    დავრეგისტრირდე ?" reached `parent_flow._maybe_handle_camp_registration_link`
+    through this function and came back „ბანაკის ბოლო ნაკადი უკვე დაიწყო და
+    რეგისტრაცია დასრულებულია" in 55ms, never touching the engine — while the
+    Sunday School registration URL sat in the turn context unused.
+
+    Camp context is now: the conversation resolves to NO other active program,
+    AND the last assistant turn actually said camp. „რეგისტრაცი" and „ჩაწერ" are
+    gone from that list — every program's registration answer contains them, so
+    the agent's own Sunday-School reply was being read back as camp evidence.
+
+    An explicit camp keyword in the CURRENT text is handled by the caller
+    (`_is_camp_registration_link_request`), which is unchanged: „ბანაკზე როგორ
+    დავრეგისტრირდე" still takes the camp path exactly as before.
+
+    Still deliberately does NOT use the long-lived ``lead.child_age`` (it stays
+    set after a switch to adult events).
+    """
     if conversation is None:
         return False
-    if (getattr(conversation, "segment", "") or "").upper() == "PARENT":
-        return True
+    # The canonical resolver the turn context uses. A section here means the
+    # parent is demonstrably on some OTHER active program — camp is never
+    # returned by it (a camp turn resolves to "nothing"), so any hit is a
+    # non-camp program and settles the question.
+    try:
+        from app.agent.llm.parent_llm_engine import _active_program_section
+
+        if _active_program_section(
+            conversation, "", getattr(conversation, "lead", None)
+        ) is not None:
+            return False
+    except Exception:  # pragma: no cover — defensive: fall through to the scan
+        pass
     for turn in reversed(list(getattr(conversation, "history", []) or [])):
         if isinstance(turn, dict) and turn.get("role") == "assistant":
             low = str(turn.get("content") or "").lower()
-            return any(s in low for s in ("ბანაკ", "საზაფხულო", "რეგისტრაცი", "ჩაწერ"))
+            return any(s in low for s in _CAMP_KEYWORDS)
     return False
 
 
