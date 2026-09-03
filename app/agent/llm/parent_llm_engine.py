@@ -3238,6 +3238,106 @@ def _user_said_thanks(user_message: str) -> bool:
     return any(phrase in text for phrase in _THANKS_PHRASES)
 
 
+def _active_program_name(conversation: Conversation, user_message: str = "") -> str:
+    """Name of the program THIS conversation is about, or "" when none is named.
+
+    The per-turn context carried the date, the booking window, the channel and
+    the lead's own fields, but never the program. A turn that names no program
+    therefore left the model to infer it from history — and against a
+    camp-centric system prompt the inference lost. Live 2026-09-03 09:31, twenty
+    minutes into a Sunday-School conversation, „ძალიან ძვირია ფასი, ამდენის
+    გადახდაა ვერ შევძლებ" came back with the camp's closed-registration answer,
+    and „გადახდა როგორ ხდება?" a minute later did the same. Neither reply came
+    from `_camp_registration_closed_answer` (that is fixed approved copy) — the
+    model wrote them, because nothing told it which program was on the table.
+
+    This states the program as a fact of the turn, exactly the way
+    `booking_hours_tbilisi` states the hours. It is not a route and not a
+    prohibition: no handler reads it, and the model is free to follow the parent
+    somewhere else.
+
+    Only USER turns are scanned. The agent's own replies are excluded on
+    purpose — the welcome menu names every active program, and a reply that
+    already drifted to the wrong one would otherwise pin the drift in place.
+    Newest mention wins, so a parent who switches programs is followed.
+    Reserved and dynamic programs are treated alike: the model needs the name,
+    not the id. Never raises → "" on any fault, which omits the field entirely.
+
+    A mention of a program that is currently OFF yields "" rather than the older
+    program the parent has moved on from. Naming a stale program confidently is
+    the same failure this field exists to fix, so the field is dropped and the
+    model is left to read the turn itself. The camp needs its own check for
+    this: „ბანაკი" and „საზაფხულო" are both in `_AMBIGUOUS_TAG_STEMS`, so
+    `match_dynamic_program` cannot see the camp at all and the scan would
+    otherwise walk straight past a camp turn to an older mention.
+    """
+    try:
+        from app.services import admin_config_service
+        from app.reasoning.dynamic_program_match import match_dynamic_program
+
+        sections = admin_config_service.load_sections() or []
+        if not sections:
+            return ""
+        fuzzy = getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False)
+
+        # `match_dynamic_program` skips anything not `active`, so an OFF program
+        # would be invisible and the scan would silently fall back to an older
+        # mention. Present every section to the matcher, then decide on the real
+        # status here.
+        by_id: dict[str, dict] = {}
+        probe_sections: list[dict] = []
+        for section in sections:
+            program_id = (section.get("id") or "").strip()
+            if not program_id or program_id in by_id:
+                continue
+            by_id[program_id] = section
+            probe = dict(section)
+            probe["status"] = "active"
+            probe_sections.append(probe)
+        if not probe_sections:
+            return ""
+
+        # The WHOLE history, not the model's `HISTORY_WINDOW` slice. A parent
+        # names the program once and then asks about it for the rest of the
+        # hour: in the live 2026-09-03 session „საკვირაო სკოლა" was named on
+        # user turn 2 and the turn that broke was 13 user turns later — 27
+        # history entries back. A windowed scan returned "" there, which is
+        # exactly the case this field exists for. Only the newest mention is
+        # needed, so the walk stops at the first hit and the cost is a few
+        # token splits over a conversation that Redis already caps.
+        candidates = [str(user_message or "")]
+        for turn in reversed(list(getattr(conversation, "history", None) or [])):
+            if not isinstance(turn, dict):
+                continue
+            if (turn.get("role") or "") != "user":
+                continue
+            candidates.append(str(turn.get("content") or ""))
+
+        from app.flows.parent_flow import _CAMP_WORD_STEMS
+
+        for text in candidates:
+            if not text.strip():
+                continue
+            # The camp is invisible to the matcher (see the docstring), so check
+            # it here against the same stems the camp-off gate uses. A camp turn
+            # ends the scan: either the camp is on and its own handlers own the
+            # turn, or it is off and there is no honest program to name.
+            if any(stem in text.lower() for stem in _CAMP_WORD_STEMS):
+                return ""
+            hit = match_dynamic_program(text, probe_sections, fuzzy=fuzzy)
+            if not hit:
+                continue
+            section = by_id.get((hit.get("program_id") or "").strip()) or {}
+            # Mirrors `get_active_sections`: case/whitespace-tolerant, and a
+            # missing status is NOT treated as active.
+            if (section.get("status") or "").strip().lower() != "active":
+                return ""
+            return str(section.get("name") or "").strip()
+    except Exception:  # pragma: no cover — never break a turn over context
+        return ""
+    return ""
+
+
 def _build_context_message(
     conversation: Conversation,
     lead: Lead,
@@ -3304,6 +3404,14 @@ def _build_context_message(
         f"state={conversation.state}",
         f"booked={'yes' if lead.calendly_booked else 'no'}",
     ]
+    # Which program this conversation is about — see `_active_program_name`.
+    # Placed with the other facts of the turn, not with the lead's own fields:
+    # a price objection that names no program („ძალიან ძვირია") is about THIS
+    # program, and until 2026-09-03 the model had to guess that from history.
+    active_program = _active_program_name(conversation, user_message)
+    if active_program:
+        parts.append(f"active_program={active_program}")
+
     if adult_target_relation:
         parts.append(f"adult_target_relation={adult_target_relation}")
     if adult_target_age:
