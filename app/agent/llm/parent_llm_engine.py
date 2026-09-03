@@ -3243,7 +3243,103 @@ def _active_program_name(
     user_message: str = "",
     lead: Lead | None = None,
 ) -> str:
-    """Name of the program THIS conversation is about, or "" when none is known.
+    """Name of the program this conversation is about — see `_active_program_section`."""
+    section = _active_program_section(conversation, user_message, lead)
+    return str((section or {}).get("name") or "").strip()
+
+
+def _active_program_facts(section: dict | None) -> str:
+    """The program's own admin-panel facts, as one compact block, or "".
+
+    Why the facts travel WITH the turn instead of being fetched:
+
+    `get_program_info` puts its result in the tool-loop's local `messages` list
+    (`parent_llm_engine` tool loop) and that list is rebuilt from scratch every
+    turn. `conversation.history` keeps only `{"role": "assistant", "content":
+    <final text>}` (`conversation_service`), and `_recent_history` forwards only
+    the last `HISTORY_WINDOW` entries and only the user/assistant roles — tool
+    messages are structurally excluded. So once a turn ends, the fetched facts
+    exist nowhere: a fact survives only if the model happened to write it into
+    an answer that is still inside that ten-entry window.
+
+    That is measurable, not a guess. The system prompt was searched: at 55.7 KB
+    it carries none of the group size, lesson duration, teachers, parent
+    feedback, locations or registration URL. And live on 2026-09-03 12:48 the
+    agent said it had no group-size figure with no tool call on that turn, then
+    answered „მაქსიმალური რაოდენობა 15 ბავშვია" nineteen seconds later once a
+    „კარგად ნახე" pushed it to call the tool. Same data, same code; the only
+    difference was whether the tool ran.
+
+    Reserved programs (the camp, adult events) are deliberately NOT given facts:
+    they keep their curated, operator-approved answers, and `get_program_info`
+    refuses them for the same reason. `reserved_program_ids()` is the shared
+    source of truth, so this follows the tool automatically if that ever changes.
+
+    Fields are the tool's own `_PROGRAM_PUBLIC_FIELDS`, imported rather than
+    retyped, so what the model reads here cannot drift from what the tool would
+    return. A program switched off in the panel is not in `get_active_sections`,
+    so its facts stop travelling the moment the operator disables it.
+    """
+    section = section or {}
+    program_id = (section.get("id") or "").strip()
+    if not program_id:
+        return ""
+    # Checked here as well as in the resolution, so the guarantee holds for any
+    # caller: the moment the operator switches a program off in the panel, its
+    # facts stop travelling. Mirrors `get_active_sections` — case/whitespace
+    # tolerant, and a missing status is NOT active.
+    if (section.get("status") or "").strip().lower() != "active":
+        return ""
+    try:
+        from app.domain.decision.models import reserved_program_ids
+        if program_id in reserved_program_ids():
+            return ""
+
+        from app.agent.tools.parent_tool_executor import ParentToolExecutor
+
+        parts: list[str] = []
+        for key in ParentToolExecutor._PROGRAM_PUBLIC_FIELDS:
+            value = section.get(key)
+            if value in (None, "", [], {}):
+                continue
+            parts.append(f"{key}: {value}")
+
+        # Mirrors the tool: the registration URL is a fact only while
+        # registration is actually open.
+        reg_status = str(section.get("registration_status") or "open").strip().lower()
+        if reg_status in ParentToolExecutor._REGISTRATION_OPEN_VALUES:
+            url = str(section.get("registration_url") or "").strip()
+            if url:
+                parts.append(f"registration_url: {url}")
+
+        if not parts:
+            return ""
+        block = "; ".join(" ".join(str(p).split()) for p in parts)
+        # A defensive ceiling. The operator types these fields freely and a
+        # pasted document must not be able to crowd out the rest of the turn.
+        if len(block) > _PROGRAM_FACTS_MAX_CHARS:
+            logger.warning(
+                "[parent_llm_engine] program_facts for %s truncated: %d chars",
+                program_id, len(block),
+            )
+            block = block[:_PROGRAM_FACTS_MAX_CHARS]
+        return block
+    except Exception:  # pragma: no cover — never break a turn over context
+        return ""
+
+
+# `description_full` alone is ~1.8 KB on the live Sunday School, and the whole
+# block ~2.6 KB against a 55.7 KB system prompt. The ceiling is only a guard
+# against an operator pasting a document into a field.
+_PROGRAM_FACTS_MAX_CHARS = 6000
+
+
+def _active_program_section(
+    conversation: Conversation,
+    user_message: str = "",
+    lead: Lead | None = None,
+) -> dict | None:
+    """The admin section for the program this conversation is about, or None.
 
     The per-turn context carried the date, the booking window, the channel and
     the lead's own fields, but never the program. A turn that names no program
@@ -3292,7 +3388,7 @@ def _active_program_name(
 
         sections = admin_config_service.load_sections() or []
         if not sections:
-            return ""
+            return None
         fuzzy = getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False)
 
         # `match_dynamic_program` skips anything not `active`, so an OFF program
@@ -3310,66 +3406,63 @@ def _active_program_name(
             probe["status"] = "active"
             probe_sections.append(probe)
         if not probe_sections:
-            return ""
+            return None
 
-        def _name_if_active(section: dict | None) -> str:
+        def _if_active(section: dict | None) -> dict | None:
             # Mirrors `get_active_sections`: case/whitespace-tolerant, and a
             # missing status is NOT treated as active.
             section = section or {}
             if (section.get("status") or "").strip().lower() != "active":
-                return ""
-            return str(section.get("name") or "").strip()
+                return None
+            return section if str(section.get("name") or "").strip() else None
 
         from app.flows.parent_flow import _CAMP_WORD_STEMS
 
-        def _named_in(text: str) -> str | None:
-            """"" for a camp turn, the program name for a hit, None for neither."""
+        def _named_in(text: str) -> tuple[bool, dict | None]:
+            """(decided, section). `decided` is True once a turn settles the
+            question — including a camp turn, which settles it as "nothing"."""
             if not text.strip():
-                return None
+                return False, None
             # The camp is invisible to the matcher (see the docstring), so check
             # it against the same stems the camp-off gate uses. A camp turn ends
             # the search: either the camp is on and its own handlers own the
             # turn, or it is off and there is no honest program to name.
             if any(stem in text.lower() for stem in _CAMP_WORD_STEMS):
-                return ""
+                return True, None
             hit = match_dynamic_program(text, probe_sections, fuzzy=fuzzy)
             if not hit:
-                return None
-            return _name_if_active(by_id.get((hit.get("program_id") or "").strip()))
+                return False, None
+            return True, _if_active(by_id.get((hit.get("program_id") or "").strip()))
 
         # 1. The current message wins, so a switch is followed immediately.
-        current = _named_in(str(user_message or ""))
-        if current is not None:
-            return current
+        decided, section = _named_in(str(user_message or ""))
+        if decided:
+            return section
 
         # 2. What `get_program_info` actually fetched for this lead. Set by
         #    `parent_tool_executor` on every successful fetch and persisted with
         #    the lead, so it holds even when the parent never typed the name.
         tagged = (getattr(lead, "program_id", "") or "").strip() if lead is not None else ""
         if tagged:
-            name = _name_if_active(by_id.get(tagged))
-            if name:
-                return name
+            section = _if_active(by_id.get(tagged))
+            if section is not None:
+                return section
 
         # 3. The newest program named in an earlier USER turn. The WHOLE history,
         #    not the model's `HISTORY_WINDOW` slice: live 2026-09-03, „საკვირაო
         #    სკოლა" was named on user turn 2 and the turn that broke was 13 user
         #    turns later — 27 entries back, where a windowed scan returned "".
-        candidates = []
         for turn in reversed(list(getattr(conversation, "history", None) or [])):
             if not isinstance(turn, dict):
                 continue
             if (turn.get("role") or "") != "user":
                 continue
-            candidates.append(str(turn.get("content") or ""))
-
-        for text in candidates:
-            named = _named_in(text)
-            if named is not None:
-                return named
+            decided, section = _named_in(str(turn.get("content") or ""))
+            if decided:
+                return section
     except Exception:  # pragma: no cover — never break a turn over context
-        return ""
-    return ""
+        return None
+    return None
 
 
 def _build_context_message(
@@ -3438,13 +3531,19 @@ def _build_context_message(
         f"state={conversation.state}",
         f"booked={'yes' if lead.calendly_booked else 'no'}",
     ]
-    # Which program this conversation is about — see `_active_program_name`.
-    # Placed with the other facts of the turn, not with the lead's own fields:
-    # a price objection that names no program („ძალიან ძვირია") is about THIS
-    # program, and until 2026-09-03 the model had to guess that from history.
-    active_program = _active_program_name(conversation, user_message, lead)
+    # Which program this conversation is about, and that program's own admin
+    # facts — see `_active_program_section` and `_active_program_facts`. Placed
+    # with the other facts of the turn, not with the lead's own fields: a price
+    # objection that names no program („ძალიან ძვირია") is about THIS program,
+    # and a detail question about it („ჯგუფში რამდენი ბავშვია?") is answerable
+    # only while the program's data is actually in front of the model.
+    active_section = _active_program_section(conversation, user_message, lead)
+    active_program = str((active_section or {}).get("name") or "").strip()
     if active_program:
         parts.append(f"active_program={active_program}")
+        program_facts = _active_program_facts(active_section)
+        if program_facts:
+            parts.append(f"program_facts=({program_facts})")
 
     if adult_target_relation:
         parts.append(f"adult_target_relation={adult_target_relation}")
