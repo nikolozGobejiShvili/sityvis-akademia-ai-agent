@@ -61,12 +61,52 @@ def test_flag_on_returns_dynamic_menu(monkeypatch):
 
 
 def test_flag_on_excludes_ended_program(monkeypatch):
-    # #8 status governance: an ended section is not in get_active_sections → not in the menu.
+    # #8 status governance: an ended section is not in get_active_sections → it
+    # cannot reach the greeting. The camp is ended, so it is absent from the
+    # seed and must be absent from the reply.
+    #
+    # With a single active program the greeting no longer lists it (client
+    # decision 2026-09-03 — see `test_single_active_program_greets_without_a_menu`),
+    # so what this test now pins is the half that still matters: the ENDED
+    # program does not appear.
     _on(monkeypatch)
     _seed(monkeypatch, [{"name": "დისნეილენდის ტური", "status": "active"}])  # camp ended → absent
     out = parent_flow._maybe_static_welcome(_fresh(), "გამარჯობა")
-    assert "დისნეილენდის ტური" in out
     assert "ბანაკი" not in out
+    assert "რით შემიძლია დაგეხმაროთ" in out
+
+
+def test_single_active_program_greets_without_a_menu(monkeypatch):
+    """One program on sale ⇒ no „choose one of:" list.
+
+    Client feedback 2026-09-03: with a single active program the menu offered a
+    choice of one („გვითხარით, რა გაინტერესებთ: — საკვირაო სკოლა"), which reads
+    oddly. The opener becomes a plain question instead. Nothing is hardcoded to
+    a program — this is driven purely by how many sections are active.
+    """
+    _on(monkeypatch)
+    _seed(monkeypatch, [{"name": "საკვირაო სკოლა", "status": "active"}])
+    out = parent_flow._maybe_static_welcome(_fresh(), "გამარჯობა")
+    assert "რით შემიძლია დაგეხმაროთ" in out
+    assert "გვითხარით, რა გაინტერესებთ" not in out
+    assert "—" not in out  # no bullet list at all
+    # The program is not named: with one on sale there is nothing to choose.
+    assert "საკვირაო სკოლა" not in out
+
+
+def test_second_active_program_brings_the_menu_back(monkeypatch):
+    """The moment a second program goes active in the panel, the list returns.
+
+    The one-program greeting must not become a permanent state that an operator
+    has to undo in code.
+    """
+    _on(monkeypatch)
+    _seed(monkeypatch, _TWO)
+    out = parent_flow._maybe_static_welcome(_fresh(), "გამარჯობა")
+    assert "გვითხარით, რა გაინტერესებთ" in out
+    assert "რით შემიძლია დაგეხმაროთ" not in out
+    for entry in _TWO:
+        assert entry["name"] in out
 
 
 def test_flag_on_failsafe_to_static_when_empty(monkeypatch):
