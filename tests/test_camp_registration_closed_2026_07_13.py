@@ -94,8 +94,14 @@ def test_parent_registration_answers_do_not_emit_url_when_closed(monkeypatch):
     assert parent_flow._render_camp_registration_answer() == expected
     assert parent_flow._render_camp_fast_track_registration_answer() == expected
 
+    # „camp register" is English and matches no camp keyword, so this used to
+    # reach the handler only through the PARENT-segment-means-camp rule. The
+    # test is about closed registration never emitting a URL, so it gets a real
+    # camp request instead — same assertion, evidence that actually names camp.
     conv = _conversation("registration-link")
-    out = parent_flow._maybe_handle_camp_registration_link(conv, "camp register")
+    out = parent_flow._maybe_handle_camp_registration_link(
+        conv, "ბანაკზე რეგისტრაციის ლინკი მომწერეთ",
+    )
     assert out == expected
     assert "http" not in out
 

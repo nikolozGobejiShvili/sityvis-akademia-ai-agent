@@ -60,9 +60,33 @@ def test_detect_camp_registration_with_camp_keyword():
 
 
 def test_detect_camp_registration_in_camp_context_no_keyword():
+    # Camp context is the LAST ASSISTANT TURN naming camp, not `segment ==
+    # "PARENT"`. Every kids' program is served by the PARENT flow, so the old
+    # rule made Sunday School and Disneyland conversations read as camp — live
+    # 2026-09-03 a Sunday-School „როგორ დავრეგისტრირდე ?" was answered „ბანაკის
+    # ბოლო ნაკადი უკვე დაიწყო". The scenario this test describes is unchanged;
+    # only the evidence for it is now real.
     conv = Conversation(sender_id="c", platform="instagram", segment="PARENT")
+    conv.history.append({"role": "user", "content": "ბანაკი მაინტერესებს"})
+    conv.history.append({"role": "assistant", "content": "ბანაკის ნაკადები: 23-29 ივნისი."})
     out = detect_legacy_explicit_action("სარეგისტრაციო ლინკი მინდა", conv)
     assert out["action"] == "camp_registration_link"
+
+
+def test_detect_registration_in_other_program_context_is_not_camp():
+    """The regression the change above exists for.
+
+    A Sunday-School conversation asking a bare „როგორ დავრეგისტრირდე?" must not
+    be claimed by the camp handler — the engine answers it from that program's
+    own registration URL, which now travels in the turn context.
+    """
+    conv = Conversation(sender_id="ss", platform="instagram", segment="PARENT")
+    conv.history.append({"role": "user", "content": "საკვირაო სკოლა მაინტერესებს"})
+    conv.history.append(
+        {"role": "assistant", "content": "საკვირაო სკოლა: 595 ლარი, რეგისტრაცია ღიაა."}
+    )
+    out = detect_legacy_explicit_action("როგორ დავრეგისტრირდე ?", conv)
+    assert out["action"] != "camp_registration_link"
 
 
 def test_detect_bare_link_in_adult_context_is_not_camp():
@@ -88,7 +112,11 @@ def test_detect_consultation_not_registration():
 
 
 def test_detect_darexistreba_in_camp_context():
+    # Same correction as above: the camp context is stated by the conversation,
+    # not inferred from the PARENT segment.
     conv = Conversation(sender_id="c", platform="instagram", segment="PARENT")
+    conv.history.append({"role": "user", "content": "ბანაკი მაინტერესებს"})
+    conv.history.append({"role": "assistant", "content": "საზაფხულო ბანაკის შესახებ:"})
     out = detect_legacy_explicit_action("დარეგისტრირება მინდა", conv)
     assert out["action"] == "camp_registration_link"
 
@@ -109,6 +137,12 @@ def test_1_adult_context_then_camp_registration_link(camp_registration_open):
 
 def test_2_camp_context_then_explicit_registration_link(camp_registration_open):
     _seed("t2", segment="PARENT", child_age="14")
+    # The camp context this test is named for now has to be present: the PARENT
+    # segment alone is every kids' program, not the camp.
+    conversation_service.conversations["t2"].history.extend([
+        {"role": "user", "content": "ბანაკი მაინტერესებს"},
+        {"role": "assistant", "content": "ბანაკის ნაკადები: 23-29 ივნისი."},
+    ])
     out = conversation_service.process_message(
         "t2", "სარეგისტრაციო ლინკი მინდა", "instagram",
     )
