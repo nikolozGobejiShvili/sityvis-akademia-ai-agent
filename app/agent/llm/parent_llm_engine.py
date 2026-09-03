@@ -3238,8 +3238,12 @@ def _user_said_thanks(user_message: str) -> bool:
     return any(phrase in text for phrase in _THANKS_PHRASES)
 
 
-def _active_program_name(conversation: Conversation, user_message: str = "") -> str:
-    """Name of the program THIS conversation is about, or "" when none is named.
+def _active_program_name(
+    conversation: Conversation,
+    user_message: str = "",
+    lead: Lead | None = None,
+) -> str:
+    """Name of the program THIS conversation is about, or "" when none is known.
 
     The per-turn context carried the date, the booking window, the channel and
     the lead's own fields, but never the program. A turn that names no program
@@ -3256,12 +3260,23 @@ def _active_program_name(conversation: Conversation, user_message: str = "") -> 
     prohibition: no handler reads it, and the model is free to follow the parent
     somewhere else.
 
-    Only USER turns are scanned. The agent's own replies are excluded on
-    purpose — the welcome menu names every active program, and a reply that
-    already drifted to the wrong one would otherwise pin the drift in place.
-    Newest mention wins, so a parent who switches programs is followed.
-    Reserved and dynamic programs are treated alike: the model needs the name,
-    not the id. Never raises → "" on any fault, which omits the field entirely.
+    Three sources, strongest last-resort first:
+
+    1. The CURRENT message, so naming another program switches immediately.
+    2. ``lead.program_id`` — the program `get_program_info` actually fetched
+       (`parent_tool_executor` tags the lead on every successful fetch). This is
+       what the system resolved, not what a regex guessed, and it survives any
+       phrasing. Live 2026-09-03 12:09 showed why it is needed: the conversation
+       was demonstrably on Sunday School — „ჯგუფში მაქსიმუმ 15 ბავშვია" three
+       minutes earlier — yet „როგორ დავრეგისტრირდე?" still went to the camp,
+       because the parent had never TYPED the program name and a text scan of
+       their turns therefore found nothing.
+    3. The newest program named in an earlier USER turn.
+
+    The agent's own replies are never scanned: the welcome menu names every
+    active program, and a reply that had already drifted would pin the drift in
+    place. Reserved and dynamic programs are treated alike — the model needs the
+    name, not the id. Never raises → "" on any fault, which omits the field.
 
     A mention of a program that is currently OFF yields "" rather than the older
     program the parent has moved on from. Naming a stale program confidently is
@@ -3297,15 +3312,50 @@ def _active_program_name(conversation: Conversation, user_message: str = "") -> 
         if not probe_sections:
             return ""
 
-        # The WHOLE history, not the model's `HISTORY_WINDOW` slice. A parent
-        # names the program once and then asks about it for the rest of the
-        # hour: in the live 2026-09-03 session „საკვირაო სკოლა" was named on
-        # user turn 2 and the turn that broke was 13 user turns later — 27
-        # history entries back. A windowed scan returned "" there, which is
-        # exactly the case this field exists for. Only the newest mention is
-        # needed, so the walk stops at the first hit and the cost is a few
-        # token splits over a conversation that Redis already caps.
-        candidates = [str(user_message or "")]
+        def _name_if_active(section: dict | None) -> str:
+            # Mirrors `get_active_sections`: case/whitespace-tolerant, and a
+            # missing status is NOT treated as active.
+            section = section or {}
+            if (section.get("status") or "").strip().lower() != "active":
+                return ""
+            return str(section.get("name") or "").strip()
+
+        from app.flows.parent_flow import _CAMP_WORD_STEMS
+
+        def _named_in(text: str) -> str | None:
+            """"" for a camp turn, the program name for a hit, None for neither."""
+            if not text.strip():
+                return None
+            # The camp is invisible to the matcher (see the docstring), so check
+            # it against the same stems the camp-off gate uses. A camp turn ends
+            # the search: either the camp is on and its own handlers own the
+            # turn, or it is off and there is no honest program to name.
+            if any(stem in text.lower() for stem in _CAMP_WORD_STEMS):
+                return ""
+            hit = match_dynamic_program(text, probe_sections, fuzzy=fuzzy)
+            if not hit:
+                return None
+            return _name_if_active(by_id.get((hit.get("program_id") or "").strip()))
+
+        # 1. The current message wins, so a switch is followed immediately.
+        current = _named_in(str(user_message or ""))
+        if current is not None:
+            return current
+
+        # 2. What `get_program_info` actually fetched for this lead. Set by
+        #    `parent_tool_executor` on every successful fetch and persisted with
+        #    the lead, so it holds even when the parent never typed the name.
+        tagged = (getattr(lead, "program_id", "") or "").strip() if lead is not None else ""
+        if tagged:
+            name = _name_if_active(by_id.get(tagged))
+            if name:
+                return name
+
+        # 3. The newest program named in an earlier USER turn. The WHOLE history,
+        #    not the model's `HISTORY_WINDOW` slice: live 2026-09-03, „საკვირაო
+        #    სკოლა" was named on user turn 2 and the turn that broke was 13 user
+        #    turns later — 27 entries back, where a windowed scan returned "".
+        candidates = []
         for turn in reversed(list(getattr(conversation, "history", None) or [])):
             if not isinstance(turn, dict):
                 continue
@@ -3313,26 +3363,10 @@ def _active_program_name(conversation: Conversation, user_message: str = "") -> 
                 continue
             candidates.append(str(turn.get("content") or ""))
 
-        from app.flows.parent_flow import _CAMP_WORD_STEMS
-
         for text in candidates:
-            if not text.strip():
-                continue
-            # The camp is invisible to the matcher (see the docstring), so check
-            # it here against the same stems the camp-off gate uses. A camp turn
-            # ends the scan: either the camp is on and its own handlers own the
-            # turn, or it is off and there is no honest program to name.
-            if any(stem in text.lower() for stem in _CAMP_WORD_STEMS):
-                return ""
-            hit = match_dynamic_program(text, probe_sections, fuzzy=fuzzy)
-            if not hit:
-                continue
-            section = by_id.get((hit.get("program_id") or "").strip()) or {}
-            # Mirrors `get_active_sections`: case/whitespace-tolerant, and a
-            # missing status is NOT treated as active.
-            if (section.get("status") or "").strip().lower() != "active":
-                return ""
-            return str(section.get("name") or "").strip()
+            named = _named_in(text)
+            if named is not None:
+                return named
     except Exception:  # pragma: no cover — never break a turn over context
         return ""
     return ""
@@ -3408,7 +3442,7 @@ def _build_context_message(
     # Placed with the other facts of the turn, not with the lead's own fields:
     # a price objection that names no program („ძალიან ძვირია") is about THIS
     # program, and until 2026-09-03 the model had to guess that from history.
-    active_program = _active_program_name(conversation, user_message)
+    active_program = _active_program_name(conversation, user_message, lead)
     if active_program:
         parts.append(f"active_program={active_program}")
 
