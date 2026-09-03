@@ -35,7 +35,11 @@ from app.services import admin_config_service, conversation_service
 
 
 _MENU = "გვითხარით, რა გაინტერესებთ"
-_CLARIFY = "რომელი მიმართულების რეგისტრაციის ლინკი"
+# The clarification names the programmes that are actually active, read at reply
+# time, so it can no longer be a frozen string: the old wording asked „ბანაკის თუ
+# კონკრეტული ღონისძიების?" and both of those are switched off. This is the part
+# that does not depend on which programmes are on sale.
+_CLARIFY = "რომელ პროგრამაზე გაინტერესებთ რეგისტრაცია"
 _CAMP_URL = "https://tinyurl.com/36jcae8z"
 _EVENT_URL = "https://wordacademy.ge/tickets"
 
