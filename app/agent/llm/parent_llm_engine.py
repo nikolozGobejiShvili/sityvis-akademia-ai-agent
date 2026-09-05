@@ -3544,6 +3544,25 @@ def _build_context_message(
         program_facts = _active_program_facts(active_section)
         if program_facts:
             parts.append(f"program_facts=({program_facts})")
+            # Which description leads. Both fields are facts and nothing ranked
+            # them, so the model merged the two: live 2026-09-05 the opening
+            # answer began with the operator's new `description_short` and then
+            # continued into `description_full`'s detail. The operator's
+            # intention is that the short one IS the answer and the long one is
+            # held back for follow-ups.
+            #
+            # A role, not a script: no wording is fixed and the model still
+            # writes the reply. Emitted only when BOTH are present, since with
+            # one description there is nothing to rank, and keyed on the field
+            # names so it holds for any programme in the panel.
+            if str((active_section or {}).get("description_short") or "").strip() and \
+                    str((active_section or {}).get("description_full") or "").strip():
+                parts.append(
+                    "program_facts_priority=description_short is the opening "
+                    "description of the programme; description_full is reserve "
+                    "detail — draw on it when the parent asks a follow-up, not "
+                    "in the first description"
+                )
 
     if adult_target_relation:
         parts.append(f"adult_target_relation={adult_target_relation}")
