@@ -51,9 +51,37 @@ def test_named_product_turn_reaches_the_engine(monkeypatch):
     # dynamic-program hoist — same idiom as
     # test_eval_reach_2026_07_22.py::test_engine_counter_increments_when_engine_runs.
     conv.history.append({"role": "assistant", "content": "_prior"})
-    reply = h.process(conv, "რობოტიკის კლუბი მაინტერესებს")
+    # A SPECIFIC question about the product. The probe used to be the bare
+    # „რობოტიკის კლუბი მაინტერესებს", but since 2026-09-05 that phrasing is the
+    # OVERVIEW turn and is answered with the operator's own `description_short`
+    # above the engine (asserted in the test below). Both routes need
+    # `dynamic_program_match` to resolve the fixture's name, so this still checks
+    # exactly what it was written to check.
+    reply = h.process(conv, "რობოტიკის კლუბის განრიგი როგორია?")
     assert reply == "ok"
     assert reach.reached_engine(h) is True
+
+
+def test_named_product_overview_returns_the_operator_text(monkeypatch):
+    """The other half of the routing: a general „<product> მაინტერესებს" is
+    answered from the panel's `description_short`, as written, without the
+    engine. Live 2026-09-05 — the model rewrote the operator's text, losing its
+    paragraphing and adding a field it does not contain."""
+    FP.install(monkeypatch)
+    swapped = dataclasses.replace(
+        config_module.settings,
+        USE_PARENT_LLM_ENGINE=True,
+        USE_DYNAMIC_PROGRAMS=True,
+    )
+    monkeypatch.setattr(parent_flow, "settings", swapped)
+    monkeypatch.setattr(ple, "run_parent_llm_turn", lambda *a, **k: "ok")
+
+    h = _mk_harness()
+    conv = h.seed(segment="PARENT", state="START", child_age="13")
+    conv.history.append({"role": "assistant", "content": "_prior"})
+    reply = h.process(conv, "რობოტიკის კლუბი მაინტერესებს")
+    assert reply == (FP.PRODUCT.get("description_short") or "").strip()
+    assert reply != "ok"
 
 
 # ── Task 5: cases_v2 — multi-turn, engine-reaching, grounded case set ──────

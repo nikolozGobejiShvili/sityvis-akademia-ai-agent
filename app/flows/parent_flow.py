@@ -1036,6 +1036,17 @@ def _maybe_handle_program_overview(
     short = str(section.get("description_short") or "").strip()
     if not short:
         return None
+    # Once per conversation. The operator's contract is that this text is the
+    # OPENING description and `description_full` serves what comes after, so a
+    # later „მეტი ინფორმაცია <programme>-ზე" must not re-send the same block —
+    # that turn belongs to the engine, which has the full description behind it.
+    # Keyed on the text already sent, so no new state and nothing to keep in
+    # sync; a programme whose description the operator edits mid-conversation
+    # correctly counts as new text.
+    for turn in (conversation.history or []):
+        if ((turn or {}).get("role") == "assistant"
+                and ((turn or {}).get("content") or "").strip() == short):
+            return None
     low = (message or "").lower()
     # Transactional or price intents own their turns — never overwrite them.
     # „ფორმ" is taken from the shipped marker list and re-tested through the
@@ -1885,6 +1896,29 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                 return _sanitise_booking_confirmation(
                     conversation, hoisted_camp_status,
                 )
+
+        # Verbatim programme overview on the HOISTED path (live 2026-09-05). The
+        # handler at its call site below (see `_maybe_handle_program_overview`)
+        # was unreachable for exactly the programmes it was written for: this
+        # hoist fires whenever the turn NAMES a NON-reserved admin programme,
+        # which is every programme the operator adds from the panel — the three
+        # reserved ids are the only ones that reach the chain below, and the
+        # handler itself declines camp and adult. `USE_RESERVED_PROGRAMS_DYNAMIC`
+        # then adds Sunday School to the same blind spot. Live proof:
+        # „საკვირაოს კოლაზე მაინტერესებს ინფრომაცია" came back model-written
+        # (791 chars) while the panel's `description_short` is 947. The unit
+        # tests called the handler directly and so never saw the routing.
+        # Placed AFTER the camp gate (a camp turn is still the camp's) and BEFORE
+        # the contact capture, mirroring the order below. Returns None for every
+        # specific / transactional turn, so the hoist reaches the engine exactly
+        # as before on all of them. Returned WITHOUT `_sanitise_booking_confirmation`,
+        # unlike its neighbours here and matching the call site below: the
+        # sanitiser rewrites wording, and this text is the operator's own.
+        hoisted_program_overview = _maybe_handle_program_overview(
+            conversation, message,
+        )
+        if hoisted_program_overview is not None:
+            return hoisted_program_overview
 
         # Dynamic contact capture (deterministic, 2026-07-25) — the hoist returns
         # to the engine below, bypassing the deterministic contact-collection
