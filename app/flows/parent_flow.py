@@ -964,6 +964,108 @@ def _msg_is_dissatisfaction(message: str) -> bool:
     return any(m in low for m in _DISSATISFIED_MARKERS)
 
 
+# A general „tell me about this programme" opener, as opposed to a specific
+# question. Positive intent only — the exclusions below are the shipped
+# transactional and price detectors, reused rather than restated.
+_PROGRAM_OVERVIEW_MARKERS: tuple[str, ...] = (
+    "მაინტერესებ", "მაინტერესებდ", "ინფორმაცი", "შესახებ", "პირობებ",
+    "მომწერე", "მიამბე", "გვიამბე", "რა არის", "რას წარმოადგენს", "დეტალებ",
+)
+
+
+def _named_active_section(message: str) -> dict | None:
+    """The active admin section this message NAMES, or None. Current message
+    only — the conversation's established programme is deliberately not used
+    here, so a general question later in the chat is answered by the engine
+    rather than repeating the overview."""
+    try:
+        from app.services import admin_config_service
+        from app.reasoning.dynamic_program_match import match_dynamic_program
+
+        sections = admin_config_service.get_active_sections() or []
+        hit = match_dynamic_program(
+            message, sections,
+            fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
+        )
+        if not hit:
+            return None
+        pid = (hit.get("program_id") or "").strip()
+        return next((s for s in sections if (s.get("id") or "").strip() == pid), None)
+    except Exception:  # pragma: no cover — defensive
+        return None
+
+
+def _maybe_handle_program_overview(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Answer „<programme> მაინტერესებს" with the operator's own
+    `description_short`, exactly as written in the admin panel.
+
+    Why this is deterministic. As a FACT in the turn context the short
+    description is read and rewritten by the model, so live on 2026-09-05 the
+    opening answer lost the operator's paragraphing („📍 ლოკაციები" ended up
+    glued to the previous sentence) and gained the discounts, which are a
+    separate field and not part of the text the client wrote. The operator's
+    requirement is that this text arrives as written.
+
+    No text is hardcoded: every character comes from the panel, so editing the
+    field changes the answer and nothing here needs touching.
+
+    Deliberately narrow. It fires only when the CURRENT message names an active
+    programme and asks for it in general. Anything transactional or priced —
+    registration, booking, consultation, cost — keeps its own handler, and any
+    specific question (topic, operational detail, exact detail) goes to the
+    engine, which still has `description_full` and every other field. That is
+    what makes the follow-ups work: the overview answers „what is this", the
+    engine answers „how many children per group".
+    """
+    section = _named_active_section(message)
+    if section is None:
+        return None
+    # The ADULT programmes have their own segment, engine and answers. „მე
+    # ზრდასრული ვარ და ღონისძიებები მაინტერესებს" matched the adult section by
+    # name and this handler answered it, so `switch_to_adult_flow` never ran and
+    # the conversation stayed PARENT — caught by
+    # `test_engine_does_not_answer_camp_age_after_adult_switch`. Checked by
+    # section TYPE, which is admin data, with the shipped adult-intent predicate
+    # behind it for a message that carries the intent without naming a section.
+    if (section.get("type") or "").strip().lower() == "adult_events":
+        return None
+    if _msg_has_adult_intent(message):
+        return None
+    short = str(section.get("description_short") or "").strip()
+    if not short:
+        return None
+    low = (message or "").lower()
+    # Transactional or price intents own their turns — never overwrite them.
+    # „ფორმ" is taken from the shipped marker list and re-tested through the
+    # word-boundary regex the codebase already keeps for it, because as a bare
+    # substring it fires inside „ინ-ფორმა-ცია" — so „პროგრამის შესახებ
+    # ინფორმაცია", the plainest overview request there is, was being excluded.
+    if any(
+        m in low for m in _FINAL_CAMP_REGISTRATION_ACTION_MARKERS if m != "ფორმ"
+    ) or _CAMP_FORM_TOKEN_RE.search(low):
+        return None
+    if any(k in low for k in PRICE_KEYWORDS):
+        return None
+    # A specific question is the engine's, with the full facts behind it.
+    try:
+        from app.reasoning import camp_topic_facts as _ctf
+        if (_ctf.detect_camp_topic(message) is not None
+                or _ctf.resolve_operational(message) is not None
+                or _ctf.resolve_exact_detail(message) is not None):
+            return None
+    except Exception:  # pragma: no cover — defensive
+        pass
+    if not any(m in low for m in _PROGRAM_OVERVIEW_MARKERS):
+        return None
+    logger.info(
+        "[parent_flow] program overview → admin description_short verbatim "
+        "(program=%s)", (section.get("id") or "").strip(),
+    )
+    return short
+
+
 def _maybe_handle_camp_status(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -1836,6 +1938,15 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     camp_status_response = _maybe_handle_camp_status(conversation, message)
     if camp_status_response is not None:
         return camp_status_response
+
+    # „<programme> მაინტერესებს" → the operator's own description, as written.
+    # Runs after the camp gate (a camp message is still the camp's) and before
+    # the Sunday-School handler and the engine. Returns None for every specific
+    # or transactional question, which is what keeps the follow-ups on the
+    # engine with the full facts behind them.
+    program_overview = _maybe_handle_program_overview(conversation, message)
+    if program_overview is not None:
+        return program_overview
 
     # Sunday School (planned July) — deterministic EMAIL-ONLY manager handoff.
     # Runs FIRST (before the static welcome / engine / camp contact-collection)
