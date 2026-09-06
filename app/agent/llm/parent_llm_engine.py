@@ -2137,6 +2137,13 @@ def _apply_dynamic_fact_normalisations(text: str) -> str:
 _POLITE_ADDRESS_REWRITES: tuple[tuple[str, str], ...] = (
     # Person fix first, so the pronoun rewrite below sees the corrected verb.
     (r"გესმის", "გვესმის"),
+    # The plural of the same mistake, live 2026-09-06: „გესმით, სამი შვილი
+    # ერთდროულად — ეს ნამდვილად სერიოზული გადაწყვეტილებაა!". „გესმის" does not
+    # cover it — the ending differs — and the prompt rule naming BOTH forms
+    # (system_parent_v2.md:41) was ignored, exactly as the singular one was
+    # before it moved here. Same category as its neighbour: a mechanical
+    # person fix, not an entry in the prohibition table.
+    (r"გესმით", "გვესმის"),
     # Pronouns / possessives.
     (r"შენი", "თქვენი"),
     (r"შენს", "თქვენს"),

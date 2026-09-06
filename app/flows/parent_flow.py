@@ -996,6 +996,39 @@ _GENERIC_PROGRAM_WORDS: frozenset[str] = frozenset({
     "რა", "რას", "რაა", "არის", "იყო",
 })
 _GENERIC_MIN_TOKEN = 3    # shorter tokens are grammar noise, never a subject
+# Typos in the generic words themselves. Without this „საკვირაო სკოლის
+# ინფრომაცია მაინტერესებს" — the operator's own habitual typo — reads as a
+# subject and the opening description arrives re-written instead of as written.
+# Measured distances to the list: real typos sit at 1-2 („ინფრომაცია"→
+# „ინფორმაცია" 2, „პიროვები"→„პირობები" 1), real subjects at 3-4.
+#
+# With ONE exception that decides the shape of this rule: „ფასი" is 2 from
+# „რას". Allowing 2 edits against every entry would make PRICE a generic word
+# and bring back the exact defect this handler was rewritten for. So short
+# entries never take part, and the budget scales the way the programme matcher
+# already scales it — which puts „რას" (3) out of reach and keeps
+# „ინფორმაცია" (10) in.
+_GENERIC_FUZZY_MIN_LEN = 6
+
+
+def _is_generic_word(tok: str) -> bool:
+    """A word that asks for the programme and names no subject — exactly, or
+    with one typo (two for a long word). Never true for a short word, because
+    at that length a typo and a different word are indistinguishable."""
+    if tok in _GENERIC_PROGRAM_WORDS:
+        return True
+    if len(tok) < _GENERIC_FUZZY_MIN_LEN:
+        return False
+    from app.reasoning.dynamic_program_match import _bounded_levenshtein
+    for word in _GENERIC_PROGRAM_WORDS:
+        if len(word) < _GENERIC_FUZZY_MIN_LEN:
+            continue
+        allowed = 1 if len(word) <= 7 else 2
+        if abs(len(tok) - len(word)) > allowed:
+            continue
+        if _bounded_levenshtein(tok, word, allowed) <= allowed:
+            return True
+    return False
 
 
 def _named_active_section(message: str) -> dict | None:
@@ -1032,7 +1065,7 @@ def _asks_only_for_the_programme(message: str, section: dict) -> bool:
 
     name_tokens = [t for t in _tokens(section.get("name") or "") if len(t) >= 4]
     for tok in _tokens(message):
-        if len(tok) < _GENERIC_MIN_TOKEN or tok in _GENERIC_PROGRAM_WORDS:
+        if len(tok) < _GENERIC_MIN_TOKEN or _is_generic_word(tok):
             continue
         # Declension-tolerant, the same way the programme matcher compares:
         # „სკოლის" belongs to „სკოლა".
@@ -4447,6 +4480,28 @@ def _maybe_handle_out_of_range_age(
         return None
     if age >= lo:
         # Over-age (18+) — leave to the adult-switch / over-17 path.
+        return None
+    # The message this returns says „ბანაკი" and quotes the CAMP's band, but it
+    # fires on any under-age disclosure in the PARENT flow — and every kids
+    # programme is served by that flow. Live 2026-09-06, deep in a Sunday-School
+    # conversation, „6 წლის ბავშვის მოყვანას შევძლებ?" was answered „ბანაკი
+    # განკუთვნილია 9–17 წლის ბავშვებისთვის", with the camp switched off and the
+    # programme's own brackets starting at 7.
+    #
+    # The sixth place where PARENT was read as camp. Same narrowing as the
+    # camp-status gate: when the conversation is demonstrably on another active
+    # programme, this defers and the engine answers from THAT programme's age
+    # fields. Camp turns, and conversations with no other programme in them —
+    # every camp fixture in the suite — are untouched. The age has already been
+    # captured onto the lead above, so the sentence still cannot be stored as a
+    # name, which is what this handler exists to prevent.
+    if _msg_names_other_program(message) or _conversation_names_other_program(
+        conversation,
+    ):
+        logger.info(
+            "[parent_flow] out-of-range age deferred — conversation is on "
+            "another active program (sender=%s)", conversation.sender_id,
+        )
         return None
     logger.info(
         "[parent_flow] out-of-range child age=%d (bounds=%d-%d) → eligibility "

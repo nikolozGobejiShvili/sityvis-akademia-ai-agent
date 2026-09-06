@@ -102,10 +102,41 @@ def test_the_typo_and_the_correct_spelling_behave_identically(ask):
     assert ask(f"{_NAME}-ის ღირებულრბა რა არის?") is None
 
 
-def test_a_misspelt_generic_word_fails_safe(ask):
-    """„ინფრომაცია" is not on the allowlist either — so it reads as a subject
-    and the engine answers. The cost is the formatting, never the answer."""
-    assert ask(f"{_NAME}-ის შესახებ ინფრომაცია") is None
+@pytest.mark.parametrize("msg", [
+    f"{_NAME}-ის შესახებ ინფრომაცია",       # the operator's habitual typo
+    f"{_NAME} მაინტერსებს",
+    f"{_NAME}-ის დეტალბი მომწერთ",
+    f"{_NAME}-ის პიროვები",
+])
+def test_a_typo_in_a_generic_word_still_gets_the_panel_text(ask, msg):
+    """The allowlist tolerates a typo in ITS OWN words, so the operator's text
+    still arrives when the parent mistypes „ინფორმაცია". Without this the
+    opening description came back re-written for a one-letter slip."""
+    assert ask(msg) == _SHORT, msg
+
+
+@pytest.mark.parametrize("word", [
+    "ფასი", "ღირებულება", "ღირებულრბა", "მისამართები", "მისმართები",
+    "პედაგოგები", "რეგისტრაცია", "განრიგი", "ასაკი", "ჯგუფში", "გადახდა",
+    "ფასდაკლება", "კონსულტაცია", "ტარდება", "იწყება", "რამდენი", "ღირს",
+])
+def test_no_subject_word_is_mistaken_for_a_generic_one(word):
+    """The tolerance must never widen into the subjects, or the defect this
+    handler was rewritten for comes straight back.
+
+    „ფასი" is what forces the shape of the rule: it is only 2 edits from „რას",
+    which IS generic. A flat two-edit budget would make PRICE a generic word.
+    Short entries are therefore excluded from fuzzy matching entirely."""
+    assert pf._is_generic_word(word) is False, word
+
+
+def test_the_price_word_is_the_reason_short_entries_are_excluded():
+    """Pin the near-collision itself, so a later edit that lowers the length
+    floor fails here instead of in production."""
+    from app.reasoning.dynamic_program_match import _bounded_levenshtein
+    assert _bounded_levenshtein("ფასი", "რას", 3) == 2
+    assert "რას" in pf._GENERIC_PROGRAM_WORDS
+    assert len("რას") < pf._GENERIC_FUZZY_MIN_LEN
 
 
 # -- other flows keep their turns ------------------------------------------
