@@ -964,20 +964,45 @@ def _msg_is_dissatisfaction(message: str) -> bool:
     return any(m in low for m in _DISSATISFIED_MARKERS)
 
 
-# A general „tell me about this programme" opener, as opposed to a specific
-# question. Positive intent only — the exclusions below are the shipped
-# transactional and price detectors, reused rather than restated.
-_PROGRAM_OVERVIEW_MARKERS: tuple[str, ...] = (
-    "მაინტერესებ", "მაინტერესებდ", "ინფორმაცი", "შესახებ", "პირობებ",
-    "მომწერე", "მიამბე", "გვიამბე", "რა არის", "რას წარმოადგენს", "დეტალებ",
-)
+# Words that ask for a programme without naming any subject of their own —
+# „tell me about it", „I'm interested", „the terms", „details". They are the
+# ONLY words allowed to accompany a programme's name in an overview request.
+#
+# This list is not a filter of things to exclude, and that inversion is the
+# whole point. The first version excluded price/registration/topic words, so a
+# misspelling in one of THOSE defeated the exclusion and the overview answered
+# a question it should not have: live 2026-09-06 „საკვირაო სკოლის ღირებულრბა
+# რა არის?" — one letter wrong in „ღირებულება" — was answered with the general
+# description instead of the price. Four typos appeared in that one
+# conversation, so parents mistyping is the normal case.
+#
+# Read as an allowlist the failure direction flips. A misspelt word is simply
+# not on this list, so it counts as a SUBJECT and the turn goes to the engine —
+# which answers it correctly from the full facts. The worst a typo can now do
+# is cost the verbatim formatting, never the right answer.
+_GENERIC_PROGRAM_WORDS: frozenset[str] = frozenset({
+    # greeting / politeness that can share the sentence
+    "გამარჯობა", "სალამი", "მოგესალმებით", "გთხოვთ", "თუ", "შეიძლება",
+    "შეგიძლია", "შეგიძლიათ", "შემიძლია", "იქნებ", "რომ", "და", "ხომ",
+    # asking for the programme itself
+    "მაინტერესებს", "მაინტერესებდა", "დამაინტერესა", "მინდა", "მსურს",
+    "ინფორმაცია", "ინფორმაციას", "ინფორმაციები", "შესახებ", "თაობაზე",
+    "დეტალები", "დეტალებს", "პირობები", "პირობებს", "პროგრამა", "პროგრამის",
+    "აღწერა", "ვიცოდე", "გავიგო",
+    # „write it to me" / „tell me"
+    "მომწერე", "მომწერეთ", "მოგვწერეთ", "მომწეროთ", "გამომიგზავნეთ",
+    "მიამბეთ", "გვიამბეთ", "მიამბე", "გვიამბე", "მოგვიყევით", "მომიყევით",
+    # bare interrogatives that carry no subject
+    "რა", "რას", "რაა", "არის", "იყო",
+})
+_GENERIC_MIN_TOKEN = 3    # shorter tokens are grammar noise, never a subject
 
 
 def _named_active_section(message: str) -> dict | None:
     """The active admin section this message NAMES, or None. Current message
-    only — the conversation's established programme is deliberately not used
-    here, so a general question later in the chat is answered by the engine
-    rather than repeating the overview."""
+    only — the conversation's established programme is deliberately not used,
+    so a general question later in the chat is answered by the engine rather
+    than repeating the opening description."""
     try:
         from app.services import admin_config_service
         from app.reasoning.dynamic_program_match import match_dynamic_program
@@ -995,40 +1020,60 @@ def _named_active_section(message: str) -> dict | None:
         return None
 
 
+def _asks_only_for_the_programme(message: str, section: dict) -> bool:
+    """True when the message carries NO subject of its own — every word in it is
+    either part of the programme's name or one of the generic words above.
+
+    „საკვირაო სკოლის ღირებულრბა რა არის?" carries „ღირებულრბა", which is
+    neither, so it is a question ABOUT something and belongs to the engine. It
+    does not matter that the word is misspelled — an unknown word is treated as
+    a subject either way, which is exactly the safe reading."""
+    from app.reasoning.dynamic_program_match import _tokens
+
+    name_tokens = [t for t in _tokens(section.get("name") or "") if len(t) >= 4]
+    for tok in _tokens(message):
+        if len(tok) < _GENERIC_MIN_TOKEN or tok in _GENERIC_PROGRAM_WORDS:
+            continue
+        # Declension-tolerant, the same way the programme matcher compares:
+        # „სკოლის" belongs to „სკოლა".
+        if any(
+            tok == n or (min(len(tok), len(n)) >= 4
+                         and tok[:4] == n[:4])
+            for n in name_tokens
+        ):
+            continue
+        return False
+    return True
+
+
 def _maybe_handle_program_overview(
     conversation: Conversation, message: str,
 ) -> str | None:
     """Answer „<programme> მაინტერესებს" with the operator's own
     `description_short`, exactly as written in the admin panel.
 
-    Why this is deterministic. As a FACT in the turn context the short
-    description is read and rewritten by the model, so live on 2026-09-05 the
-    opening answer lost the operator's paragraphing („📍 ლოკაციები" ended up
-    glued to the previous sentence) and gained the discounts, which are a
-    separate field and not part of the text the client wrote. The operator's
-    requirement is that this text arrives as written.
+    Why the code does this and not the model. Carried as a fact in the turn
+    context the short description is re-written: live 2026-09-05 the opening
+    answer lost the operator's paragraphing and gained the discounts, which are
+    a separate field and not in the text the client wrote. Measured again on
+    2026-09-06 with the real model — 0 of 3 turns reproduced it. So the model
+    supplies the judgement it is good at and the code supplies the bytes.
 
-    No text is hardcoded: every character comes from the panel, so editing the
-    field changes the answer and nothing here needs touching.
+    Handing the judgement to the model was tried and measured too: a
+    `general_overview` argument on `get_program_info`. In 12 of 12 real turns
+    the model never called that tool at all — it already has the programme's
+    facts in the turn context, so it has no reason to. The decision has to be
+    made here; what changed is that it is now made SAFELY (see
+    `_asks_only_for_the_programme`).
 
-    Deliberately narrow. It fires only when the CURRENT message names an active
-    programme and asks for it in general. Anything transactional or priced —
-    registration, booking, consultation, cost — keeps its own handler, and any
-    specific question (topic, operational detail, exact detail) goes to the
-    engine, which still has `description_full` and every other field. That is
-    what makes the follow-ups work: the overview answers „what is this", the
-    engine answers „how many children per group".
+    No text is hardcoded: every character comes from the panel.
     """
     section = _named_active_section(message)
     if section is None:
         return None
-    # The ADULT programmes have their own segment, engine and answers. „მე
-    # ზრდასრული ვარ და ღონისძიებები მაინტერესებს" matched the adult section by
-    # name and this handler answered it, so `switch_to_adult_flow` never ran and
-    # the conversation stayed PARENT — caught by
-    # `test_engine_does_not_answer_camp_age_after_adult_switch`. Checked by
-    # section TYPE, which is admin data, with the shipped adult-intent predicate
-    # behind it for a message that carries the intent without naming a section.
+    # ADULT programmes have their own segment, engine and answers — „მე
+    # ზრდასრული ვარ და ღონისძიებები მაინტერესებს" must reach
+    # `switch_to_adult_flow`, not be answered here.
     if (section.get("type") or "").strip().lower() == "adult_events":
         return None
     if _msg_has_adult_intent(message):
@@ -1036,40 +1081,15 @@ def _maybe_handle_program_overview(
     short = str(section.get("description_short") or "").strip()
     if not short:
         return None
-    # Once per conversation. The operator's contract is that this text is the
-    # OPENING description and `description_full` serves what comes after, so a
-    # later „მეტი ინფორმაცია <programme>-ზე" must not re-send the same block —
-    # that turn belongs to the engine, which has the full description behind it.
-    # Keyed on the text already sent, so no new state and nothing to keep in
-    # sync; a programme whose description the operator edits mid-conversation
-    # correctly counts as new text.
+    if not _asks_only_for_the_programme(message, section):
+        return None
+    # Once per conversation: this text is the OPENING description and
+    # `description_full` serves what comes after, so it is never re-sent.
+    # Keyed on the text already sent, so there is no new state to keep in sync.
     for turn in (conversation.history or []):
         if ((turn or {}).get("role") == "assistant"
                 and ((turn or {}).get("content") or "").strip() == short):
             return None
-    low = (message or "").lower()
-    # Transactional or price intents own their turns — never overwrite them.
-    # „ფორმ" is taken from the shipped marker list and re-tested through the
-    # word-boundary regex the codebase already keeps for it, because as a bare
-    # substring it fires inside „ინ-ფორმა-ცია" — so „პროგრამის შესახებ
-    # ინფორმაცია", the plainest overview request there is, was being excluded.
-    if any(
-        m in low for m in _FINAL_CAMP_REGISTRATION_ACTION_MARKERS if m != "ფორმ"
-    ) or _CAMP_FORM_TOKEN_RE.search(low):
-        return None
-    if any(k in low for k in PRICE_KEYWORDS):
-        return None
-    # A specific question is the engine's, with the full facts behind it.
-    try:
-        from app.reasoning import camp_topic_facts as _ctf
-        if (_ctf.detect_camp_topic(message) is not None
-                or _ctf.resolve_operational(message) is not None
-                or _ctf.resolve_exact_detail(message) is not None):
-            return None
-    except Exception:  # pragma: no cover — defensive
-        pass
-    if not any(m in low for m in _PROGRAM_OVERVIEW_MARKERS):
-        return None
     logger.info(
         "[parent_flow] program overview → admin description_short verbatim "
         "(program=%s)", (section.get("id") or "").strip(),
@@ -1829,6 +1849,24 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # phone/confirm turns don't re-name it) stays on the engine below via
     # `_is_active_per_product_booking`. Flag-gated ⇒ no-op when off.
     _tag_per_product_booking(conversation, message)
+
+    # „<programme> მაინტერესებს" → the operator's own description, as written.
+    # ONE call site, deliberately ABOVE the Dynamic-Programs hoist, because the
+    # hoist returns to the engine for every turn that names a non-reserved
+    # programme — which is every programme the operator adds from the panel.
+    # The first version of this sat below the hoist and was therefore
+    # unreachable for exactly its own subject (live 2026-09-05: 791 characters
+    # where the panel holds 947). Placing it here covers the hoisted path and
+    # the deterministic chain with a single check instead of two mirrored ones.
+    #
+    # Camp cannot be intercepted here: `match_dynamic_program` refuses ambiguous
+    # name words, and „ბანაკი" / „საზაფხულო" are both on its ambiguous list, so
+    # the camp gate below still owns every camp turn. Returned raw — the
+    # sanitiser rewrites wording, and this text is the operator's own.
+    program_overview = _maybe_handle_program_overview(conversation, message)
+    if program_overview is not None:
+        return program_overview
+
     if getattr(settings, "USE_PARENT_LLM_ENGINE", False) and (
         _is_dynamic_program_turn(message)
         or _is_active_per_product_booking(conversation)
@@ -1897,29 +1935,6 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                     conversation, hoisted_camp_status,
                 )
 
-        # Verbatim programme overview on the HOISTED path (live 2026-09-05). The
-        # handler at its call site below (see `_maybe_handle_program_overview`)
-        # was unreachable for exactly the programmes it was written for: this
-        # hoist fires whenever the turn NAMES a NON-reserved admin programme,
-        # which is every programme the operator adds from the panel — the three
-        # reserved ids are the only ones that reach the chain below, and the
-        # handler itself declines camp and adult. `USE_RESERVED_PROGRAMS_DYNAMIC`
-        # then adds Sunday School to the same blind spot. Live proof:
-        # „საკვირაოს კოლაზე მაინტერესებს ინფრომაცია" came back model-written
-        # (791 chars) while the panel's `description_short` is 947. The unit
-        # tests called the handler directly and so never saw the routing.
-        # Placed AFTER the camp gate (a camp turn is still the camp's) and BEFORE
-        # the contact capture, mirroring the order below. Returns None for every
-        # specific / transactional turn, so the hoist reaches the engine exactly
-        # as before on all of them. Returned WITHOUT `_sanitise_booking_confirmation`,
-        # unlike its neighbours here and matching the call site below: the
-        # sanitiser rewrites wording, and this text is the operator's own.
-        hoisted_program_overview = _maybe_handle_program_overview(
-            conversation, message,
-        )
-        if hoisted_program_overview is not None:
-            return hoisted_program_overview
-
         # Dynamic contact capture (deterministic, 2026-07-25) — the hoist returns
         # to the engine below, bypassing the deterministic contact-collection
         # handler. Live bug: in a dynamic-product booking a bare „595999733" was
@@ -1972,15 +1987,6 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     camp_status_response = _maybe_handle_camp_status(conversation, message)
     if camp_status_response is not None:
         return camp_status_response
-
-    # „<programme> მაინტერესებს" → the operator's own description, as written.
-    # Runs after the camp gate (a camp message is still the camp's) and before
-    # the Sunday-School handler and the engine. Returns None for every specific
-    # or transactional question, which is what keeps the follow-ups on the
-    # engine with the full facts behind them.
-    program_overview = _maybe_handle_program_overview(conversation, message)
-    if program_overview is not None:
-        return program_overview
 
     # Sunday School (planned July) — deterministic EMAIL-ONLY manager handoff.
     # Runs FIRST (before the static welcome / engine / camp contact-collection)

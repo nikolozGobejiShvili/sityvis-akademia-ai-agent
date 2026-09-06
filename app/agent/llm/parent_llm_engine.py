@@ -3524,6 +3524,18 @@ def _build_context_message(
         # assumed a renderer; this states the medium as a fact of the turn.
         f"reply_channel={(getattr(conversation, 'platform', '') or 'messenger')}",
         "reply_rendering=plain_text (markup characters are shown literally)",
+        # What this agent can do about messaging. Live 2026-09-06 it answered
+        # „სამწუხაროდ, პირველად მე ვერ დავწერ — ეს არის ჩეთბოტი და შეტყობინებები
+        # მხოლოდ შემომავალია", then in the next sentence offered to have someone
+        # write to the parent. Nothing in the turn said what the agent's own
+        # messaging capability is, so the model filled the gap by inventing a
+        # limitation — the same shape as the business hours it once invented
+        # („10:00–17:00") before the real window travelled with the turn. Both
+        # halves of this line are things the product actually does: the first DM
+        # after a public comment is sent by the agent, and so are the scheduled
+        # follow-ups. Stated as a fact, not as a rule about wording.
+        "agent_can_message_first=yes (it sends the first DM after a public "
+        "comment, and the scheduled follow-up messages)",
         f"name={(lead.name or '').strip() or '—'}",
         f"phone={(lead.phone or '').strip() or '—'}",
         f"child_age={(lead.child_age or '').strip() or '—'}",
