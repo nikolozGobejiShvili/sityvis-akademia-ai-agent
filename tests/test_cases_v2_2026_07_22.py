@@ -52,21 +52,21 @@ def test_named_product_turn_reaches_the_engine(monkeypatch):
     # test_eval_reach_2026_07_22.py::test_engine_counter_increments_when_engine_runs.
     conv.history.append({"role": "assistant", "content": "_prior"})
     # A SPECIFIC question about the product. The probe used to be the bare
-    # „რობოტიკის კლუბი მაინტერესებს", but since 2026-09-05 that phrasing is the
-    # OVERVIEW turn and is answered with the operator's own `description_short`
-    # above the engine (asserted in the test below). Both routes need
-    # `dynamic_program_match` to resolve the fixture's name, so this still checks
-    # exactly what it was written to check.
+    # „რობოტიკის კლუბი მაინტერესებს", but since 2026-09-05 a message that names
+    # a programme and asks nothing of its own IS the overview turn and is
+    # answered with the operator's `description_short` before the engine (the
+    # test below pins that half). Both routes need `dynamic_program_match` to
+    # resolve the fixture's name, so this still checks what it was written to
+    # check — that the fixture is nameable.
     reply = h.process(conv, "რობოტიკის კლუბის განრიგი როგორია?")
     assert reply == "ok"
     assert reach.reached_engine(h) is True
 
 
 def test_named_product_overview_returns_the_operator_text(monkeypatch):
-    """The other half of the routing: a general „<product> მაინტერესებს" is
-    answered from the panel's `description_short`, as written, without the
-    engine. Live 2026-09-05 — the model rewrote the operator's text, losing its
-    paragraphing and adding a field it does not contain."""
+    """The other half of the same routing, and the reason the probe above had to
+    change: a general „<product> მაინტერესებს" is answered from the panel's
+    `description_short`, as written, without the engine."""
     FP.install(monkeypatch)
     swapped = dataclasses.replace(
         config_module.settings,
