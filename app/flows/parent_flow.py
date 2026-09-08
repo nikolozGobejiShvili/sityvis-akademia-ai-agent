@@ -1239,6 +1239,38 @@ def _maybe_handle_camp_status(
             )
             return None
 
+    # The camp word may not mean THIS camp any more. Every detector below reads
+    # „ბანაკი" as the summer camp, which held while it was the only camp the
+    # operator could configure. It is not any more: „პარიზის ბანაკი" and
+    # „ზამთრის ბანაკი" are ordinary panel programmes, and answering their
+    # questions with „ბანაკის ნაკადები დასრულებულია" is wrong twice over —
+    # measured live 2026-09-08, „ბანაკი მაინტერესებს" with Paris active and the
+    # summer camp off.
+    #
+    # So ask the panel first: which ACTIVE programmes answer to the word used?
+    # Exactly one, and it is not this camp, means the turn belongs to that
+    # programme and the engine answers it from the programme's own fields. None
+    # or several, and this gate keeps the turn exactly as before — which is
+    # every configuration that has ever existed until today.
+    try:
+        from app.reasoning.dynamic_program_match import (
+            programs_answering_to_ambiguous_word,
+        )
+        from app.services import admin_config_service as _acs
+        owners = programs_answering_to_ambiguous_word(
+            message, _acs.get_active_sections() or [],
+        )
+        if len(owners) == 1 and (owners[0].get("id") or "").strip() != "summer_camp":
+            logger.info(
+                "[parent_flow] camp-status deferred — the camp word names "
+                "another active programme (program=%s sender=%s)",
+                (owners[0].get("id") or "").strip(),
+                getattr(conversation, "sender_id", "?"),
+            )
+            return None
+    except Exception:  # pragma: no cover — the gate must never break on this
+        pass
+
     has_camp = _msg_has_camp_intent(message)
     is_child_offering = _msg_is_child_offering(message)
 
