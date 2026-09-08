@@ -100,6 +100,52 @@ def _is_ambiguous(tag: str) -> bool:
     return any(tag.startswith(a) or a.startswith(tag) for a in _AMBIGUOUS_TAG_STEMS)
 
 
+def programs_answering_to_ambiguous_word(
+    message_text: str, sections: list[dict],
+) -> list[dict]:
+    """Active sections a GENERIC word in the message could refer to.
+
+    `match_dynamic_program` deliberately refuses the words in
+    `_AMBIGUOUS_TAG_STEMS`, because one of them alone cannot identify a
+    programme — „ბანაკი" would claim every programme with camp in its name at
+    once. That is right, and it is also why the camp is unmatchable: its whole
+    name, „საზაფხულო ბანაკი", is made of those words, so nothing in the panel
+    can be reached by the word a parent actually types.
+
+    This answers the narrower question the matcher cannot: WHICH active
+    programmes answer to the generic word that was used. The caller decides
+    what to do with the count — one candidate is not ambiguous at all and can
+    be used directly; two or more genuinely need the parent to say which.
+
+    Pure, and panel-driven: a programme is a candidate because of what the
+    OPERATOR named it, never because of anything written here. Returns [] when
+    the message names a programme specifically — that is the matcher's job and
+    it has already won.
+    """
+    toks = _tokens(message_text)
+    if not toks:
+        return []
+    if match_dynamic_program(message_text, sections) is not None:
+        return []
+    hits: list[dict] = []
+    for s in sections:
+        if not (s.get("id") or "").strip():
+            continue
+        if (s.get("status") or "active").strip().lower() != "active":
+            continue
+        terms = [
+            t for t in _tokens(s.get("name") or "")
+            if len(t) >= _MIN_LEN and _is_ambiguous(t)
+        ] + [
+            str(t).strip().lstrip("#").lower()
+            for t in (s.get("hashtags") or [])
+            if len(str(t).strip().lstrip("#")) >= _MIN_LEN and _is_ambiguous(str(t))
+        ]
+        if any(_token_matches(toks, term) for term in terms):
+            hits.append(s)
+    return hits
+
+
 def match_dynamic_program(
     message_text: str, sections: list[dict], *, fuzzy: bool = False,
 ) -> dict | None:

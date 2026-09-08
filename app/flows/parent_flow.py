@@ -1045,10 +1045,36 @@ def _named_active_section(message: str) -> dict | None:
             message, sections,
             fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
         )
-        if not hit:
-            return None
-        pid = (hit.get("program_id") or "").strip()
-        return next((s for s in sections if (s.get("id") or "").strip() == pid), None)
+        if hit:
+            pid = (hit.get("program_id") or "").strip()
+            return next(
+                (s for s in sections if (s.get("id") or "").strip() == pid), None,
+            )
+        # The matcher refuses a generic word, because one cannot identify a
+        # programme on its own. That is why the camp is unreachable from the
+        # panel: „საზაფხულო ბანაკი" is made ENTIRELY of such words, so the word
+        # a parent actually types — „ბანაკი" — matches nothing and the turn
+        # falls through to the camp's hardcoded answers.
+        #
+        # A generic word is only ambiguous when more than one active programme
+        # answers to it. With exactly one it names that programme as precisely
+        # as its full title does, so it is used. Counted from the panel, so it
+        # follows the operator: today one camp, tomorrow „პარიზის ბანაკი"
+        # alongside it and the count becomes 2 — at which point this returns
+        # None and the turn goes to the engine rather than guessing between
+        # them. Nothing here knows the word „ბანაკი".
+        from app.reasoning.dynamic_program_match import (
+            programs_answering_to_ambiguous_word,
+        )
+        candidates = programs_answering_to_ambiguous_word(message, sections)
+        if len(candidates) == 1:
+            logger.info(
+                "[parent_flow] generic word resolved to the only active "
+                "programme that answers to it (program=%s)",
+                (candidates[0].get("id") or "").strip(),
+            )
+            return candidates[0]
+        return None
     except Exception:  # pragma: no cover — defensive
         return None
 
