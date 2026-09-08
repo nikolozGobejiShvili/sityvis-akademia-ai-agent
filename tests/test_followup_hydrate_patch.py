@@ -375,10 +375,17 @@ def test_cli_simulation_sends_followup_after_hydrate(
     """Reproduce the live-bug scenario:
       1. Live server stamped `last_bot_message_at` 200 seconds ago
          and wrote the conversation through to Redis.
-      2. Operator runs a fresh `python -c "..."` — `conversations` dict
-         starts empty.
-      3. WITHOUT hydrate → 0 conversations → 0 sends (the bug).
-      4. WITH hydrate → 1 conversation → 1 send.
+      2. A fresh process — the one-off CLI, or the server after a deploy —
+         starts with an empty `conversations` dict.
+      3. The tick hydrates itself, so the follow-up is still sent.
+
+    Step 3 used to read "WITHOUT hydrate → 0 conversations → 0 sends (the
+    bug)", with the manual `hydrate_from_redis()` below as the remedy. That
+    remedy was only ever wired into the CLI, so the running server kept the
+    bug: live 2026-09-08 every hourly tick logged `scanning total=1` — the one
+    sender who had written since the last deploy — while Redis held the rest.
+    `check_and_send_followups` now hydrates before it scans, which is what this
+    test asserts; the explicit call below is kept to show it stays idempotent.
     """
     # Step 1: persist the live state.
     _persist_conv(
@@ -399,16 +406,18 @@ def test_cli_simulation_sends_followup_after_hydrate(
     send = MagicMock(return_value=True)
     monkeypatch.setattr(followup_service.messenger_service, "send_message", send)
 
-    # Step 3 — without hydrate. In-memory dict is empty.
+    # Step 3 — a fresh process, empty in-memory dict. The tick hydrates itself.
     with caplog.at_level(logging.INFO, logger="app.services.followup_service"):
         followup_service.check_and_send_followups()
     full = "\n".join(rec.message for rec in caplog.records)
-    assert "total=0 parent=0 with_marker=0" in full
-    send.assert_not_called()
+    assert "total=1 parent=1 with_marker=1" in full
+    send.assert_called_once()
 
     caplog.clear()
+    send.reset_mock()
+    conversation_service.conversations.clear()
 
-    # Step 4 — hydrate first, then tick.
+    # Step 4 — the explicit CLI hydrate still works and is still idempotent.
     loaded = conversation_service.hydrate_from_redis()
     assert loaded == 1
 

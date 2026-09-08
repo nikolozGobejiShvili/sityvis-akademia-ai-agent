@@ -1468,7 +1468,7 @@ def get_all_conversations_snapshot() -> list[Conversation]:
     return list(conversations.values())
 
 
-def hydrate_from_redis() -> int:
+def hydrate_from_redis(*, keep=None) -> int:
     """Follow-up Live-Test Hydrate Patch (2026-06-06).
 
     Load every Redis-persisted Conversation into the in-memory
@@ -1479,9 +1479,23 @@ def hydrate_from_redis() -> int:
     Returns the number of conversations loaded. Safe no-op when Redis
     is disabled / unreachable. Never raises.
 
-    Use from a one-off CLI process before invoking
-    ``followup_service.check_and_send_followups()`` so the scheduler
-    sees the same conversations the live server is holding.
+    Used by the follow-up scheduler at the start of every tick, so a
+    restart no longer costs a parent their follow-up: the in-memory dict
+    starts empty after a deploy and a conversation only returns to it
+    when that parent writes again, which left everyone who wrote BEFORE
+    the deploy invisible to the scheduler (live 2026-09-08: every tick
+    that day logged `scanning total=1`).
+
+    ``keep`` is an optional predicate; a conversation it rejects is not
+    loaded. The scheduler passes one so only conversations a follow-up
+    can still reach are pulled in -- see `followup_service`.
+
+    Cross-conversation safety, measured 2026-09-08 with two parents on one
+    page, one sender id on two platforms, and a legacy payload: keys come
+    from `_ensure_conversation_identity`, i.e. the SAME
+    `canonical_session_key(platform, page_id, sender_id)` the live path
+    uses, so a stored conversation can only ever land on its own key, and
+    an in-memory session always wins over a stored one.
     """
     if not redis_state_service.is_enabled():
         logger.info("[FOLLOWUP] hydrate skipped -- redis disabled/unavailable")
@@ -1495,6 +1509,7 @@ def hydrate_from_redis() -> int:
     loaded = 0
     skipped_existing = 0
     skipped_invalid = 0
+    skipped_filtered = 0
     for key in keys:
         try:
             payload = redis_state_service.get_json(key)
@@ -1520,13 +1535,21 @@ def hydrate_from_redis() -> int:
         if session_key in conversations:
             skipped_existing += 1
             continue
+        if keep is not None:
+            try:
+                wanted = bool(keep(conv))
+            except Exception:  # pragma: no cover — a bad predicate must not
+                wanted = True  # cost the hydration
+            if not wanted:
+                skipped_filtered += 1
+                continue
         conversations[session_key] = conv
         loaded += 1
 
     logger.info(
         "[FOLLOWUP] hydrate complete keys=%d loaded=%d skipped_existing=%d "
-        "skipped_invalid=%d",
-        len(keys), loaded, skipped_existing, skipped_invalid,
+        "skipped_invalid=%d skipped_filtered=%d",
+        len(keys), loaded, skipped_existing, skipped_invalid, skipped_filtered,
     )
     return loaded
 
