@@ -121,6 +121,26 @@ _FOLLOWUP_CADENCE: list[dict[str, Any]] = [
 ]
 
 
+# Meta's standard messaging window. A conversation whose last bot reply is
+# older than this can no longer be sent to with `messaging_type="RESPONSE"`,
+# which is what this service uses, so there is nothing to recover by loading it.
+_MESSAGING_WINDOW: timedelta = timedelta(hours=24)
+
+
+def _within_messaging_window(conversation: Any) -> bool:
+    """True when a follow-up to this conversation could still be delivered.
+
+    Used as the hydration filter. A conversation with no marker yet is kept —
+    it has not been answered, so nothing about it is stale."""
+    raw = getattr(conversation, "last_bot_message_at", "") or ""
+    if not raw:
+        return True
+    last_bot = _parse_last_bot_message_at(raw)
+    if last_bot is None:
+        return True
+    return (now_tbilisi() - last_bot) <= _MESSAGING_WINDOW
+
+
 def _first_delay() -> timedelta:
     """Resolve the FIRST-stage follow-up delay.
 
@@ -256,6 +276,24 @@ def check_and_send_followups() -> None:
         )
     else:
         logger.info("[FOLLOWUP] Production cadence active")
+
+    # A deploy used to cost a parent their follow-up. The in-memory store starts
+    # empty after every restart and a conversation only returns to it when THAT
+    # parent writes again, so everyone who wrote before the restart was invisible
+    # here — live 2026-09-08, every tick of the day logged `scanning total=1`
+    # while Redis held the rest. `hydrate_from_redis` has existed since
+    # 2026-06-06 for the one-off CLI and was never called from the running
+    # server; calling it here is the whole fix.
+    #
+    # Only conversations a follow-up can still REACH are pulled in. Meta closes
+    # the messaging window 24h after the parent's last message (see the cadence
+    # note above), so hydrating older ones would only produce refused sends that
+    # still advance the stage — burning a stage that never arrived. Restarting
+    # inside the 22h wait is exactly the case this recovers.
+    try:
+        conversation_service.hydrate_from_redis(keep=_within_messaging_window)
+    except Exception as exc:  # pragma: no cover — a hydration fault must never
+        logger.warning("[FOLLOWUP] hydrate failed: %s", exc)  # skip the tick
 
     snapshot = conversation_service.get_all_conversations_snapshot()
     # Follow-up Live-Test Hydrate Patch (2026-06-06): also surface the
