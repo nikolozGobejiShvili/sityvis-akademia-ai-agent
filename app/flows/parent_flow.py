@@ -1156,6 +1156,76 @@ def _maybe_handle_program_overview(
     return short
 
 
+_PROGRAM_CHOICE_TEMPLATE_ID = "program_choice_question"
+# Used only when the operator has not written their own. The NAMES always come
+# from the panel; this is the sentence around them.
+_PROGRAM_CHOICE_FALLBACK = "რომელი გაინტერესებთ: {listed}?"
+
+
+def _maybe_ask_which_programme(
+    conversation: Conversation, message: str,
+) -> str | None:
+    """Ask which programme, when the word used answers to more than one.
+
+    „ბანაკი" identified a single programme for as long as the panel held one
+    camp. With „საზაფხულო ბანაკი" and „პარიზის ბანაკი" both switched on it
+    identifies neither, and measured on 2026-09-08 the turn went to whichever
+    handler the code happened to reach first — the summer camp, every time,
+    whatever the parent meant.
+
+    Guessing between them is the one thing that must not happen, so this asks.
+    Placed above every camp handler, so a turn that cannot be resolved is never
+    answered from one of the candidates by accident.
+
+    Nothing here is specific to camps: the same holds for two programmes whose
+    names share „სკოლა" or „ღონისძიება". The names are read from the panel at
+    reply time, so switching one off removes it from the question with no code
+    change — and drops the count to one, at which point the question stops being
+    asked at all and the remaining programme simply answers.
+
+    Asked once: the same question re-sent would mean the parent's reply did not
+    name one either, and repeating it is a loop. The turn goes to the engine
+    instead, which can hold that conversation.
+    """
+    try:
+        from app.reasoning.dynamic_program_match import (
+            programs_answering_to_ambiguous_word,
+        )
+        from app.services import admin_config_service
+
+        sections = admin_config_service.get_active_sections() or []
+        candidates = programs_answering_to_ambiguous_word(message, sections)
+        if len(candidates) < 2:
+            return None
+        names = [str(s.get("name") or "").strip() for s in candidates]
+        names = [n for n in names if n]
+        if len(names) < 2:
+            return None
+        listed = " თუ ".join(names) if len(names) == 2 else ", ".join(names)
+        rendered = ""
+        try:
+            rendered = admin_config_service.render_template(
+                _PROGRAM_CHOICE_TEMPLATE_ID, {"listed": listed},
+            )
+        except Exception:  # pragma: no cover — defensive
+            rendered = ""
+        question = (rendered or "").strip() or _PROGRAM_CHOICE_FALLBACK.format(
+            listed=listed,
+        )
+        for turn in (conversation.history or []):
+            if ((turn or {}).get("role") == "assistant"
+                    and ((turn or {}).get("content") or "").strip() == question):
+                return None
+        logger.info(
+            "[parent_flow] the word names %d active programmes — asking which "
+            "(%s)", len(names), ", ".join(
+                (s.get("id") or "").strip() for s in candidates),
+        )
+        return question
+    except Exception:  # pragma: no cover — never break a turn over this
+        return None
+
+
 def _maybe_handle_camp_status(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -1238,6 +1308,24 @@ def _maybe_handle_camp_status(
                 "active program (sender=%s)", getattr(conversation, "sender_id", "?"),
             )
             return None
+
+    # This gate is also called from INSIDE the dynamic-program hoist, so being
+    # routed to the engine is not enough to keep a turn away from it: the hoist
+    # runs this first. It therefore asks the same question `_program_id_for_turn`
+    # asks — which single active programme does this message identify? — and
+    # stands down when the answer is not this camp.
+    #
+    # Measured live 2026-09-08 with „პარიზის ბანაკი" active and the summer camp
+    # off: „ბანაკი მაინტერესებს" came back „ბანაკის მიმდინარე ნაკადები უკვე
+    # დასრულებულია". Nothing else in the chain matters while this fires first.
+    owner = _program_id_for_turn(message)
+    if owner and owner != "summer_camp":
+        logger.info(
+            "[parent_flow] camp-status deferred — the turn identifies another "
+            "active programme (program=%s sender=%s)",
+            owner, getattr(conversation, "sender_id", "?"),
+        )
+        return None
 
     has_camp = _msg_has_camp_intent(message)
     is_child_offering = _msg_is_child_offering(message)
@@ -1397,16 +1485,45 @@ def _is_dynamic_program_turn(message: str) -> bool:
     unchanged. Fail-closed on any error."""
     if not getattr(settings, "USE_DYNAMIC_PROGRAMS", False):
         return False
+    pid = _program_id_for_turn(message)
+    return bool(pid) and pid not in reserved_program_ids()
+
+
+def _program_id_for_turn(message: str) -> str:
+    """The single active programme this message identifies, or "".
+
+    Two ways to identify one, and they are the same claim at different
+    strengths. A NAME is unambiguous by itself. A generic word — „ბანაკი",
+    „სკოლა" — is unambiguous only when exactly one active programme answers to
+    it, and then it is every bit as precise as the title: with one camp in the
+    panel, „ბანაკი" can mean nothing else.
+
+    That second reading is what lets a camp behave like any other programme.
+    Without it the whole camp vocabulary is unreachable — „საზაფხულო ბანაკი" is
+    made entirely of generic words — so every camp turn fell past the dynamic
+    path into handlers that answer for ONE camp, whichever the parent meant.
+
+    Nothing here decides what to DO with the programme: a reserved one is still
+    filtered out by the caller and keeps its curated flow. Never raises.
+    """
     try:
         from app.services import admin_config_service
-        from app.reasoning.dynamic_program_match import match_dynamic_program
+        from app.reasoning.dynamic_program_match import (
+            match_dynamic_program, programs_answering_to_ambiguous_word,
+        )
+        sections = admin_config_service.get_active_sections() or []
         match = match_dynamic_program(
-            message, admin_config_service.get_active_sections(),
+            message, sections,
             fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
         )
+        if match:
+            return str(match.get("program_id") or "").strip()
+        candidates = programs_answering_to_ambiguous_word(message, sections)
+        if len(candidates) == 1:
+            return str(candidates[0].get("id") or "").strip()
     except Exception:  # pragma: no cover - defensive
-        return False
-    return bool(match) and match.get("program_id") not in reserved_program_ids()
+        return ""
+    return ""
 
 
 def _tag_per_product_booking(conversation: Conversation, message: str) -> None:
@@ -1596,6 +1713,12 @@ def _maybe_handle_camp_facts_chain(
     calls one node instead of three. The ``camp_off`` gate, the exact order, the
     repeat-price full-block wrapping, and the ``_sanitise_booking_confirmation``
     wrapping are all preserved. Returns the first non-None sanitised response, else None."""
+    # Every handler in this chain answers for THIS camp. A turn that names some
+    # OTHER programme — including by a generic word only that one answers to —
+    # never arrives here: `_is_dynamic_program_turn` sends it to the engine
+    # above, with that programme's own fields. One place decides, so these
+    # handlers keep saying exactly what they always said.
+    #
     # Client follow-up hotfix (2026-06-30) — EXACT-DETAIL split: a KNOWN
     # general answer + an exact-unknown manager defer (food frequency / exact
     # menu / staff count / peer presence / age-group count). Immediate repeat
@@ -1925,6 +2048,15 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     program_overview = _maybe_handle_program_overview(conversation, message)
     if program_overview is not None:
         return program_overview
+
+    # When the word names more than one active programme, ask which — here,
+    # above every camp handler, so an unresolved turn is never answered from
+    # one of the candidates by accident. Below this point „ბანაკი" reaches
+    # handlers that all mean the summer camp, and with two camps switched on
+    # the first of them wins whatever the parent meant (measured 2026-09-08).
+    which_programme = _maybe_ask_which_programme(conversation, message)
+    if which_programme is not None:
+        return which_programme
 
     if getattr(settings, "USE_PARENT_LLM_ENGINE", False) and (
         _is_dynamic_program_turn(message)

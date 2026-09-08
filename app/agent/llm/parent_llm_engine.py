@@ -3435,7 +3435,42 @@ def _active_program_section(
             # the search: either the camp is on and its own handlers own the
             # turn, or it is off and there is no honest program to name.
             if any(stem in text.lower() for stem in _CAMP_WORD_STEMS):
-                return True, None
+                # …unless the panel says the word means something else now. The
+                # stems above read „ბანაკი" as THE summer camp, which was true
+                # while it was the only camp in the config. It is not any more:
+                # the operator can run „პარიზის ბანაკი" or „ზამთრის ბანაკი", and
+                # then ending the search here attaches no programme at all — so
+                # a parent who named Paris and asked „რამდენი დღეა?" reached the
+                # model with none of Paris's fields, measured 2026-09-08.
+                #
+                # Ask the panel which ACTIVE programmes answer to the word. One
+                # answer is not ambiguous and is the programme this turn is
+                # about; the camp keeps the turn when it is that one. Two or
+                # more, or none, and the original reading stands.
+                # A programme NAMED outright wins even when a camp word shares
+                # the sentence — „პარიზის ბანაკი" is both at once, and reading
+                # it as a camp turn is what left the parent's follow-ups with no
+                # programme attached. Only when nothing is named specifically
+                # does the count below decide.
+                if match_dynamic_program(text, probe_sections, fuzzy=fuzzy) is None:
+                    from app.reasoning.dynamic_program_match import (
+                        programs_answering_to_ambiguous_word,
+                    )
+                    # The REAL sections, not `probe_sections`: those have every
+                    # status forced to active so an OFF programme stays visible
+                    # to the matcher, and counting candidates against them would
+                    # see a switched-off camp as a rival and call the word
+                    # ambiguous — measured, on the first attempt at this.
+                    owners = programs_answering_to_ambiguous_word(
+                        text, list(by_id.values()),
+                    )
+                    if len(owners) == 1:
+                        owner = _if_active(
+                            by_id.get((owners[0].get("id") or "").strip()),
+                        )
+                        if owner is not None:
+                            return True, owner
+                    return True, None
             hit = match_dynamic_program(text, probe_sections, fuzzy=fuzzy)
             if not hit:
                 return False, None

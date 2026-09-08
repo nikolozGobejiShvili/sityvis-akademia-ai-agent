@@ -100,16 +100,23 @@ def _camp_context(conversation) -> bool:
     """
     if conversation is None:
         return False
-    # The canonical resolver the turn context uses. A section here means the
-    # parent is demonstrably on some OTHER active program — camp is never
-    # returned by it (a camp turn resolves to "nothing"), so any hit is a
-    # non-camp program and settles the question.
+    # The canonical resolver the turn context uses. A section here used to mean
+    # the parent is on some OTHER active program, because a camp turn resolved
+    # to "nothing" — the resolver stopped at the camp word.
+    #
+    # It no longer does (2026-09-08): the camp word is looked up in the panel
+    # first, so the camp itself can come back, and „პარიზის ბანაკი" comes back
+    # as its own programme. The id therefore has to be read. A non-camp
+    # programme settles the question as before; the camp is no evidence either
+    # way and falls through to the assistant-turn scan below, which is exactly
+    # what this function did for a camp turn before the resolver could name it.
     try:
         from app.agent.llm.parent_llm_engine import _active_program_section
 
-        if _active_program_section(
-            conversation, "", getattr(conversation, "lead", None)
-        ) is not None:
+        section = _active_program_section(
+            conversation, "", getattr(conversation, "lead", None),
+        )
+        if section is not None and (section.get("id") or "").strip() != "summer_camp":
             return False
     except Exception:  # pragma: no cover — defensive: fall through to the scan
         pass
