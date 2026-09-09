@@ -710,16 +710,20 @@ _CAMP_OFF_ALT: str = (
     "ამ ეტაპზე თქვენი შვილისთვის შეგვიძლია შემოგთავაზოთ საკვირაო სკოლა. "
     "თუ გსურთ, დეტალებზე მენეჯერთან დაგაკავშირებთ."
 )
-# hidden and ended share the "streams completed" wording.
-_CAMP_MSG_ENDED: str = "ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n" + _CAMP_OFF_ALT
+# hidden and ended share the "the camp is behind us" wording. The live sentence
+# is built by `_camp_over_line()` from the panel name; these module-level
+# constants are the import-time fallback (the panel is not loaded at import).
+_CAMP_DISPLAY_NAME_FALLBACK: str = "ბანაკი"
+_CAMP_OVER_FALLBACK: str = (
+    f"{_CAMP_DISPLAY_NAME_FALLBACK} უკვე გაიმართა და რეგისტრაცია დასრულებულია."
+)
+_CAMP_MSG_ENDED: str = _CAMP_OVER_FALLBACK + "\n\n" + _CAMP_OFF_ALT
 _CAMP_MSG_FULL: str = "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია.\n\n" + _CAMP_OFF_ALT
 _CAMP_MSG_COMING_SOON: str = "ბანაკის დეტალები ჯერ ზუსტდება.\n\n" + _CAMP_OFF_ALT
-_CAMP_SHORT_ENDED: str = "ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია."
+_CAMP_SHORT_ENDED: str = _CAMP_OVER_FALLBACK
 _CAMP_SHORT_FULL: str = "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია."
 _CAMP_SHORT_COMING_SOON: str = "ბანაკის დეტალები ჯერ ზუსტდება."
-_CAMP_ENDED_DIRECT: str = (
-    "დიახ, ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n" + _CAMP_OFF_ALT
-)
+_CAMP_ENDED_DIRECT: str = "დიახ, " + _CAMP_OVER_FALLBACK + "\n\n" + _CAMP_OFF_ALT
 _CAMP_OFF_CHILD_PREFIX: str = "ამ ეტაპზე ბანაკის მიმდინარე ნაკადები აქტიური არ არის."
 _CAMP_OFF_ADULT_POINTER: str = "რაც შეეხება ზრდასრულთა ღონისძიებებს — რომელი გაინტერესებთ?"
 _CAMP_OVERAGE_ADULT_REDIRECT: str = (
@@ -787,8 +791,41 @@ def _camp_off_alt() -> str:
     return f"ამ ეტაპზე თქვენი შვილისთვის აქტიურია: {listed}.\n\n{contact}"
 
 
+def _camp_display_name() -> str:
+    """The camp's name as the OPERATOR wrote it in the panel.
+
+    The season is deliberately NOT written into the sentence below: „ზაფხულში"
+    is true of this camp and false of the next one the operator adds. The panel
+    name carries it instead — „საზაფხულო ბანაკი უკვე გაიმართა" today, and
+    „ზამთრის ბანაკი უკვე გაიმართა" for a winter intake — so one sentence stays
+    correct for every camp. Falls back to the bare word. Never raises.
+    """
+    try:
+        from app.services import admin_config_service
+        name = str(
+            (admin_config_service.get_section("summer_camp") or {}).get("name") or ""
+        ).strip()
+        if name:
+            return name
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return _CAMP_DISPLAY_NAME_FALLBACK
+
+
+def _camp_over_line() -> str:
+    """What is said once the camp is behind us, rather than mid-season.
+
+    The old sentence was „ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია" — the
+    stream framing of a camp that is still running. Measured live 2026-09-09,
+    in September: a parent asking „ბანაკზე როგორ დავრეგისტრირდე?" was told the
+    „current streams" were finished, which reads as though one had just closed.
+    The camp took place in the summer and is over; the sentence now says that.
+    """
+    return f"{_camp_display_name()} უკვე გაიმართა და რეგისტრაცია დასრულებულია."
+
+
 def _camp_ended_direct() -> str:
-    return "დიახ, ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n" + _camp_off_alt()
+    return "დიახ, " + _camp_over_line() + "\n\n" + _camp_off_alt()
 
 
 def _camp_status_message(status: str) -> str:
@@ -797,7 +834,7 @@ def _camp_status_message(status: str) -> str:
         return "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია.\n\n" + alt
     if status == "coming_soon":
         return "ბანაკის დეტალები ჯერ ზუსტდება.\n\n" + alt
-    return "ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n" + alt  # hidden / ended
+    return _camp_over_line() + "\n\n" + alt  # hidden / ended
 
 
 def _camp_status_short(status: str) -> str:
@@ -805,7 +842,7 @@ def _camp_status_short(status: str) -> str:
         return _CAMP_SHORT_FULL
     if status == "coming_soon":
         return _CAMP_SHORT_COMING_SOON
-    return _CAMP_SHORT_ENDED
+    return _camp_over_line()
 
 
 def _msg_has_camp_intent(message: str) -> bool:

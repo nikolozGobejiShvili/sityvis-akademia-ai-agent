@@ -3618,6 +3618,42 @@ def _build_context_message(
                     "in the first description"
                 )
 
+    # Where the camp stands, and what the parent is actually offered once it is
+    # behind us. Live 2026-09-09, in September, „როდის დაიწყება?" came back
+    # „2026 წლის ბანაკის ყველა ნაკადი უკვე დაწყებულია" — the camp had taken
+    # place, it had not just started — and offered to put the parent on a
+    # „სალოდინო სია", a list that exists nowhere in the product under that name.
+    #
+    # The deterministic camp-off answer says the right thing, but it only owns
+    # turns carrying a camp word; this follow-up carried none, so the model
+    # answered from the gap and filled it — the same shape as the business hours
+    # it once invented before the real window travelled with the turn. Both
+    # lines are facts, not rules about wording: the camp has taken place, and
+    # the list a parent's contact goes on has a name the operator uses.
+    #
+    # Emitted only when this turn belongs to the camp or to no programme in
+    # particular. With another camp running — „პარიზის ბანაკი" active while the
+    # summer one is `ended` — a bare „the camp has already taken place" beside
+    # `active_program=პარიზის ბანაკი` reads as though PARIS were over, which is
+    # the leak this whole arc has been closing.
+    _active_program_id = str((active_section or {}).get("id") or "").strip()
+    if _active_program_id in ("", "summer_camp"):
+        try:
+            from app.services import admin_config_service as _admin_cfg
+            _camp_status = _admin_cfg.get_camp_status()
+        except Exception:  # pragma: no cover - defensive
+            _camp_status = "active"
+        if _camp_status in ("ended", "hidden"):
+            parts.append(
+                f"camp_status={_camp_status} (the camp has already taken place "
+                "and registration for it is closed — it did not just start)"
+            )
+            parts.append(
+                "camp_intake_list=ბანაკის მსურველთა სია (the list a parent's "
+                "name and contact number goes on while no camp intake is open; "
+                "the manager then contacts them about the next one)"
+            )
+
     if adult_target_relation:
         parts.append(f"adult_target_relation={adult_target_relation}")
     if adult_target_age:
