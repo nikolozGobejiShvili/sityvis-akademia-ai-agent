@@ -70,9 +70,14 @@ def test_camp_off_offer_on_lists_active_child_programs(monkeypatch):
     assert "საკვირაო სკოლა" not in out       # inactive → not offered (the live bug)
 
 
-def test_camp_off_offer_on_no_child_programs_offers_manager(monkeypatch):
+def test_camp_off_offer_on_no_child_programs_asks_for_the_contact(monkeypatch):
+    """With nothing running for the child, the parent is still routed to a
+    manager — but asked for the name and number outright rather than offered a
+    connection to accept (2026-09-09, operator's instruction). The assertion
+    used to be on the word „მენეჯერთან", which was the old wording's case form."""
     out = _msg(monkeypatch, True, [{"id": "adult_events", "name": "ღონ", "status": "active", "type": "adult_events"}])
-    assert "მენეჯერთან" in out
+    assert "მენეჯერი" in out
+    assert "სახელი" in out and "ნომერი" in out
     assert "საკვირაო სკოლა" not in out
 
 

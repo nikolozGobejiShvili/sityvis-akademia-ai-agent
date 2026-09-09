@@ -127,6 +127,22 @@ def notify_manager(lead: Lead, event_type: str) -> bool:
     return email_ok and whatsapp_ok
 
 
+def _lead_program_name(lead: Lead) -> str:
+    """The panel's name for the programme this lead is about, or "".
+
+    Read from `lead.program_id`, which the flow sets before handing over, so no
+    caller signature changes and every existing stub keeps working."""
+    try:
+        pid = (getattr(lead, "program_id", "") or "").strip()
+        if not pid:
+            return ""
+        from app.services import admin_config_service
+        section = admin_config_service.get_section(pid) or {}
+        return str(section.get("name") or "").strip()
+    except Exception:  # pragma: no cover — a name must never block a handoff
+        return ""
+
+
 def notify_sunday_school_handoff(lead: Lead) -> bool:
     """EMAIL-ONLY manager handoff for a Sunday-School lead (planned July).
 
@@ -137,17 +153,34 @@ def notify_sunday_school_handoff(lead: Lead) -> bool:
     so existing flows + WhatsApp notification logic stay unchanged."""
     name = (lead.name or "").strip() or "—"
     phone = (lead.phone or "").strip() or "—"
+    # Which programme the parent actually asked about. This flow collects the
+    # contact for any programme that has no booking of its own, so naming
+    # Sunday School unconditionally told the manager the wrong thing: measured
+    # 2026-09-09, a parent asking about the camp with every camp switched off
+    # was handed over as a Sunday-School lead. The caller passes the name the
+    # operator gave the programme in the panel; empty falls back to the wording
+    # this mail always had.
+    programme = _lead_program_name(lead)
+    headline = (
+        f"{programme} — ახალი მოთხოვნა (კონსულტაცია არ დაჯავშნილა)."
+        if programme else
+        "საკვირაო სკოლის ახალი მოთხოვნა (ბანაკის კონსულტაცია არ დაჯავშნილა)."
+    )
     body = "\n".join([
-        "საკვირაო სკოლის ახალი მოთხოვნა (ბანაკის კონსულტაცია არ დაჯავშნილა).",
+        headline,
         "",
         f"სახელი: {name}",
         f"ტელეფონი: {phone}",
-        "ტიპი: საკვირაო სკოლა (sunday_school)",
+        f"პროგრამა: {programme}" if programme
+        else "ტიპი: საკვირაო სკოლა (sunday_school)",
         "",
         f"პლატფორმა: {lead.platform}",
         f"სეგმენტი: {lead.segment}",
     ])
-    subject = f"საკვირაო სკოლა — ახალი მოთხოვნა — {name}"
+    subject = (
+        f"{programme} — ახალი მოთხოვნა — {name}" if programme
+        else f"საკვირაო სკოლა — ახალი მოთხოვნა — {name}"
+    )
     try:
         return _send_email(subject=subject, body=body)
     except Exception as exc:
