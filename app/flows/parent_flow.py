@@ -738,6 +738,34 @@ _CAMP_CHILD_OFFERING_MARKERS: tuple[str, ...] = (
 _CAMP_ADULT_MARKERS: tuple[str, ...] = ("ზრდასრულ", "კულტურულ")
 
 
+# What the parent is asked to do once no camp is running. „თუ გსურთ,
+# დეტალებზე მენეჯერთან დაგაკავშირებთ" left the next move to them and most
+# conversations ended there; the operator's instruction is to ask for the
+# contact outright, so the manager can call back about the next intake.
+#
+# Reached ONLY when no camp owns the turn: another active camp is routed to its
+# own programme before this, and two active camps are asked about. So „the camp
+# is over" is only ever said when it is true of every camp in the panel.
+#
+# Operator-editable, like the rest of the copy; the constant is the fallback.
+_CAMP_OFF_CONTACT_TEMPLATE_ID = "camp_off_leave_contact"
+_CAMP_OFF_CONTACT: str = (
+    "მომწერეთ თქვენი სახელი და საკონტაქტო ნომერი და მენეჯერი დაგიკავშირდებათ."
+)
+
+
+def _camp_off_contact_line() -> str:
+    try:
+        from app.services import admin_config_service
+        rendered = (admin_config_service.render_template(
+            _CAMP_OFF_CONTACT_TEMPLATE_ID, {}) or "").strip()
+        if rendered:
+            return rendered
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return _CAMP_OFF_CONTACT
+
+
 def _camp_off_alt() -> str:
     """The „what else" line appended to a camp-off status message. When
     USE_PROGRAM_AUDIENCE is on, offers the ACTIVE child/family programs BY NAME from
@@ -752,13 +780,11 @@ def _camp_off_alt() -> str:
         names = admin_config_service.get_active_child_program_names()
     except Exception:  # pragma: no cover - defensive
         return _CAMP_OFF_ALT
+    contact = _camp_off_contact_line()
     if not names:
-        return "თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
+        return contact
     listed = ", ".join(names)
-    return (
-        f"ამ ეტაპზე თქვენი შვილისთვის აქტიურია: {listed}. "
-        "თუ გსურთ, დეტალებზე მენეჯერთან დაგაკავშირებთ."
-    )
+    return f"ამ ეტაპზე თქვენი შვილისთვის აქტიურია: {listed}.\n\n{contact}"
 
 
 def _camp_ended_direct() -> str:
@@ -1593,8 +1619,12 @@ def _resolve_consultation_program_name(
             sec = admin_config_service.get_section(pid) or {}
             return str(sec.get("name") or fallback or pid)
 
+        # Naming is not routing. A reserved programme keeps its curated flow,
+        # but the CRM column still has to say WHICH programme the consultation
+        # is for — writing "" there, or the wrong name, is how a camp booking
+        # ends up filed under another programme.
         pid = (getattr(lead, "program_id", "") or "").strip()
-        if pid and pid not in reserved_program_ids():
+        if pid:
             return _name(pid)
 
         recent = " ".join(
@@ -1603,12 +1633,13 @@ def _resolve_consultation_program_name(
             if isinstance(m, dict) and m.get("role") == "user"
         )
         if recent.strip():
-            m = match_dynamic_program(
-                recent, admin_config_service.get_active_sections(),
-                fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
-            )
-            if m and m.get("program_id") not in reserved_program_ids():
-                return _name(m["program_id"])
+            # The same resolver the routing uses, so the name on the record and
+            # the programme that answered can never disagree. It reads a generic
+            # word too, which `match_dynamic_program` refuses — „ბანაკი" names a
+            # camp here exactly as it does everywhere else.
+            resolved = _program_id_for_turn(recent)
+            if resolved:
+                return _name(resolved)
             if _is_sunday_school_intent(recent):
                 return _name("sunday_school", "საკვირაო სკოლა")
             if any(k in recent.lower() for k in _CAMP_STATUS_KEYWORDS):
@@ -6535,6 +6566,23 @@ def _sunday_school_dispatch(conversation: Conversation, lead, text: str) -> str:
     success / failure confirmation. Reused by the known-contact short-circuit
     and the contact-collection completion."""
     dispatched = False
+    # This flow takes the contact for any programme without a booking of its
+    # own, so the manager has to be told WHICH one — it named Sunday School
+    # unconditionally, and a camp enquiry with every camp off was handed over
+    # under that name (measured 2026-09-09). Recorded on the LEAD rather than
+    # passed as an argument, so the notifier and the CRM read one field and no
+    # caller signature changes.
+    if not (getattr(lead, "program_id", "") or "").strip():
+        try:
+            resolved = _program_id_for_turn(" ".join(
+                str(t.get("content") or "")
+                for t in (getattr(conversation, "history", []) or [])
+                if isinstance(t, dict) and t.get("role") == "user"
+            ) + " " + (text or ""))
+            if resolved:
+                lead.program_id = resolved
+        except Exception:  # pragma: no cover — never block a handoff on a name
+            pass
     try:
         dispatched = notification_service.notify_sunday_school_handoff(lead)
     except Exception:
