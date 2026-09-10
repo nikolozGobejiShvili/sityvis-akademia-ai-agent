@@ -27,7 +27,11 @@ from app.models.lead import Lead
 from app.services import admin_config_service, conversation_service, messenger_service
 
 # ── Expected wording ─────────────────────────────────────────────────────────
-_ENDED = "ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია."
+# The camp-over sentence takes the OPERATOR's panel name (2026-09-09), so the
+# season is never written into the code: „საზაფხულო ბანაკი" here, and a winter
+# intake would read „ზამთრის ბანაკი უკვე გაიმართა". The fixture below names the
+# section „საზაფხულო ბანაკი".
+_ENDED = "საზაფხულო ბანაკი უკვე გაიმართა და რეგისტრაცია დასრულებულია."
 _FULL = "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია."
 _COMING = "ბანაკის დეტალები ჯერ ზუსტდება."
 # Approved wording (2026-07-02): camp-off offers ONLY Sunday School + manager
@@ -340,9 +344,11 @@ def test_28_child_offering_points_to_sunday_school(monkeypatch):
 # =====================================================================
 # Approved wording (2026-07-02): exact camp-off text + no adult by default
 # =====================================================================
+# hidden/ended are built from the panel name at call time, so they are pinned
+# to the rendered sentence rather than to the import-time fallback constant.
 _EXPECTED_BY_STATUS = {
-    "hidden": parent_flow._CAMP_MSG_ENDED,
-    "ended": parent_flow._CAMP_MSG_ENDED,
+    "hidden": _ENDED + "\n\n" + _ALT,
+    "ended": _ENDED + "\n\n" + _ALT,
     "full": parent_flow._CAMP_MSG_FULL,
     "coming_soon": parent_flow._CAMP_MSG_COMING_SOON,
 }
@@ -360,11 +366,7 @@ def test_29_camp_off_exact_wording_no_adult(monkeypatch, camp_status):
 
 def test_30_direct_completed_question_wording(monkeypatch):
     out = _ask(monkeypatch, "ended", "ბანაკი დასრულდა?")
-    assert out == (
-        "დიახ, ბანაკის მიმდინარე ნაკადები უკვე დასრულებულია.\n\n"
-        "ამ ეტაპზე თქვენი შვილისთვის შეგვიძლია შემოგთავაზოთ საკვირაო სკოლა. "
-        "თუ გსურთ, დეტალებზე მენეჯერთან დაგაკავშირებთ."
-    )
+    assert out == "დიახ, " + _ENDED + "\n\n" + _ALT
     assert "ზრდასრულ" not in out
 
 
