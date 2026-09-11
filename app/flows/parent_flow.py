@@ -12425,6 +12425,16 @@ def _book_selected_slot(conversation: Conversation, lead: Lead, slot: dict) -> b
         lead.consultation_program_name = _resolve_consultation_program_name(
             conversation, lead,
         )
+        # The programme was invisible on this path: the live logs of 2026-09-11
+        # showed a booking, a CRM row and a sent mail, and no way to tell WHICH
+        # programme any of them were for. The operator has to read the mail to
+        # find out. One line makes it checkable.
+        logger.info(
+            "[parent_flow] consultation programme resolved name=%r program_id=%r "
+            "(sender=%s)",
+            lead.consultation_program_name,
+            getattr(lead, "program_id", "") or "", conversation.sender_id,
+        )
 
     logger.info("[parent_flow] Attempting sheets append for lead sender=%s", lead.sender_id)
     try:
