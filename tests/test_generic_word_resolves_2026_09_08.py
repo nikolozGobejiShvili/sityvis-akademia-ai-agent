@@ -47,13 +47,44 @@ _SCHOOL = {
 
 @pytest.mark.parametrize("msg", [
     "ბანაკი მაინტერესებს",
-    "საზაფხულო ბანაკი მაინტერესებს",
     "ბანაკის ფასი რა არის?",
 ])
 def test_the_matcher_still_refuses_a_generic_word(msg):
     """Unchanged, and deliberately so — one generic word cannot identify a
     programme, and letting it would claim every camp at once."""
     assert match_dynamic_program(msg, [dict(_CAMP)]) is None
+
+
+def test_the_whole_name_identifies_a_programme_built_from_shared_words():
+    """„საზაფხულო ბანაკი" is every one of its words shared — „ბანაკ" with every
+    camp, „საზაფხულო" with the season — so it could not be named at all. Live
+    2026-09-11 with every camp active, a parent who wrote the name in full was
+    asked „რომელი გაინტერესებთ: საზაფხულო ბანაკი, …?", the answer they had just
+    given offered back as an option.
+
+    Saying the WHOLE name is the specificity the single words lack. The bare
+    word above still refuses, so the which-one question is untouched.
+    """
+    match = match_dynamic_program("საზაფხულო ბანაკი მაინტერესებს", [dict(_CAMP)])
+    assert match is not None and match["program_id"] == "summer_camp"
+
+
+def test_a_full_name_cannot_claim_a_different_camp():
+    """The rule is all-tokens, so one camp's full name never satisfies another's
+    — „პარიზის" is absent from „საზაფხულო ბანაკი"."""
+    assert match_dynamic_program(
+        "საზაფხულო ბანაკი მაინტერესებს", [dict(_PARIS)]) is None
+    assert match_dynamic_program(
+        "პარიზის ბანაკი მაინტერესებს", [dict(_CAMP)]) is None
+
+
+def test_two_camps_both_named_in_full_still_resolve_to_the_named_one():
+    for msg, expected in (
+        ("საზაფხულო ბანაკი მაინტერესებს", "summer_camp"),
+        ("პარიზის ბანაკი მაინტერესებს", "paris_camp"),
+    ):
+        match = match_dynamic_program(msg, [dict(_CAMP), dict(_PARIS)])
+        assert match is not None and match["program_id"] == expected, msg
 
 
 def test_one_active_programme_answers_to_the_word(ambiguous=None):
