@@ -37,3 +37,7 @@ tools/reports/
 Thumbs.db
 .idea/
 .vscode/
+
+# generated knowledge-graph output — never committed
+graphify-out/
+app/graphify-out/
