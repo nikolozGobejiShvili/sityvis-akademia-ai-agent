@@ -1638,7 +1638,7 @@ def _is_active_per_product_booking(conversation: Conversation) -> bool:
 
 
 def _resolve_consultation_program_name(
-    conversation: Conversation, lead: Lead,
+    conversation: Conversation, lead: Lead, extra_text: str = "",
 ) -> str:
     """The NAME of the program THIS consultation was requested for — for the CRM
     „Program" column (USE_CONSULTATION_PROGRAM_NAME, 2026-07-27 live test #6).
@@ -1665,9 +1665,10 @@ def _resolve_consultation_program_name(
             return _name(pid)
 
         recent = " ".join(
-            str(m.get("content") or "")
-            for m in (getattr(conversation, "history", []) or [])[-8:]
-            if isinstance(m, dict) and m.get("role") == "user"
+            [str(m.get("content") or "")
+             for m in (getattr(conversation, "history", []) or [])[-8:]
+             if isinstance(m, dict) and m.get("role") == "user"]
+            + ([extra_text] if (extra_text or "").strip() else [])
         )
         if recent.strip():
             # The same resolver the routing uses, so the name on the record and
@@ -6648,15 +6649,19 @@ def _sunday_school_dispatch(conversation: Conversation, lead, text: str) -> str:
     # under that name (measured 2026-09-09). Recorded on the LEAD rather than
     # passed as an argument, so the notifier and the CRM read one field and no
     # caller signature changes.
-    if not (getattr(lead, "program_id", "") or "").strip():
+    if not (getattr(lead, "consultation_program_name", "") or "").strip():
         try:
-            resolved = _program_id_for_turn(" ".join(
-                str(t.get("content") or "")
-                for t in (getattr(conversation, "history", []) or [])
-                if isinstance(t, dict) and t.get("role") == "user"
-            ) + " " + (text or ""))
+            # ONE resolver for „which programme is this about?", the same one the
+            # CRM column asks. The first attempt here asked `_program_id_for_turn`
+            # alone, which answers only for an ACTIVE programme — so on 2026-09-11
+            # a camp enquiry with every camp switched off resolved to nothing and
+            # the mail named Sunday School again, while the Sheet row was right.
+            # The shared resolver carries the tiers that answer that case.
+            resolved = _resolve_consultation_program_name(
+                conversation, lead, extra_text=text or "",
+            )
             if resolved:
-                lead.program_id = resolved
+                lead.consultation_program_name = resolved
         except Exception:  # pragma: no cover — never block a handoff on a name
             pass
     try:
