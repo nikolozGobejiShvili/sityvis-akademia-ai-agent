@@ -216,6 +216,24 @@ def _camp_public_info_limited_tool_result(topic: str) -> dict[str, Any]:
         "message": message,
     }
 
+# A consultation is booked for the programme the parent named, and the two rules
+# that decide whether it may be booked at all — the AGE BAND and the REGISTRATION
+# GATE — have to be that programme's. Both helpers in `admin_config_service`
+# already read any programme's section, so the only ids that stay out here are the
+# two that already mean something else to those helpers: `summer_camp`, for which
+# "" IS the camp band and the camp gate (so camp behaviour is unchanged), and the
+# adult programme, which has no Calendar booking at all.
+#
+# Everything reserved was excluded before. Measured 2026-09-11 with the operator's
+# own panel — camp 9-17, Sunday School 6-12: a Sunday-School consultation was
+# judged by the camp band, and by the camp's registration gate while the school's
+# own was closed. `_registration_open_for_booking` below records the same defect
+# being fixed for DYNAMIC products on 2026-07-23; the reserved one was left behind.
+_BOOKING_PROGRAM_DEFAULTS: frozenset[str] = frozenset({
+    ProgramId.SUMMER_CAMP.value, ProgramId.ADULT_EVENTS.value,
+})
+
+
 @dataclass
 class ParentToolExecutor:
     """Executes the closed-set of tools the PARENT LLM is allowed to call.
@@ -1138,7 +1156,7 @@ class ParentToolExecutor:
                 fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
             )
             pid = (m or {}).get("program_id") or ""
-            if pid and pid not in reserved_program_ids():
+            if pid and pid not in _BOOKING_PROGRAM_DEFAULTS:
                 self.lead.program_id = pid
                 return pid
         except Exception:  # pragma: no cover - defensive → fall through to camp
@@ -1160,7 +1178,7 @@ class ParentToolExecutor:
         #    the documented single-product-conversation scope limitation (see
         #    docs/ENABLEMENT_USE_PER_PRODUCT_BOOKING.md).
         stuck = (getattr(self.lead, "program_id", "") or "").strip()
-        if stuck and stuck not in reserved_program_ids():
+        if stuck and stuck not in _BOOKING_PROGRAM_DEFAULTS:
             return stuck
         # 4. camp
         return ""
