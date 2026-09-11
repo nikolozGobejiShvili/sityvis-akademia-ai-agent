@@ -130,9 +130,18 @@ def notify_manager(lead: Lead, event_type: str) -> bool:
 def _lead_program_name(lead: Lead) -> str:
     """The panel's name for the programme this lead is about, or "".
 
-    Read from `lead.program_id`, which the flow sets before handing over, so no
-    caller signature changes and every existing stub keeps working."""
+    `consultation_program_name` is asked FIRST — it is the name the flow already
+    resolved for the CRM's „Program" column, and it answers in cases `program_id`
+    cannot. Measured live 2026-09-11: a parent enquired about the camp with every
+    camp switched off, left a name and number, and the mail named Sunday School,
+    because `_program_id_for_turn` returns "" when no ACTIVE programme answers,
+    leaving `program_id` empty and the wording falling back. The Sheet row for the
+    same lead was right, because it reads the resolved name. One question, one
+    source: the mail and the CRM can no longer disagree."""
     try:
+        resolved = (getattr(lead, "consultation_program_name", "") or "").strip()
+        if resolved:
+            return resolved
         pid = (getattr(lead, "program_id", "") or "").strip()
         if not pid:
             return ""
@@ -380,6 +389,14 @@ def _program_interest_phrase(lead: Lead) -> str:
     name the REAL program (e.g. „დისნეილენდი") instead of always „ბანაკი", so the
     manager email is correct. Empty program_id OR flag off → „ბანაკით" (byte-identical).
     Never raises."""
+    # Same single source as the handoff mail and the CRM column: the name the
+    # flow resolved for THIS consultation. Live 2026-09-11 a Sunday-School
+    # booking reached the manager with no programme named at all, while the Sheet
+    # row for it was correct — the mail asked `program_id`, which the booking
+    # path often leaves empty, and the Sheet asked the resolved name.
+    resolved = (getattr(lead, "consultation_program_name", "") or "").strip()
+    if resolved:
+        return f'პროგრამით „{resolved}"'
     pid = (getattr(lead, "program_id", "") or "").strip()
     if not pid or not getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
         return "ბანაკით"
