@@ -6552,6 +6552,27 @@ def _render_sunday_school_answer() -> str:
         settings, "USE_SECTION_STATUS_GATE", False
     ):
         return _SUNDAY_SCHOOL_NOT_OFFERED
+    # A RUNNING programme has no „status" to report — it has an answer, and the
+    # operator already wrote it. `availability_text` / `details_text` describe a
+    # programme that is not yet open; they were written while this one was
+    # `coming_soon` and the operator cannot see them (they appear in no admin
+    # template). Measured 2026-09-11 across every status: the pair was used on
+    # `active` and suppressed on `coming_soon` — exactly inverted — so a live
+    # programme with a full description told parents it was not open yet, naming
+    # a launch month left over from before it opened.
+    #
+    # Reading the panel's own description here is not new copy: it is the same
+    # field every other answer about this programme already uses.
+    if status_val == "active":
+        section = {}
+        try:
+            from app.services import admin_config_service as _acs
+            section = _acs.get_section("sunday_school") or {}
+        except Exception:  # pragma: no cover - defensive
+            section = {}
+        described = str(section.get("description_short") or "").strip()
+        if described:
+            return described
     avail = (st.get("availability_text") or "").strip() or _SUNDAY_SCHOOL_FALLBACK_AVAILABILITY
     details = (st.get("details_text") or "").strip()
     handoff = bool(st.get("handoff_enabled", True))

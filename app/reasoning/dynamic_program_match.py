@@ -166,16 +166,35 @@ def match_dynamic_program(
             continue
         if (s.get("status") or "active").strip().lower() != "active":
             continue
+        name_tokens = [
+            nt for nt in _tokens(s.get("name") or "") if len(nt) >= _MIN_LEN
+        ]
         name_hit = any(
             _token_matches(toks, nt, fuzzy=fuzzy)
-            for nt in _tokens(s.get("name") or "")
-            if len(nt) >= _MIN_LEN and not _is_ambiguous(nt)
+            for nt in name_tokens if not _is_ambiguous(nt)
+        )
+        # A programme whose name is made ENTIRELY of shared words had no way to
+        # be named at all. „საზაფხულო ბანაკი" is both — „ბანაკ" belongs to every
+        # camp and „საზაფხულო" to the season — so a parent who wrote the name in
+        # full was still asked „რომელი გაინტერესებთ: საზაფხულო ბანაკი, …?", with
+        # the answer they had just given listed as an option (measured
+        # 2026-09-11, every camp active).
+        #
+        # Saying the WHOLE name is the specificity the single tokens lack, so it
+        # counts even when every token is shared. Two tokens minimum: a
+        # one-word ambiguous name („ბანაკი") must keep asking, and it still does
+        # — a bare „ბანაკი" matches one of this name's two tokens, not both.
+        # Nothing else can collide: „საზაფხულო ბანაკი" never satisfies
+        # „პარიზის ბანაკი", whose „პარიზის" is absent.
+        full_name_hit = (
+            len(name_tokens) >= 2
+            and all(_token_matches(toks, nt, fuzzy=fuzzy) for nt in name_tokens)
         )
         specific_tags = [
             str(t) for t in (s.get("hashtags") or [])
             if len(str(t).strip().lstrip("#")) >= _MIN_LEN and not _is_ambiguous(str(t))
         ]
         tag_hit = any(_token_matches(toks, t, fuzzy=fuzzy) for t in specific_tags)
-        if name_hit or tag_hit:
+        if name_hit or tag_hit or full_name_hit:
             return {"program_id": pid, "type": s.get("type")}
     return None

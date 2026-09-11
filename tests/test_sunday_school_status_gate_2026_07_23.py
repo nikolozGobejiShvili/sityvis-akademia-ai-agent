@@ -55,7 +55,13 @@ def test_flag_on_coming_soon_unchanged(monkeypatch):
 
 
 def test_flag_on_active_ss_unchanged(monkeypatch):
+    """A RUNNING programme is never described as not running — that half is
+    unchanged. What it no longer does is read `availability_text`: those words
+    describe a programme that has not opened yet, and on 2026-09-11 they were
+    measured being used on `active` and suppressed on `coming_soon`, exactly
+    inverted, so a live programme announced its own launch month to parents."""
     _set_flag(monkeypatch, True)
     _patch_ss(monkeypatch, "active")
     out = parent_flow._render_sunday_school_answer()
-    assert "დაემატება" in out and "აქტიური არ არის" not in out
+    assert "აქტიური არ არის" not in out
+    assert "დაემატება" not in out

@@ -972,15 +972,14 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
         if booked or (in_flow_state and lead is not None):
             conversation.segment = "PARENT"
         else:
-            # The panel is asked FIRST and the word lists only answer when it
-            # has no opinion. Deleting the fallback outright was measured and
-            # reverted: „საზაფხულო ბანაკი მაინტერესებს" then fell to UNCLEAR,
-            # because that programme's name is built entirely from stems the
-            # matcher refuses as identifiers („საზაფხულო", „ბანაკ"), so a parent
-            # naming a closed programme got the generic menu instead of the
-            # honest „that intake is over". Removing the lists needs the
-            # one-programme-answers-this-word tier `_program_id_for_turn` already
-            # has; until routing has it, the fallback stays.
+            # Measured twice and reverted twice: replacing this fallback
+            # with "UNCLEAR" fixes eight of sixteen openings and breaks
+            # twenty-one tests, because the camp is reachable ONLY through
+            # these words — „ბანაკზე როგორ დავრეგისტრირდე" names no
+            # programme the panel can identify, and the one-programme-
+            # answers-this-word tier did not rescue it either. Removing
+            # them needs routing to resolve a camp the way
+            # `_program_id_for_turn` does. The panel is still asked first.
             conversation.segment = (
                 _match_active_program_segment(message_text)
                 or _classify_segment(message_text)
