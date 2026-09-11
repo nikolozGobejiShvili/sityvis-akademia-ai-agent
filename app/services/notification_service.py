@@ -170,10 +170,14 @@ def notify_sunday_school_handoff(lead: Lead) -> bool:
     # operator gave the programme in the panel; empty falls back to the wording
     # this mail always had.
     programme = _lead_program_name(lead)
+    # Operator rule, 2026-09-11: a consultation happens on an ACTIVE programme.
+    # Everywhere else this flow simply passes the manager a name, a number and
+    # what the parent is interested in — so the mail said nothing about a
+    # consultation. The parenthetical read as though one had been expected.
     headline = (
-        f"{programme} — ახალი მოთხოვნა (კონსულტაცია არ დაჯავშნილა)."
+        f"{programme} — ახალი მოთხოვნა."
         if programme else
-        "საკვირაო სკოლის ახალი მოთხოვნა (ბანაკის კონსულტაცია არ დაჯავშნილა)."
+        "ახალი მოთხოვნა."
     )
     body = "\n".join([
         headline,
