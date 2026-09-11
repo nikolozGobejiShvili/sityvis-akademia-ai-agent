@@ -3201,6 +3201,24 @@ def _maybe_handle_multi_child_age(
     # PARENT/camp context only — mirrors the _ensure_camp_age_question gate.
     if getattr(conversation, "segment", "") != "PARENT":
         return None
+    # PARENT meant "camp" when this was written; it now covers every panel
+    # programme, and everything below is camp-specific — the camp's age band,
+    # „ბანაკი ორივე ასაკისთვის შესაბამისია", and the camp goal question.
+    #
+    # Measured 2026-09-10 in a Sunday-School conversation with every camp OFF:
+    # the agent asked which age group the child falls into, the parent answered
+    # „13-14 წელი", and got the camp's suitability claim and „რას ელოდებით
+    # ბანაკისგან?" back.
+    #
+    # The same deferral `_maybe_handle_camp_status` already applies — restoring
+    # it here rather than inventing a rule. A camp conversation is untouched.
+    if _msg_names_other_program(message) or _conversation_names_other_program(conversation):
+        logger.info(
+            "[parent_flow] multi-child age deferred — the conversation is on "
+            "another active programme (sender=%s)",
+            getattr(conversation, "sender_id", "?"),
+        )
+        return None
     # Age already known → nothing to record (a later different-child correction
     # is owned by _maybe_requalify_child, which runs earlier).
     if _child_age_known(lead):
@@ -6739,7 +6757,22 @@ def _maybe_handle_sunday_school(
         return _SUNDAY_SCHOOL_ASK_NAME
     if have_name and not have_phone:
         return _SUNDAY_SCHOOL_ASK_PHONE
-    return _render_sunday_school_answer()
+    # Nothing in the message is a contact. Repeating the status here answered a
+    # question the parent had not asked: measured live 2026-09-10, the agent
+    # itself asked „თქვენი შვილი რომელ ასაკობრივ ჯგუფში მოხვდებოდა?", the parent
+    # answered „13-14", and got the programme's availability_text back instead of
+    # an answer — a launch-month line the operator cannot even see in the panel.
+    #
+    # Collection is armed by `_SUNDAY_SCHOOL_COLLECTION_MARKER = "საკვირაო სკოლ"`
+    # appearing in the previous assistant turn — which every good answer about
+    # the programme now contains. So the better the programme answers, the more
+    # often a plain follow-up landed here. „?" already deferred (the pivot guard
+    # above); a bare answer did not.
+    #
+    # Handing the turn back is a deletion, not a new branch: the normal chain
+    # already knows how to answer, and the contact ask is re-armed the moment the
+    # next reply mentions the programme again.
+    return None
 
 
 def _bot_has_replied(conversation: Conversation) -> bool:

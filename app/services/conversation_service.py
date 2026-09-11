@@ -972,6 +972,15 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
         if booked or (in_flow_state and lead is not None):
             conversation.segment = "PARENT"
         else:
+            # The panel is asked FIRST and the word lists only answer when it
+            # has no opinion. Deleting the fallback outright was measured and
+            # reverted: „საზაფხულო ბანაკი მაინტერესებს" then fell to UNCLEAR,
+            # because that programme's name is built entirely from stems the
+            # matcher refuses as identifiers („საზაფხულო", „ბანაკ"), so a parent
+            # naming a closed programme got the generic menu instead of the
+            # honest „that intake is over". Removing the lists needs the
+            # one-programme-answers-this-word tier `_program_id_for_turn` already
+            # has; until routing has it, the fallback stays.
             conversation.segment = (
                 _match_active_program_segment(message_text)
                 or _classify_segment(message_text)
@@ -1012,6 +1021,36 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
                 "(sender=%s)", sentry_service.mask_sender(sender_id),
             )
             conversation.segment = "PARENT"
+
+    # A programme the parent NAMES outranks the segment a keyword list assigned.
+    #
+    # The segment is decided by the first message that reaches `_classify_segment`
+    # and then never revisited (the guard above), so one generic word in an
+    # opening message assigns the conversation permanently. Measured live
+    # 2026-09-10: a Sunday-School enquiry opened with „…გრძელდება ერთი შეხვედრა",
+    # `ADULT_KEYWORDS` matched the stem „შეხვედრ", and every later turn was
+    # answered by the adult-events flow — including „ღონისძიება არა, საკვირაო
+    # სკოლაზე გეუბნები", where the parent said in words which programme they
+    # meant and the agent could not act on it.
+    #
+    # `_match_active_program_segment` already answers exactly this question from
+    # the PANEL, and it is the honest source: measured on that same sentence it
+    # returns PARENT, while the keyword classifier returns UNCLEAR. It returns
+    # None unless a programme is actually named, so a turn that names nothing
+    # keeps the segment it had, and every escape hatch above still applies.
+    #
+    # This is the fourth such override, not a new mechanism — the three above it
+    # each rescue one hard-coded case (consultation, camp link, planner). This
+    # one needs no vocabulary of its own: a programme the operator adds tomorrow
+    # is recognised the moment it is in the panel.
+    named_segment = _match_active_program_segment(message_text)
+    if named_segment and named_segment != conversation.segment:
+        logger.info(
+            "[routing] the message names an active programme — %s → %s "
+            "(sender=%s)", conversation.segment, named_segment,
+            sentry_service.mask_sender(sender_id),
+        )
+        conversation.segment = named_segment
 
     # Conversation Planner (Phase 3) — compute the unified TurnPlan ONCE per turn
     # and stash it on the conversation so the downstream handlers (parent_flow)
