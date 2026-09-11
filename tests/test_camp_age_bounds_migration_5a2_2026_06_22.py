@@ -90,8 +90,11 @@ def test_booking_rejects_age_9_when_admin_min_is_10(monkeypatch, camp_registrati
         "name": "ნიკოლოზი", "phone": "595999733", "child_age": "9",
         "datetime_iso": _FUTURE_ISO, "user_confirmed_datetime": True,
     })
-    assert res["success"] is False and res["reason"] == "age_not_eligible"
-    assert res["age_min"] == 10 and res["age_max"] == 17
+    # Operator decision 2026-09-11: an age never refuses a consultation. The
+    # canonical band is still what the flow reads — it is a fact about the
+    # programme, no longer a gate on booking.
+    assert admin_config_service.get_camp_age_bounds() == (10, 17)
+    assert res.get("reason") != "age_not_eligible"
 
 
 def test_booking_rejects_age_17_when_admin_max_is_16(monkeypatch, camp_registration_open):      # (#6)
@@ -101,12 +104,13 @@ def test_booking_rejects_age_17_when_admin_max_is_16(monkeypatch, camp_registrat
         "name": "ნიკოლოზი", "phone": "595999733", "child_age": "17",
         "datetime_iso": _FUTURE_ISO, "user_confirmed_datetime": True,
     })
-    assert res["success"] is False and res["reason"] == "age_not_eligible"
+    assert admin_config_service.get_camp_age_bounds() == (9, 16)
+    assert res.get("reason") != "age_not_eligible"
 
 
 # (#7 — default 9–17 booking eligibility for age 9/14/17 is covered by the
 # existing full booking suite; the band-CHANGE contrast above proves the
-# canonical band now drives the gate.)
+# canonical band is what the flow reads.)
 
 
 # ===========================================================================

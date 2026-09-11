@@ -40,11 +40,24 @@ def test_dynamic_program_uses_its_own_registration(monkeypatch):
     monkeypatch.setattr(ex, "_resolve_booking_program_id", lambda: "disneyland")
     monkeypatch.setattr(pte, "_is_camp_registration_open", lambda: False)  # camp CLOSED
 
+    # The gate reads the section's own EXPLICIT status. A section the panel says
+    # nothing about inherits the camp's value instead of being read as closed —
+    # that is what a reserved programme had before 2026-09-11, and reading a
+    # silent panel as "closed" shut a programme that was open the day before.
+    monkeypatch.setattr(admin_config_service, "get_section",
+                        lambda pid: {"id": pid, "registration_status": "open"})
     monkeypatch.setattr(admin_config_service, "is_program_registration_open", lambda pid: True)
     assert ex._registration_open_for_booking() is True   # not blocked by camp
 
+    monkeypatch.setattr(admin_config_service, "get_section",
+                        lambda pid: {"id": pid, "registration_status": "closed"})
     monkeypatch.setattr(admin_config_service, "is_program_registration_open", lambda pid: False)
     assert ex._registration_open_for_booking() is False
+
+    # silent panel ⇒ the camp's value, not a closed gate
+    monkeypatch.setattr(admin_config_service, "get_section", lambda pid: {"id": pid})
+    monkeypatch.setattr(pte, "_is_camp_registration_open", lambda: True)
+    assert ex._registration_open_for_booking() is True
 
 
 def test_fail_open_to_camp_on_error(monkeypatch):
