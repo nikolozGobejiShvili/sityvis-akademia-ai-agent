@@ -247,3 +247,33 @@ def test_an_already_resolved_name_is_not_overwritten(panel, monkeypatch):
     lead.consultation_program_name = "პარიზის ბანაკი"
     pf._sunday_school_dispatch(conv, lead, "ნიკა 599123456")
     assert lead.consultation_program_name == "პარიზის ბანაკი"
+
+
+def test_a_handoff_mail_says_nothing_about_a_consultation(monkeypatch):
+    """Operator rule 2026-09-11: a consultation happens on an ACTIVE programme.
+    On this path the manager just gets a name, a number and the programme — the
+    headline used to add „(კონსულტაცია არ დაჯავშნილა)", which is the one thing
+    that path is never about."""
+    sent = {}
+    monkeypatch.setattr(ns, "_send_email",
+                        lambda subject, body: (sent.update(
+                            subject=subject, body=body), True)[1])
+    lead = Lead(sender_id="s", platform="messenger", segment="PARENT")
+    lead.name, lead.phone = "ნიკა", "599123456"
+    lead.consultation_program_name = "საზაფხულო ბანაკი"
+    assert ns.notify_sunday_school_handoff(lead) is True
+    assert "კონსულტაცი" not in sent["subject"]
+    assert "კონსულტაცი" not in sent["body"]
+    for expected in ("ნიკა", "599123456", "საზაფხულო ბანაკი"):
+        assert expected in sent["body"]
+
+
+def test_the_same_holds_when_no_programme_resolves(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(ns, "_send_email",
+                        lambda subject, body: (sent.update(
+                            subject=subject, body=body), True)[1])
+    lead = Lead(sender_id="s", platform="messenger", segment="PARENT")
+    lead.name, lead.phone = "ნიკა", "599123456"
+    assert ns.notify_sunday_school_handoff(lead) is True
+    assert "კონსულტაცი" not in sent["body"]
