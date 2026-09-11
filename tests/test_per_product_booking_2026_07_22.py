@@ -250,13 +250,14 @@ def _book_args(**over):
 
 def test_book_flag_off_disneyland_uses_camp_band(monkeypatch, camp_registration_open):
     """Flag OFF: even with a Disneyland-tagged lead, the age band is CAMP's
-    (byte-identical). A 7-year-old is age_not_eligible under camp's [9,17]."""
+    (byte-identical). The band is a FACT about the programme; since 2026-09-11 it never
+    refuses a consultation."""
     conv = _conv(program_id="disneyland_tour")  # sticky, but flag OFF ignores it
     ex = _mk(conv, user_message="კი ჩამწერე")
+    assert ex._resolve_booking_program_id() == ""
+    assert acs.get_program_age_bounds("") == (9, 17)  # camp band, flag off
     r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
-    assert r["success"] is False
-    assert r["reason"] == "age_not_eligible"
-    assert r["age_min"] == 9  # camp band, flag off
+    assert r.get("reason") != "age_not_eligible"  # an age never refuses (2026-09-11)
 
 
 def test_book_flag_on_disneyland_age7_eligible(monkeypatch):
@@ -279,14 +280,15 @@ def test_book_flag_on_no_product_uses_camp_band(monkeypatch, camp_registration_o
     monkeypatch.setattr(acs, "get_active_sections", lambda: [])
     conv = _conv()  # program_id empty
     ex = _mk(conv, user_message="კი ჩამწერე")
+    assert ex._resolve_booking_program_id() == ""
+    assert acs.get_program_age_bounds("") == (9, 17)  # camp band
     r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
-    assert r["reason"] == "age_not_eligible"
-    assert r["age_min"] == 9  # camp band
+    assert r.get("reason") != "age_not_eligible"
 
 
 def test_book_flag_on_disneyland_missing_agemin_fails_closed(monkeypatch):
     """Flag ON + disneyland section MISSING age_min ⇒ fail-closed to camp band
-    (never a disabled check): a 7yo is age_not_eligible under camp's [9,17]."""
+    (never a disabled check)."""
     _flag_on(monkeypatch)
     _seed_disney(monkeypatch, section={
         "id": "disneyland_tour", "name": "დისნეილენდის ტური",
@@ -294,9 +296,10 @@ def test_book_flag_on_disneyland_missing_agemin_fails_closed(monkeypatch):
     })
     conv = _conv(program_id="disneyland_tour")
     ex = _mk(conv, user_message="კი ჩამწერე")
+    # fail-closed to the camp band — a missing bound is never a disabled check
+    assert acs.get_program_age_bounds("disneyland_tour") == (9, 17)
     r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
-    assert r["reason"] == "age_not_eligible"
-    assert r["age_min"] == 9  # fail-closed to camp band
+    assert r.get("reason") != "age_not_eligible"
 
 
 def test_book_flag_on_message_names_disneyland_resolves_and_tags(monkeypatch):
@@ -322,8 +325,7 @@ def test_book_flag_on_explicit_camp_intent_clears_sticky(monkeypatch, camp_regis
     conv = _conv(program_id="disneyland_tour")  # was browsing disneyland
     ex = _mk(conv, user_message="საზაფხულო ბანაკში ჩავწერო 7 წლის")
     r = ex.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
-    assert r["reason"] == "age_not_eligible"
-    assert r["age_min"] == 9          # camp band applied
+    assert r.get("reason") != "age_not_eligible"
     assert conv.lead.program_id == ""  # sticky cleared by the camp signal
 
 
@@ -428,8 +430,8 @@ def test_get_camp_info_does_not_clear_flag_off(monkeypatch, camp_registration_op
 
 def test_book_after_camp_info_pivot_uses_camp_band(monkeypatch, camp_registration_open):
     """End-to-end of the reviewer's contamination scenario, now CLOSED: browse
-    Disneyland (sticky), then get_camp_info (camp pivot) clears it, then a 7yo
-    camp booking is correctly age_not_eligible under camp's [9,17]."""
+    Disneyland (sticky), then get_camp_info (camp pivot) clears it, then the camp band
+    applies, not disneyland's (7,16)."""
     _flag_on(monkeypatch)
     from app.agent.tools.parent_tools import TOOL_GET_CAMP_INFO
     monkeypatch.setattr(acs, "get_active_sections", lambda: [])
@@ -438,9 +440,9 @@ def test_book_after_camp_info_pivot_uses_camp_band(monkeypatch, camp_registratio
     ex_camp.execute(TOOL_GET_CAMP_INFO, {"topic": "price"})  # camp pivot ⇒ clears
     assert conv.lead.program_id == ""
     ex_book = _mk(conv, user_message="კი ჩამწერე")  # bare confirm, no camp intent
+    assert ex_book._resolve_booking_program_id() == ""  # camp, not disneyland
     r = ex_book.execute(TOOL_BOOK_CONSULTATION, _book_args(child_age="7"))
-    assert r["reason"] == "age_not_eligible"
-    assert r["age_min"] == 9  # camp band, not disneyland's (7,16)
+    assert r.get("reason") != "age_not_eligible"
 
 
 # ── Task 4: flag-gated Sheets "Program" column ────────────────────────────

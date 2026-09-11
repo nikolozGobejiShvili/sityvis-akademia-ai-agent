@@ -216,6 +216,31 @@ def _camp_public_info_limited_tool_result(topic: str) -> dict[str, Any]:
         "message": message,
     }
 
+def _booking_registration_open(program_id: str) -> bool:
+    """Registration gate for the CONSULTATION path, with the SAME fallback the
+    age band already has: when the panel says nothing about a programme, the
+    camp's known-good value governs.
+
+    `is_program_registration_open` is deliberately fail-closed — a brand-new
+    product must not leak a REGISTRATION entry point before the operator sets a
+    status. But letting a consultation inherit that reading took a programme that
+    had the camp's gate the day before and shut it, which is the same defect
+    recorded on 2026-07-23: the camp ending must not close every other
+    programme's consultation. An EXPLICIT closed value still closes. Never
+    raises.
+    """
+    if not program_id:
+        return _is_camp_registration_open()
+    try:
+        from app.services import admin_config_service
+        section = admin_config_service.get_section(program_id) or {}
+        if not str(section.get("registration_status") or "").strip():
+            return _is_camp_registration_open()
+        return admin_config_service.is_program_registration_open(program_id)
+    except Exception:  # pragma: no cover - defensive → camp
+        return _is_camp_registration_open()
+
+
 # A consultation is booked for the programme the parent named, and the two rules
 # that decide whether it may be booked at all — the AGE BAND and the REGISTRATION
 # GATE — have to be that programme's. Both helpers in `admin_config_service`
@@ -1194,10 +1219,7 @@ class ParentToolExecutor:
         when there is no per-product context (USE_PER_PRODUCT_BOOKING off, or a
         camp booking) — byte-identical to today. Never raises."""
         try:
-            program_id = self._resolve_booking_program_id()
-            if program_id:
-                from app.services import admin_config_service
-                return admin_config_service.is_program_registration_open(program_id)
+            return _booking_registration_open(self._resolve_booking_program_id())
         except Exception:  # pragma: no cover - defensive → camp
             pass
         return _is_camp_registration_open()
@@ -1264,10 +1286,7 @@ class ParentToolExecutor:
         # product's section; every other gate is unchanged.
         program_id = self._resolve_booking_program_id()
 
-        registration_open = (
-            admin_config_service.is_program_registration_open(program_id)
-            if program_id else _is_camp_registration_open()
-        )
+        registration_open = _booking_registration_open(program_id)
         if not registration_open:
             logger.warning(
                 "[book_consultation] BLOCKED reason=registration_closed program_id=%s",
@@ -1361,23 +1380,17 @@ class ParentToolExecutor:
                 "age_min": age_min,
                 "age_max": age_max,
             }
+        # Operator decision, 2026-09-11: a consultation is a conversation with a
+        # manager, and an age must NEVER refuse one. The band is a fact ABOUT the
+        # programme — whether the child can take part — not a condition on being
+        # allowed to ask. It stays in the log (and in the programme's answer) so
+        # the parent is still told the range; it no longer turns a booking away.
         eligible = age_min <= age_int <= age_max
         logger.info(
-            "[book_consultation] age_check age=%s eligible=%s",
-            age_int, eligible,
+            "[book_consultation] age_check age=%s in_programme_band=%s range=[%s,%s] "
+            "program_id=%s (never blocks a consultation)",
+            age_int, eligible, age_min, age_max, program_id or "summer_camp",
         )
-        if not eligible:
-            logger.warning(
-                "[book_consultation] BLOCKED reason=age_not_eligible age=%s range=[%s,%s]",
-                age_int, age_min, age_max,
-            )
-            return {
-                "success": False,
-                "reason": "age_not_eligible",
-                "age_min": age_min,
-                "age_max": age_max,
-                "provided_age": age_int,
-            }
 
         # 3. Phone validation (reuse existing parser for byte-identical
         #    behaviour with the deterministic flow).

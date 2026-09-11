@@ -4364,7 +4364,7 @@ def _set_ineligible_lead(conversation, age: str = "8") -> None:
     )
 
 
-def test_patch8_strip_cta_removes_consultation_offer_for_ineligible():
+def test_patch8_consultation_offer_survives_an_out_of_band_age():
     conv = Conversation(sender_id="x", platform="instagram")
     _set_ineligible_lead(conv, age="8")
     response = (
@@ -4372,11 +4372,13 @@ def test_patch8_strip_cta_removes_consultation_offer_for_ineligible():
         "დაგიდასტურებთ. თუ გნებავთ, კონსულტაციაზე ჩაგწერთ."
     )
     out = parent_flow._strip_consultation_cta_if_ineligible(conv, response)
-    assert "კონსულტაციაზე ჩაგწერთ" not in out
-    assert "მენეჯერთან" in out
+    # Operator decision 2026-09-11: an age must never restrict BOOKING a
+    # consultation, and removing the offer restricted it just as surely.
+    assert "კონსულტაციაზე ჩაგწერთ" in out
+    assert out == response
 
 
-def test_patch8_strip_cta_handles_multiple_cta_variants():
+def test_patch8_every_consultation_offer_variant_survives():
     conv = Conversation(sender_id="x", platform="instagram")
     _set_ineligible_lead(conv, age="7")
     response = (
@@ -4389,7 +4391,7 @@ def test_patch8_strip_cta_handles_multiple_cta_variants():
         "კონსულტაცია ჩაგინიშნავთ",
         "კონსულტაციაზე ჩაგწერთ",
     ):
-        assert cta not in out, f"leaked: {cta!r}"
+        assert cta in out, f"wrongly removed: {cta!r}"
 
 
 def test_patch8_strip_cta_is_noop_for_eligible_lead():
@@ -4417,21 +4419,22 @@ def test_patch8_strip_cta_is_noop_for_unknown_age():
     assert out == response
 
 
-def test_patch8_ineligible_age_18_strips_cta():
+def test_patch8_an_over_age_lead_is_still_offered_a_consultation():
     conv = Conversation(sender_id="x", platform="instagram")
     _set_ineligible_lead(conv, age="18")
     response = (
         "ეს ბანაკი 9–17 წლისაა. თუ გნებავთ, კონსულტაციაზე ჩაგწერთ."
     )
     out = parent_flow._strip_consultation_cta_if_ineligible(conv, response)
-    assert "კონსულტაციაზე ჩაგწერთ" not in out
+    assert "კონსულტაციაზე ჩაგწერთ" in out
 
 
-def test_patch8_ineligible_age_engine_response_end_to_end(
+def test_patch8_consultation_offer_reaches_the_parent_end_to_end(
     enable_engine, monkeypatch, fresh_conversation,
 ):
-    """End-to-end: engine emits CTA, parent_flow scrubs it because
-    lead.child_age=8 is ineligible."""
+    """End-to-end: the engine emits the consultation CTA and it REACHES the
+    parent, even though lead.child_age=8 is outside the camp band. An age is a
+    fact about the programme, not a condition on talking to a manager."""
     from app.services import messenger_service, openai_service
 
     monkeypatch.setattr(messenger_service, "get_user_profile", lambda sid, plat: {})
@@ -4444,8 +4447,7 @@ def test_patch8_ineligible_age_engine_response_end_to_end(
         )),
     )
     out = parent_flow.handle(fresh_conversation, "more details please")
-    assert "კონსულტაციაზე ჩაგწერთ" not in out
-    assert "მენეჯერთან" in out
+    assert "კონსულტაციაზე ჩაგწერთ" in out
 
 
 # -- PATCH 8.D — generic assistant greeting rewrites --------------------

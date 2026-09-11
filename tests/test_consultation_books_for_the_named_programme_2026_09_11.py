@@ -168,3 +168,79 @@ def test_the_flag_off_is_byte_identical(panel, monkeypatch):
         config_module.settings, USE_PER_PRODUCT_BOOKING=False))
     pid, _ = _resolve("საკვირაო სკოლაზე კონსულტაცია მინდა")
     assert pid == ""
+
+
+# ── an age never refuses a consultation (operator, 2026-09-11) ─────────────
+#
+# „ასაკი გამო კონსულტაციაზე ჩანიშვნა არ უნდა იყოს შეზღუდული."
+# The band is a fact ABOUT the programme — whether the child can take part —
+# not a condition on being allowed to sit down with a manager.
+
+
+def _book(monkeypatch, message, child_age):
+    from app.flows import parent_flow as pf
+    from app.services import calendar_service as cal
+    monkeypatch.setattr(cal, "check_slot_available", lambda *a, **k: True)
+
+    def _booked(conv, lead, slot, *a, **k):
+        lead.calendar_event_id = "evt"
+        lead.booked_datetime_iso = str(slot.get("datetime_iso"))
+        lead.calendly_booked = True
+        return True
+    monkeypatch.setattr(pf, "_book_selected_slot", _booked)
+    monkeypatch.setattr("app.services.sheets_service.create_lead", lambda *a, **k: True)
+    monkeypatch.setattr("app.services.notification_service.notify_manager",
+                        lambda *a, **k: True)
+    lead = Lead(sender_id="s", platform="messenger", segment="PARENT")
+    lead.name, lead.phone = "ნიკა", "599123456"
+    conv = Conversation(sender_id="s", platform="messenger", segment="PARENT")
+    conv.lead = lead  # one lead object: the stub writes what the executor reads
+    ex = pte.ParentToolExecutor(conv, lead, "s", "messenger", message)
+    return ex._book_consultation({
+        "name": "ნიკა", "phone": "599123456",
+        "datetime_iso": "2030-06-10T14:00:00+04:00",
+        "child_age": child_age, "user_confirmed_datetime": True,
+    })
+
+
+@pytest.mark.parametrize("age", ["4", "7", "8", "15", "18", "19"])
+def test_no_age_refuses_a_consultation(panel, monkeypatch, age):
+    """Every one of these was `age_not_eligible` outside the band before."""
+    panel()
+    res = _book(monkeypatch, "საკვირაო სკოლაზე კონსულტაცია მინდა", age)
+    assert res.get("reason") != "age_not_eligible"
+
+
+def test_an_age_outside_the_band_books(panel, monkeypatch):
+    """A 4-year-old, on a programme whose band starts at 6, reaches a booked
+    slot. Registration has to be open — that gate is a real one and unrelated
+    to age."""
+    panel([_CAMP, dict(_SCHOOL, registration_status="open"), _PARIS, _ADULT])
+    res = _book(monkeypatch, "საკვირაო სკოლაზე კონსულტაცია მინდა", "4")
+    assert res.get("success") is True, res
+
+
+def test_the_offer_is_never_removed_for_an_age(panel):
+    """The other half of the restriction: the CTA was stripped, so the parent was
+    handed a manager instead of the slot they were about to be offered."""
+    from app.flows import parent_flow as pf
+    panel()
+    lead = Lead(sender_id="s", platform="messenger", segment="PARENT")
+    lead.child_age = "4"
+    conv = Conversation(sender_id="s", platform="messenger", segment="PARENT")
+    conv.lead = lead
+    reply = "თუ გნებავთ, კონსულტაციაზე ჩაგწერთ."
+    assert pf._strip_consultation_cta_if_ineligible(conv, reply) == reply
+
+
+# ── the gate when the panel says nothing ───────────────────────────────────
+
+def test_a_silent_panel_inherits_the_camp_gate(panel):
+    """The regression shipped earlier the same day: a programme with no
+    `registration_status` was read as CLOSED, so its consultation stopped being
+    bookable although it had the camp's gate the day before."""
+    school = {k: v for k, v in _SCHOOL.items() if k != "registration_status"}
+    panel([_CAMP, school, _PARIS, _ADULT])
+    _, ex = _resolve("საკვირაო სკოლაზე კონსულტაცია მინდა")
+    assert pte._is_camp_registration_open() is True
+    assert ex._registration_open_for_booking() is True

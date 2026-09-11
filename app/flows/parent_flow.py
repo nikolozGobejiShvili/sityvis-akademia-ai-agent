@@ -4299,31 +4299,6 @@ def _is_pure_greeting_token(text: str) -> bool:
     return cleaned in _PURE_GREETING_TOKENS
 
 
-# P3-C PATCH 8 — ineligible-age CTA scrubber.
-# When the lead's child_age is outside [age_min, age_max], the engine
-# may still emit "თუ გნებავთ, კონსულტაციაზე ჩაგწერთ" — the executor
-# blocks the booking itself but the wording leaks through. This helper
-# strips that CTA AND replaces it with the manager-handoff alternative
-# the policy actually allows. Runs only when we *know* the age is
-# ineligible; eligible / unknown ages pass through untouched.
-
-_INELIGIBLE_CTA_PATTERNS: tuple[str, ...] = (
-    "თუ გნებავთ, კონსულტაციაზე ჩაგწერთ და მენეჯერი დეტალურად აგიხსნით პროცესს.",
-    "თუ გნებავთ, კონსულტაციაზე ჩაგწერთ.",
-    "კონსულტაციაზე ჩაგწერთ და მენეჯერი დეტალურად აგიხსნით.",
-    "კონსულტაციაზე ჩაგწერთ.",
-    "კონსულტაცია ჩავნიშნოთ.",
-    "კონსულტაცია ჩაგინიშნავთ.",
-    "კონსულტაცია რომ ჩავნიშნო.",
-    "ჩაგწერთ კონსულტაციაზე.",
-)
-
-_INELIGIBLE_HANDOFF_LINE = (
-    "თუ გსურთ, მენეჯერთან დაგაკავშირებთ და გადაამოწმებს, "
-    "არის თუ არა ამ ასაკისთვის სხვა შესაფერისი ფორმატი."
-)
-
-
 def _age_status_for_lead(lead: Lead | None) -> str:
     """Return one of 'unknown' | 'eligible' | 'ineligible' for an
     optional lead. Mirrors the engine's `_age_status` but kept here to
@@ -4542,43 +4517,21 @@ def _strip_consultation_cta_if_booked(
 def _strip_consultation_cta_if_ineligible(
     conversation: Conversation, response: str,
 ) -> str:
-    """Logic-level guard: when the lead is age-ineligible, scrub any
-    consultation-booking CTA from the response and replace it with the
+    """Pass-through. Kept as the call site so the booking chain is unchanged.
+
+    This used to scrub the consultation-booking CTA from the reply whenever the
+    child's age fell outside the programme's band, replacing it with the
     manager-handoff line.
 
-    Returns the (possibly rewritten) response. Pass-through when the
-    lead is eligible / unknown so the normal booking flow is not
-    disturbed.
+    Operator decision, 2026-09-11: an age must NEVER restrict booking a
+    consultation. Removing the offer restricted it exactly as much as refusing
+    it — the parent was handed a manager instead of the slot they were about to
+    be offered, and had to ask again unprompted to get one. The programme's age
+    range is still stated wherever it is a fact ABOUT the programme (whether the
+    child can take part); it no longer decides whether a parent may sit down with
+    a manager. The hard refusal in `book_consultation` went with it.
     """
-    if not response:
-        return response
-    if _age_status_for_lead(conversation.lead) != "ineligible":
-        return response
-
-    matched = False
-    out = response
-    for pat in _INELIGIBLE_CTA_PATTERNS:
-        if pat in out:
-            out = out.replace(pat, "")
-            matched = True
-    if not matched:
-        return response
-
-    # Tidy double newlines / spaces from the removal.
-    out = re.sub(r"\s+\n", "\n", out)
-    out = re.sub(r"\n{3,}", "\n\n", out)
-    out = re.sub(r"  +", " ", out).strip()
-
-    # Only append the handoff alternative if it isn't already present.
-    if _INELIGIBLE_HANDOFF_LINE not in out and "მენეჯერთან" not in out:
-        sep = "" if not out else "\n\n"
-        out = f"{out}{sep}{_INELIGIBLE_HANDOFF_LINE}"
-
-    logger.info(
-        "[parent_flow] PATCH 8 ineligible-age CTA stripped (lead.child_age=%r)",
-        getattr(conversation.lead, "child_age", None),
-    )
-    return out
+    return response
 
 
 # P0 Stabilization (2026-06-09) — ineligible-young deterministic message.
