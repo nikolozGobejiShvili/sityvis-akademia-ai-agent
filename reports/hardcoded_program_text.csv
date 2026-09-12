@@ -1,0 +1,108 @@
+file,function,line,mentions,verdict,sample
+app/agent/llm/adult_llm_engine.py,_maybe_handle_notification_delivery_question,266,ADULT,"FIXED TEXT, NO GUARD","შეტყობინებას სწორედ აქ, Messenger-ში მიიღებთ — ამავე ჩატში. როცა ახალი ზრდასრულთა ღონისძიება დაემატება, დეტალე"
+app/agent/llm/adult_llm_engine.py,_maybe_adult_offtopic_reply,314,CAMP+ADULT,"FIXED TEXT, NO GUARD",სიტყვის აკადემი აკადემი ღონისძიებ საღამო შეხვედრ კონცერტ კულტურულ ლიტერატურ პოეტურ პოეზი მუსიკ წიგნ კლუბ ფესტი
+app/agent/llm/adult_llm_engine.py,_user_wants_parent_flow,445,CAMP+ADULT,"FIXED TEXT, NO GUARD",Heuristic — does the inbound message look like a camp inquiry? Decision tree: * Empty / no keywords → False. *
+app/agent/llm/adult_llm_engine.py,_looks_like_bare_intro,1098,ADULT,"FIXED TEXT, NO GUARD",Heuristic: short ack response with an adult-event keyword and no question. Catches near-miss phrasings the lit
+app/agent/llm/adult_llm_engine.py,_ends_with_dagexmarebit,1119,ADULT,"FIXED TEXT, NO GUARD",Live QA Bug Fix Patch (2026-06-04) — broader catch-all. gpt-5.4-mini sometimes produces short adult-flow ack r
+app/agent/llm/adult_llm_engine.py,_ensure_adult_intro_followup,1135,ADULT,"FIXED TEXT, NO GUARD","გნებავთ, აქტიური ღონისძიებები შემოგთავაზოთ?"
+app/agent/llm/adult_llm_engine.py,_strip_invented_price_missing_phrases,1263,ADULT,"FIXED TEXT, NO GUARD",დასწრების საფასური ღონისძიების კონფიგურაციაში მითითებული არაა დასწრების საფასური მითითებული არ არის დასწრების 
+app/agent/llm/adult_llm_engine.py,_strip_invented_sold_out_phrases,1290,ADULT,"FIXED TEXT, NO GUARD",ადგილები ამჟამად ამოწურულია ადგილები ამოწურულია ადგილები აღარ არის ადგილები არ არის ადგილები შემოიფარგლა ადგილ
+app/agent/llm/adult_llm_engine.py,sanitise_adult_response,1393,ADULT,"FIXED TEXT, NO GUARD",მოგიწოდებთ გთხოვთ კეთილი იყოს თქვენი ვიზიტი სიტყვის აკადემიაის კულტურულ სივრცეში კეთილი იყოს თქვენი ვიზიტი სიტ
+app/agent/llm/adult_llm_engine.py,_is_direct_subscription_intent,1650,ADULT,"FIXED TEXT, NO GUARD",ჩამწერეთ სადმე სიაში ჩამწერეთ სიაში ჩამამატეთ სიაში დამამატეთ ავტომატურად მომივიდეს ავტომატურად მომდიოდეს ავტო
+app/agent/llm/adult_llm_engine.py,_deterministic_subscribe,1663,ADULT,"FIXED TEXT, NO GUARD",თქვენ უკვე ხართ სიაში. ახალი ზრდასრულთა ღონისძიებების დამატებისას შეგატყობინებთ.
+app/agent/llm/adult_llm_engine.py,_render_named_adult_event,1839,ADULT,"FIXED TEXT, NO GUARD",სხვა ღონისძიებებიც ჩამოგითვალოთ?
+app/agent/llm/adult_llm_engine.py,_has_genuine_event_name_token,1896,ADULT,"FIXED TEXT, NO GUARD",ჩემთვ ჩემთა ჩემი თქვენთვ თქვენ შვილ ბავშვ ადამიან მეგობ ოჯახ კულტურულ ზრდასრულ მაინტერეს დაინტერეს კიდევ სხვა 
+app/agent/llm/adult_llm_engine.py,_render_active_events_list,1914,ADULT,"FIXED TEXT, NO GUARD",ამ ეტაპზე აქტიური ღონისძიებები:
+app/agent/llm/adult_llm_engine.py,_render_past_named_event,1934,ADULT,"FIXED TEXT, NO GUARD",ღონისძიება უკვე გაიმართა
+app/agent/llm/adult_llm_engine.py,_render_unknown_named_event,1949,ADULT,"FIXED TEXT, NO GUARD",ამ სახელით ღონისძიება ვერ მოვძებნე. დეტალები მენეჯერთან შეგიძლიათ გადაამოწმოთ.
+app/agent/llm/adult_llm_engine.py,_maybe_handle_named_adult_event,1959,ADULT,"FIXED TEXT, NO GUARD",საღამო ღონისძიებ კონცერ
+app/agent/llm/adult_llm_engine.py,run_adult_llm_turn,2021,CAMP+ADULT,"FIXED TEXT, NO GUARD","გასაგებია, ბანაკის შესახებ დაგეხმარებით. თქვენი შვილი რამდენი წლისაა?"
+app/agent/llm/parent_llm_engine.py,_topic_tool_prompt_suffix,170,CAMP,"FIXED TEXT, NO GUARD","როცა მშობელი კითხულობს ბანაკის კონკრეტულ თემაზე (უსაფრთხოება, კვება, გაჯეტები, სამედიცინო, მშობელთან კომუნიკაც"
+app/agent/llm/parent_llm_engine.py,extract_distinct_child_ages,490,CAMP,"FIXED TEXT, NO GUARD","Return the distinct plausible child ages (5–20) a parent stated in a COMPACT multi-age expression, first-seen "
+app/agent/llm/parent_llm_engine.py,maybe_capture_challenge_fallback,841,ADULT,"FIXED TEXT, NO GUARD",ნომერ ტელეფონის ნომერი +995 595 598 599 555 557 511 574 577 568 საათზე :00 :30 ზრდასრულთა ზრდასრულ კულტურულ სა
+app/agent/llm/parent_llm_engine.py,_build_sanitizer_safety_entries,1904,CAMP+ADULT,"FIXED TEXT, NO GUARD","მოგიწოდებთ გთხოვთ გაიმეორეთ, გთხოვთ, თქვენი ტელეფონის ნომერი მომწერეთ თქვენი 9-ნიშნა საკონტაქტო ნომერი გაიმეორ"
+app/agent/llm/parent_llm_engine.py,_apply_dynamic_fact_normalisations,2076,CAMP,"FIXED TEXT, NO GUARD",ბანაკის ღირებულება \1 ლარია
+app/agent/llm/parent_llm_engine.py,sanitise_response_wording,2244,CAMP+ADULT,"FIXED TEXT, NO GUARD","მოგიწოდებთ გთხოვთ გაიმეორეთ, გთხოვთ, თქვენი ტელეფონის ნომერი მომწერეთ თქვენი 9-ნიშნა საკონტაქტო ნომერი გაიმეორ"
+app/agent/llm/parent_llm_engine.py,_use_v3_prompt,2997,CAMP,"FIXED TEXT, NO GUARD","Prompt v3 (2026-08-02). Loads `parent_v3.md` — the 13 rules the inventory marked KEEP, plus role, tone and gra"
+app/agent/llm/parent_llm_engine.py,_apply_offtopic_intelligence,3053,CAMP,"FIXED TEXT, NO GUARD",[პროგრამა-აგნოსტიკური წესი — CRITICAL] საზაფხულო ბანაკი ამჟამად დასრულებულია და აქტიური შეთავაზება არ არის. *ა
+app/agent/llm/parent_llm_engine.py,_build_sales_context,3774,CAMP+ADULT,"FIXED TEXT, NO GUARD",- მომხმარებელმა უარი თქვა — *არ* შესთავაზო ბანაკი/კონსულტაცია; მხოლოდ თბილი დახურვა.
+app/flows/parent_flow.py,_camp_registration_closed_answer,114,CAMP,"FIXED TEXT, NO GUARD",ბანაკის ბოლო ნაკადი უკვე დაიწყო და რეგისტრაცია დასრულებულია.
+app/flows/parent_flow.py,_camp_future_information_not_announced_answer,125,CAMP,"FIXED TEXT, NO GUARD",შემდეგი ბანაკის თარიღები და რეგისტრაციის ინფორმაცია ჯერ არ არის გამოცხადებული.
+app/flows/parent_flow.py,_final_camp_policy_has_future_intent,194,CAMP,"FIXED TEXT, NO GUARD",შემდეგ მომავალ ახალ ბანაკ ახალი ბანაკ კიდევ როდის ისევ როდის გაიხსნ როდის იქნება მომავალ წელს next future anot
+app/flows/parent_flow.py,_final_camp_policy_has_current_detail,201,CAMP,"FIXED TEXT, NO GUARD",ნაკად როდის თარიღ რიცხვ დაიწყ დაწყებ მიმდინარე ახლა სად ლოკაცი კაჭრეთ მისამართ ხანგრძლივ რამდენი დღე დღიან გან
+app/flows/parent_flow.py,_final_camp_policy_has_sunday_school_direction,233,CAMP,"FIXED TEXT, NO GUARD",ახლა რა გაქვთ ამ ეტაპზე რა გაქვთ რა გაქვთ ახლა ალტერნატივ ბანაკის ნაცვლად სხვა რა სხვა საბავშვო რისი შეთავაზებ
+app/flows/parent_flow.py,_final_camp_policy_has_recent_camp_context,242,CAMP,"FIXED TEXT, NO GUARD",ბანაკ საზაფხულო ლაგერ ნაკად
+app/flows/parent_flow.py,_camp_over_line,815,CAMP,"FIXED TEXT, NO GUARD","What is said once the camp is behind us, rather than mid-season. The old sentence was „ბანაკის მიმდინარე ნაკად"
+app/flows/parent_flow.py,_camp_status_message,831,CAMP,"FIXED TEXT, NO GUARD",ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია.
+app/flows/parent_flow.py,_camp_status_short,840,CAMP,"FIXED TEXT, NO GUARD",ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია.
+app/flows/parent_flow.py,_msg_has_camp_intent,848,CAMP,"FIXED TEXT, NO GUARD",ბანაკ საზაფხულო ლაგერ ნაკად
+app/flows/parent_flow.py,_camp_off_suppresses_info,878,CAMP,"FIXED TEXT, NO GUARD","USE_CAMP_OFF_GATE: when the camp is NOT active AND the message has no explicit camp word, the deterministic ca"
+app/flows/parent_flow.py,_msg_has_adult_intent,906,CAMP,"FIXED TEXT, NO GUARD",ბანაკ საზაფხულო ლაგერ ნაკად
+app/flows/parent_flow.py,_msg_declines_camp,981,CAMP,"FIXED TEXT, NO GUARD",The parent is saying the camp is NOT what they want. A camp word makes every camp detector read the message as
+app/flows/parent_flow.py,_bot_recently_asked_challenge_question,1449,CAMP,"FIXED TEXT, NO GUARD",რას ელოდებით რას ელით ბანაკ რისი მიღება რისი მიღწევა რას მოელით რას ისურვ მთავარი მიზანი მთავარი მოტივაცი რა მ
+app/flows/parent_flow.py,_build_multi_child_ack,3165,CAMP,"FIXED TEXT, NO GUARD",რამდენიმე ბავშვის ასაკი მივიღე — წელი. ყველა ასაკი ჩავიწერე. ბანაკი ყველა ასაკისთვის შესაბამისია.
+app/flows/parent_flow.py,_maybe_acknowledge_stored_state,3656,CAMP,"FIXED TEXT, NO GUARD","გამარჯობა! წინა საუბრიდან ვიცი, რომ თქვენი შვილი წლისაა. ბანაკით ისევ ინტერესდებით?"
+app/flows/parent_flow.py,_ensure_adult_intro_followup_for_parent_flow,3841,ADULT,"FIXED TEXT, NO GUARD",ღონისძიების შერჩევა თქვენთვის გსურთ თუ თქვენი შვილისთვის?
+app/flows/parent_flow.py,_is_camp_price_intent,4673,ADULT,"FIXED TEXT, NO GUARD",საკვირაო სკოლ ღონისძიებ ზრდასრულ საღამო კონცერ ბილეთ
+app/flows/parent_flow.py,_camp_payment_process_answer,4742,CAMP,"FIXED TEXT, NO GUARD","ბანაკის ჯავშნის საფასურის გადახდა ხდება წინასწარ, ხოლო სრული თანხის — ხელშეკრულებით გათვალისწინებულ დროში. გად"
+app/flows/parent_flow.py,_has_camp_price_discount_question,4756,CAMP,"FIXED TEXT, NO GUARD",ფასდაკლებ დედმამიშვილ და-ძმ და ძმ წინა ბანაკ მონაწილეებისთვის
+app/flows/parent_flow.py,_is_camp_price_amount_question,4761,ADULT,"FIXED TEXT, NO GUARD",საკვირაო სკოლ ღონისძიებ ზრდასრულ საღამო კონცერ ბილეთ
+app/flows/parent_flow.py,_camp_price_full_block,4937,CAMP,"FIXED TEXT, NO GUARD","ბანაკის ფასი არის ლარი. ამ თანხაში შედის ტრანსპორტირება, განთავსება, კვება და სრული პროგრამა. გადახდის გადანაწ"
+app/flows/parent_flow.py,_bot_recently_in_adult_context,5315,CAMP+ADULT,"FIXED TEXT, NO GUARD",ბავშვების საზაფხულო ბანაკი
+app/flows/parent_flow.py,_maybe_handle_adult_context_relative,5349,ADULT,"FIXED TEXT, NO GUARD",რამდენი წლის არის მონაწილე? ზრდასრულთა ღონისძიებებს ასაკობრივი შეზღუდვა შეიძლება ჰქონდეს.
+app/flows/parent_flow.py,_maybe_handle_parent_contact_visit,5456,CAMP,"FIXED TEXT, NO GUARD",მშობლებს ბანაკის განმავლობაში ყოველდღიურად ეგზავნებათ დღის პროგრამა და ფოტო-ვიდეო მასალა.
+app/flows/parent_flow.py,_transport_answer,5866,CAMP,"FIXED TEXT, NO GUARD",ბანაკის ღირებულებაში ტრანსპორტირება შედის.
+app/flows/parent_flow.py,_maybe_handle_underage_manager_handoff,6159,CAMP,"FIXED TEXT, NO GUARD",წლის ბავშვი — ასაკი ბანაკის ქვემოთ (– წელი)
+app/flows/parent_flow.py,_maybe_handle_sunday_school,6582,CAMP+ADULT,"FIXED TEXT, NO GUARD",ბანაკ საზაფხულო ლაგერ კონსულტაც ღონისძიებ ფას
+app/flows/parent_flow.py,_is_camp_registration_link_request,6800,CAMP,"FIXED TEXT, NO GUARD",True when the message is a clear CAMP registration / link / form / sign-up request — a camp keyword PLUS a tra
+app/flows/parent_flow.py,_render_camp_registration_answer,6833,CAMP,"FIXED TEXT, NO GUARD",ბანაკზე რეგისტრაცია ხდება ამ ბმულზე: ფორმის შევსების შემდეგ მენეჯერი დაგიკავშირდებათ დეტალების დასაზუსტებლად.
+app/flows/parent_flow.py,_maybe_handle_camp_registration_link,6895,CAMP,"FIXED TEXT, NO GUARD",Deterministic priority for a clear camp REGISTRATION / link / form request — runs BEFORE the LLM engine on bot
+app/flows/parent_flow.py,_extract_camp_stream_number,7295,CAMP,"FIXED TEXT, NO GUARD","Return the named camp stream number (1-based) from „მე-3 ნაკად"" / „3 ნაკად"" / „მესამე ნაკად"" / „III ნაკად"", or"
+app/flows/parent_flow.py,_camp_stream_fact_line,7392,CAMP,"FIXED TEXT, NO GUARD",ბანაკის მე- ნაკადი ტარდება .
+app/flows/parent_flow.py,_maybe_handle_camp_stream_query,7486,CAMP,"FIXED TEXT, NO GUARD",Direct answer for a camp STREAM/cohort question that also asks the age limit and/or price („3 ნაკადის ასაკობრი
+app/flows/parent_flow.py,_first_turn_adult_events_intent,7635,ADULT,"FIXED TEXT, NO GUARD","True when the FIRST message clearly asks about ADULT cultural events — an adult marker („ზრდასრულ"") PLUS an ev"
+app/flows/parent_flow.py,_maybe_static_welcome,7675,CAMP,"FIXED TEXT, NO GUARD","Return the static PARENT_WELCOME menu on the bot's first reply at ``state == ""START""``; otherwise None so the "
+app/flows/parent_flow.py,_is_self_overage_camp_request,7767,CAMP,"FIXED TEXT, NO GUARD","True when the sender asks about CAMP for THEMSELVES at an adult age (>17) („ჩემთვის მინდა ბანაკი, 25 წლის ვარ"""
+app/flows/parent_flow.py,_is_mixed_camp_adult_request,7791,CAMP+ADULT,"FIXED TEXT, NO GUARD","True for a genuine camp+adult multi-intent turn („ბავშვისთვის ბანაკი და ჩემთვის რამე ღონისძიება"") — an adult-e"
+app/flows/parent_flow.py,_maybe_handle_camp_intro,7802,CAMP+ADULT,"FIXED TEXT, NO GUARD","სიტყვის აკადემიის ბანაკი არის 7-დღიანი გამოცდილება, სადაც ბავშვები არა მხოლოდ ისვენებენ, არამედ რამდენიმე დღით"
+app/flows/parent_flow.py,_bot_recently_listed_events,7910,ADULT,"FIXED TEXT, NO GUARD",ხელმისაწვდომი ღონისძიებებია რომელი ღონისძიება აქტიურ ღონისძიებას სიაში ვერ ვპოულობ
+app/flows/parent_flow.py,_maybe_handle_human_tone_request,7929,CAMP,"FIXED TEXT, NO GUARD","რა თქმა უნდა, მარტივად და ბუნებრივად გიპასუხებთ. რა გაინტერესებთ — ბანაკის პირობები, ფასი, ასაკი თუ კონსულტაცი"
+app/flows/parent_flow.py,_planner_pre_answer,8074,CAMP,"FIXED TEXT, NO GUARD",გასაგებია. რით შემიძლია დაგეხმაროთ ბანაკთან დაკავშირებით?
+app/flows/parent_flow.py,_planner_validate_response,8140,CAMP,"FIXED TEXT, NO GUARD","ბანაკის უსაფრთხოებასა და ორგანიზებასთან დაკავშირებით დეტალებს მენეჯერი დაგიზუსტებთ. თუ გსურთ, დაგაკავშირებთ მე"
+app/flows/parent_flow.py,planner_final_validate,8217,CAMP,"FIXED TEXT, NO GUARD",9-17 9–17 9 -17 9- 17 ბანაკში მონაწილეობა ბანაკში ჩაწერა ბანაკში ჩასაწერად 2150
+app/flows/parent_flow.py,_extract_event_day_reference,8351,ADULT,"FIXED TEXT, NO GUARD","Return a 1–31 calendar day referenced in the message, or None. Only the first standalone 1–2 digit number is c"
+app/flows/parent_flow.py,_render_which_event,8454,ADULT,"FIXED TEXT, NO GUARD",ამ ეტაპზე ხელმისაწვდომი ღონისძიებებია:
+app/flows/parent_flow.py,_render_event_choice,8466,ADULT,"FIXED TEXT, NO GUARD",რამდენიმე ღონისძიება მესადაგება — რომელი ღონისძიება გაინტერესებთ?
+app/flows/parent_flow.py,_render_no_event_on_day,8473,ADULT,"FIXED TEXT, NO GUARD",რიცხვში აქტიურ ღონისძიებას სიაში ვერ ვპოულობ. ამ ეტაპზე ხელმისაწვდომი ღონისძიებებია: რომელს გულისხმობთ?
+app/flows/parent_flow.py,_render_past_event_inquiry,8482,ADULT,"FIXED TEXT, NO GUARD",ეს ღონისძიება უკვე გაიმართა
+app/flows/parent_flow.py,_render_name_not_found,8501,ADULT,"FIXED TEXT, NO GUARD",ამ სახელით აქტიურ ღონისძიებას სიაში ვერ ვპოულობ. ამ ეტაპზე ხელმისაწვდომი ღონისძიებებია: თუ პოსტში სხვა ღონისძი
+app/flows/parent_flow.py,_looks_like_booking_datetime_reply,8937,ADULT,"FIXED TEXT, NO GUARD","True when the message reads like a day / date / time / daypart reply (GENERAL detection, not a phrase match). "
+app/flows/parent_flow.py,_maybe_handle_event_inquiry,9017,ADULT,"FIXED TEXT, NO GUARD","ამ ეტაპზე აქტიური ღონისძიება სიაში არ მაქვს. თუ გსურთ, მენეჯერთან დაგაკავშირებთ."
+app/flows/parent_flow.py,_build_state_recall_reply,9395,CAMP,"FIXED TEXT, NO GUARD","ამ ეტაპზე ბევრი ინფორმაცია არ მაქვს შენახული. თუ ბანაკთან დაკავშირებით კითხვა გაქვთ, მომწერეთ და დაგეხმარებით."
+app/flows/parent_flow.py,_maybe_handle_reschedule_intent_engine,9879,CAMP,"FIXED TEXT, NO GUARD","კი, ბანაკის კონსულტაციის გადატანაში დაგეხმარებით. რომელი ახალი დღე და დრო გირჩევნიათ?"
+app/flows/parent_flow.py,_looks_like_contact_disclosure,10930,CAMP,"FIXED TEXT, NO GUARD",ხდება ტარდება კონსულტაცია ბანაკი ფასი ღირს ღირებულება თარიღი ლოკაცია ადგილ ვიდეო ტელეფონ მაინტერესებს შესაძლებ
+app/flows/parent_flow.py,_name_token_is_valid,11660,CAMP,"FIXED TEXT, NO GUARD",საათ სთ წუთ წლ წელ დღეს ხვალ ზეგ მაზეგ გუშინ დღევანდ ხვალინდ კონსულტაც რეგისტრაც ჩაწერ ჩამწერ ჩავეწერ ჩაგვწერ 
+app/flows/parent_flow.py,_is_topic_switch,11762,CAMP+ADULT,"FIXED TEXT, NO GUARD",ბანაკ ფასი ფასს ღირ ლოკაცი მისამართ თარიღ ნაკად რეგისტრ კონსულტ საკვირაო სკოლ ღონისძიებ ინფორმაცი პირობებ
+app/flows/parent_flow.py,_handle_done_state_message,12598,CAMP,"FIXED TEXT, NO GUARD",თუ კიდევ რამე გჭირდებათ — ბანაკზე ან კონსულტაციაზე — გვითხარით.
+app/reasoning/camp_topic_facts.py,_is_excluded,86,CAMP+ADULT,"FIXED TEXT, NO GUARD",როდის თარიღ რიცხვშ რომელ რიცხვ ნაკად დაიწყებ ჩატარდებ
+app/reasoning/camp_topic_facts.py,_is_seats_question,299,CAMP,"FIXED TEXT, NO GUARD",რომელ ადგილას მდებარე ლოკაცი მისამართ სად ტარდებ სად არის ბანაკ
+app/reasoning/camp_topic_facts.py,_stream_confirm_line,323,CAMP,"FIXED TEXT, NO GUARD","„მე-2 ნაკადი ტარდება 5–11 ივლისს."" — only when the message NAMES both the stream number AND an explicit date r"
+app/reasoning/legacy_actions.py,_names_specific_event,134,ADULT,"FIXED TEXT, NO GUARD","Reuse the adult engine's genuine-name gate so „გია მურღულია"" is a named lookup while „ღონისძიებები რა გაქვთ?"" "
+app/reasoning/legacy_actions.py,detect_legacy_explicit_action,150,ADULT,"FIXED TEXT, NO GUARD",ზრდასრულ კულტურულ ღონისძიებ საღამო კონცერ
+app/services/conversation_service.py,_is_pure_greeting,305,CAMP,"FIXED TEXT, NO GUARD","Return True only when message is a bare greeting (no other content). ""გამარჯობა"" → True — sets UNCLEAR per Pha"
+app/services/conversation_service.py,_classify_segment,365,CAMP+ADULT,"FIXED TEXT, NO GUARD",ბანაკ ლაგერ ბავშვ შვილ საზაფხულო ეკრან მოზარდ სკოლ camp child kid summer
+app/services/conversation_service.py,_is_parent_consultation_intent,449,CAMP,"FIXED TEXT, NO GUARD",კონსულტაცი კონსულტაციის გადატანა გადავიტანოთ გადატანა მინდა ჩავნიშნეთ ჩამწერეთ ჩავწეროთ ბანაკზე გეუბნები ბანაკ
+app/services/conversation_service.py,_registration_link_clarification,507,CAMP+ADULT,"FIXED TEXT, NO GUARD","Ask WHICH programme, naming the ones actually on sale. The frozen text above offers „ბანაკის თუ კონკრეტული ღონ"
+app/agent/llm/parent_llm_engine.py,_dynamic_programs_prompt_suffix,83,CAMP,reads the panel,თითოეული პროგრამა დამოუკიდებელია: კონკრეტული პროგრამის კითხვაზე გამოიყენე მხოლოდ ამ პროგრამის get_program_info
+app/agent/llm/parent_llm_engine.py,_active_program_section,3344,CAMP,reads the panel,"The admin section for the program this conversation is about, or None. The per-turn context carried the date, "
+app/flows/parent_flow.py,_camp_display_name,794,CAMP,reads the panel,The camp's name as the OPERATOR wrote it in the panel. The season is deliberately NOT written into the sentenc
+app/flows/parent_flow.py,_conversation_names_other_program,950,CAMP,guarded — defers to another programme,ბანაკ საზაფხულო ლაგერ ნაკად
+app/flows/parent_flow.py,_maybe_ask_which_programme,1228,CAMP+ADULT,reads the panel,"Ask which programme, when the word used answers to more than one. „ბანაკი"" identified a single programme for a"
+app/flows/parent_flow.py,_maybe_handle_camp_status,1292,CAMP+ADULT,reads the panel,რაც შეეხება ზრდასრულთა ღონისძიებებს — რომელი გაინტერესებთ?
+app/flows/parent_flow.py,_program_id_for_turn,1555,CAMP,reads the panel,"The single active programme this message identifies, or """". Two ways to identify one, and they are the same cl"
+app/flows/parent_flow.py,_resolve_consultation_program_name,1640,CAMP,reads the panel,ბანაკ საზაფხულო ლაგერ ნაკად
+app/flows/parent_flow.py,_maybe_handle_multi_child_age,3177,CAMP,guarded — defers to another programme,რას ელოდებით ბანაკისგან?
+app/flows/parent_flow.py,_ensure_camp_age_question,3398,ADULT,guarded — defers to another programme,მენეჯერ ზრდასრულ კულტურულ საღამო
+app/flows/parent_flow.py,_maybe_handle_out_of_range_age,4589,CAMP,guarded — defers to another programme,ბანაკი განკუთვნილია {lo}–{hi} წლის ბავშვებისთვის. {age} წლის ასაკზე ჯობია მენეჯერმა ინდივიდუალურად გაგიწიოთ კო
+app/flows/parent_flow.py,_active_program_names,9250,CAMP+ADULT,reads the panel,"Names of the programs active in the admin panel, in section order. The single source for every „here is what w"
+app/reasoning/legacy_actions.py,_camp_context,73,CAMP,reads the panel,"True when the CURRENT topic is camp. PARENT is NOT evidence of camp. Every kids' program — Sunday School, Disn"
