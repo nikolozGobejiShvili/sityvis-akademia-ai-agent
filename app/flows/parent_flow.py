@@ -2784,6 +2784,49 @@ def _apply_privacy_notice_policy(
     return out
 
 
+# A dense block is a paragraph a parent has to read on a phone. Measured against
+# the live replies of 2026-09-12: „მოწვეული სტუმრები ვინები იქნებიან?" came back
+# as four sentences in one block, and the teachers answer as a one-line heading
+# followed by a five-sentence wall.
+#
+# Both existing formatters returned early on the first blank-line break in the
+# reply, so a reply with one break and a wall under it stayed a wall; and the
+# multipoint one only fired on price/value wording, which a guest or a teacher
+# answer has none of. This looks at every block on its own, so a heading plus a wall is formatted,
+# and it is not tied to any topic.
+#
+# Whitespace only — no wording is added, removed or reordered. A block that
+# already carries single newlines is a list and is left exactly as written.
+# Three sentences is what actually marks a wall; the length is the second
+# guard, so a short three-clause answer is not chopped up. Georgian runs about
+# 40 characters to a phone line, so 160 is roughly four lines before a break.
+_DENSE_BLOCK_CHARS: int = 160
+
+
+def _format_reply_paragraphs(response: str) -> str:
+    """Break every dense block of a reply into paragraphs. Whitespace only."""
+    if not response or len(response) < _DENSE_BLOCK_CHARS:
+        return response
+    out, changed = [], False
+    for block in response.split("\n\n"):
+        stripped = block.strip()
+        if "\n" in stripped or len(stripped) < _DENSE_BLOCK_CHARS:
+            out.append(block)
+            continue
+        sentences = [
+            x.strip() for x in _SENTENCE_SPLIT_RE.split(stripped) if x.strip()
+        ]
+        if len(sentences) < 3:
+            out.append(block)
+            continue
+        out.append("\n\n".join(sentences))
+        changed = True
+    if not changed:
+        return response
+    logger.info("[parent_flow] dense reply reformatted into paragraphs")
+    return "\n\n".join(out)
+
+
 def _sanitise_booking_confirmation(
     conversation: Conversation, response: str,
 ) -> str:
@@ -2812,6 +2855,7 @@ def _sanitise_booking_confirmation(
     # BUG A (2026-06-11) — privacy-notice policy runs on EVERY turn
     # (booking or not): strip the notice everywhere, re-append once only on
     # a confirmed booking/reschedule success turn.
+    response = _format_reply_paragraphs(response)
     response = _apply_privacy_notice_policy(conversation, response)
 
     if not contains_booking_confirmation(response):
