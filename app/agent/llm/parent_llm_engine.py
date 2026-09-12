@@ -3670,10 +3670,17 @@ def _build_context_message(
     except Exception:  # pragma: no cover - defensive
         _manager_phone = ""
     if _manager_phone:
+        # The shape of the handover, not a list of words. Live 2026-09-12 the
+        # replies did hand the number over, but each one opened by accounting
+        # for the gap — „ჯერ არ არის გამოცხადებული", „ჩვენს ხელთ არსებულ
+        # ინფორმაციაში არ მოიპოვება" — which tells the parent about the agent's
+        # limits when what they asked for is who to call.
         parts.append(
-            f"manager_phone={_manager_phone} (give this number to the parent "
-            "when a detail they asked about is not among the programme facts "
-            "above — the manager is who answers it in full)"
+            f"manager_phone={_manager_phone} (a detail the parent asks about "
+            "that is not among the programme facts above is the MANAGER's to "
+            "answer: give them this number for it, directly, as the answer to "
+            "their question. They need the way to reach the person who knows, "
+            "not an account of what is or is not on record here)"
         )
 
     if adult_target_relation:
