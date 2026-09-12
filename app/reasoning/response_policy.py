@@ -141,19 +141,24 @@ def eligible_age_reply(child_age: str) -> str:
 
 # ── #5 Sunday School — answer status + offer consent (no auto-handoff) ────────
 
+# The two consent offers, at module level so the flow that has to recognise its
+# own invitations can read them instead of repeating the wording. Change them
+# here and every reader follows.
+SUNDAY_SCHOOL_CONSENT_OFFER_CONTACT_KNOWN: str = (
+    "თუ გსურთ, თქვენს ინფორმაციას მენეჯერს გადავცემ და დაგიკავშირდებათ."
+)
+SUNDAY_SCHOOL_CONSENT_OFFER_CONTACT_UNKNOWN: str = (
+    "თუ გსურთ, მენეჯერს გადავცემ თქვენს საკონტაქტოს, რომ დაგიკავშირდეთ — "
+    "მომწერეთ თქვენი სახელი და 9-ნიშნა ნომერი."
+)
+
+
 def sunday_school_info_with_consent(status_text: str, *, contact_known: bool) -> str:
     """Status answer (from admin config) + a CONSENT offer to pass the contact
     to the manager. Never says the info was already passed; never auto-dispatches."""
     status = (status_text or "").strip()
-    if contact_known:
-        offer = (
-            "თუ გსურთ, თქვენს ინფორმაციას მენეჯერს გადავცემ და დაგიკავშირდებათ."
-        )
-    else:
-        offer = (
-            "თუ გსურთ, მენეჯერს გადავცემ თქვენს საკონტაქტოს, რომ დაგიკავშირდეთ — "
-            "მომწერეთ თქვენი სახელი და 9-ნიშნა ნომერი."
-        )
+    offer = (SUNDAY_SCHOOL_CONSENT_OFFER_CONTACT_KNOWN if contact_known
+             else SUNDAY_SCHOOL_CONSENT_OFFER_CONTACT_UNKNOWN)
     return f"{status} {offer}".strip()
 
 
