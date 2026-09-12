@@ -6235,6 +6235,35 @@ def _maybe_handle_underage_manager_handoff(
         return None
     if _age_status_for_lead(lead) != "ineligible":
         return None
+    # „Under age" here means under the CAMP's minimum, and this handler runs in
+    # the PARENT flow, which serves every kids programme. Sunday School takes
+    # children from 7, so a 7-year-old was routed through the camp's under-age
+    # handoff in a Sunday-School conversation — the same defect as the age
+    # layers deleted on 2026-09-11/12, in the last place it still lived. The
+    # same narrowing: a conversation demonstrably on another programme is that
+    # programme's to answer.
+    if (
+        _msg_names_other_program(message)
+        or _conversation_names_other_program(conversation)
+        # An open Sunday-School collection owns the turn: the parent is
+        # answering ITS question, and that programme takes children from 7.
+        or _bot_in_sunday_school_collection(conversation)
+        # `_conversation_names_other_program` reads only the RUNNING programmes,
+        # so a programme the operator has PAUSED stops being recognised and this
+        # camp handler takes its conversations back. Sunday School has a
+        # status-independent detector; a parent who named it is that
+        # programme's, whatever its status.
+        or any(
+            _is_sunday_school_intent(str(t.get("content") or ""))
+            for t in (getattr(conversation, "history", None) or [])
+            if isinstance(t, dict) and (t.get("role") or "") == "user"
+        )
+    ):
+        logger.info(
+            "[parent_flow] under-age handoff deferred — the conversation is on "
+            "another programme (sender=%s)", getattr(conversation, "sender_id", ""),
+        )
+        return None
     age_digits = _extract_age_digits(lead.child_age or "")
     if not age_digits:
         return None
@@ -6464,17 +6493,83 @@ def _is_sunday_school_intent(message: str) -> bool:
 
 
 def _bot_in_sunday_school_collection(conversation: Conversation) -> bool:
-    """True when the most recent assistant turn was a Sunday-school ask /
-    answer — so a follow-up that is just a name or phone is still routed to
-    the Sunday-school handoff."""
+    """True when the bot actually ASKED for a contact for Sunday School — so a
+    follow-up that is just a name or phone is still routed to the handoff.
+
+    The programme's name alone used to be the whole test, which meant the flow
+    decided it was collecting a contact because two words appeared in its own
+    previous sentence. Live 2026-09-12:
+
+        11:50  „პედაგოგები ვინები იქნებიან?"
+               → „საკვირაო სკოლის გუნდი შედგება…"      ← armed by naming it
+        11:51  „სილაბუსი რომ მომწეროთ"
+               → „მენეჯერს გადავცე — მომწერეთ ნომერი"  ← never reached the model
+        11:53  the same question, after a reply that did not name the
+               programme → answered properly from the panel
+
+    Any answer that mentions the programme armed contact collection, so a
+    parent's next question was taken as an answer to a question nobody asked.
+    Naming the programme is not asking for a number: BOTH have to hold.
+    """
     for turn in reversed(list(getattr(conversation, "history", []) or [])):
         if not isinstance(turn, dict) or turn.get("role") != "assistant":
             continue
-        return _SUNDAY_SCHOOL_COLLECTION_MARKER in str(turn.get("content") or "")
+        content = str(turn.get("content") or "")
+        if _SUNDAY_SCHOOL_COLLECTION_MARKER not in content:
+            return False
+        return any(ask in content for ask in _SUNDAY_SCHOOL_CONTACT_ASKS)
     return False
 
 
+try:  # the consent offers live with the policy that writes them
+    from app.reasoning.response_policy import (
+        SUNDAY_SCHOOL_CONSENT_OFFER_CONTACT_KNOWN as _RP_CONSENT_OFFER_KNOWN,
+        SUNDAY_SCHOOL_CONSENT_OFFER_CONTACT_UNKNOWN as _RP_CONSENT_OFFER_UNKNOWN,
+    )
+except Exception:  # pragma: no cover - defensive
+    _RP_CONSENT_OFFER_KNOWN = _RP_CONSENT_OFFER_UNKNOWN = ""
+
+
+def _last_sentence(text: str) -> str:
+    """The final sentence of a fixed message — the part that carries the ask."""
+    return (text or "").strip().rstrip(".").split(".")[-1].strip()
+
+
+# Every invitation this flow itself extends — the four contact asks and the
+# coming-soon offer of a manager — taken FROM the messages it sends rather than
+# written out again here, so changing the wording above carries the detector
+# with it.
+#
+# The line this draws is the important part: these are the flow's OWN fixed
+# messages. A reply written by the MODEL never arms contact collection, however
+# it happens to phrase things or whichever programme it names. That is what went
+# wrong on 2026-09-12 — an informational answer about the teachers opened with
+# the programme's name, collection armed on those two words, and the parent's
+# next question was answered as though it were a contact.
+
 _SUNDAY_SCHOOL_NOT_OFFERED: str = "საკვირაო სკოლა ამ ეტაპზე აქტიური არ არის."
+
+
+_SUNDAY_SCHOOL_CONTACT_ASKS: tuple[str, ...] = tuple(
+    s for s in (
+        _last_sentence(_SUNDAY_SCHOOL_OFFER_TAIL),
+        _last_sentence(_SUNDAY_SCHOOL_ASK_NAME),
+        _last_sentence(_SUNDAY_SCHOOL_ASK_PHONE),
+        _last_sentence(_SUNDAY_SCHOOL_INVALID_PHONE),
+        _last_sentence(_SUNDAY_SCHOOL_COMING_SOON),
+        # a failed dispatch invites another attempt; the success message does
+        # NOT — collection is finished there, and a second email must not fire.
+        _last_sentence(_SUNDAY_SCHOOL_FAIL),
+        # says the programme is not on offer and asks nothing, but it IS
+        # this flow speaking about it — a parent who then says „pass it on"
+        # is answering this message, not opening a new subject.
+        _last_sentence(_SUNDAY_SCHOOL_NOT_OFFERED),
+        # the consent-first offers (`response_policy`), which is what the live
+        # flow actually sends under the authoritative planner
+        _last_sentence(_RP_CONSENT_OFFER_KNOWN),
+        _last_sentence(_RP_CONSENT_OFFER_UNKNOWN),
+    ) if s
+)
 
 
 def _render_sunday_school_answer() -> str:
