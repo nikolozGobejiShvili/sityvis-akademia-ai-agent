@@ -3654,6 +3654,28 @@ def _build_context_message(
                 "the manager then contacts them about the next one)"
             )
 
+    # What the agent can actually hand over when the panel has no answer.
+    # Live 2026-09-12 a parent asked for the syllabus, then who the invited
+    # guest would be, then whether a named person runs the meetings — three
+    # details the panel does not carry — and was told „დაუკავშირდით ჩვენს
+    # მენეჯერს" each time without ever being given a way to reach one. The
+    # number is a fact the product already owns; it simply never travelled with
+    # the turn, so the model could not give what it did not have.
+    #
+    # A fact and its role, not a script: no wording is fixed, and it says
+    # nothing about turns the panel DOES answer.
+    try:
+        from app.services import admin_config_service as _admin_cfg
+        _manager_phone = str(_admin_cfg.get_manager_phone() or "").strip()
+    except Exception:  # pragma: no cover - defensive
+        _manager_phone = ""
+    if _manager_phone:
+        parts.append(
+            f"manager_phone={_manager_phone} (give this number to the parent "
+            "when a detail they asked about is not among the programme facts "
+            "above — the manager is who answers it in full)"
+        )
+
     if adult_target_relation:
         parts.append(f"adult_target_relation={adult_target_relation}")
     if adult_target_age:

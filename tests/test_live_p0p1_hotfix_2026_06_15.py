@@ -322,15 +322,16 @@ def test_bugc_adult_sanitizer_rewrites_mogiwodebt():
     assert "გთხოვთ" in out
 
 
-def test_bugc_ineligible_message_is_paragraphed():
+def test_bugc_a_young_age_no_longer_replaces_the_reply():
+    """This asserted that a child below the CAMP minimum had their reply
+    replaced by the camp's age message, paragraphed. Live 2026-09-12 that fired
+    in a conversation entirely about Sunday School — a programme that takes
+    children from 7 — and answered for a camp that was not running. The
+    replacement is deleted; the reply the flow produced reaches the parent."""
     conv = _underage_conv()
-    out = parent_flow._ensure_ineligible_young_age_message(
-        conv, "8 წლის", "ბუნდოვანი პასუხი ასაკზე.",
-    )
-    assert "\n\n" in out                       # not one dense block
-    assert ("9" in out) or ("ასაკი" in out)    # SC-06 invariant preserved
-    assert "მენეჯერ" in out                    # SC-06 invariant preserved
-    assert "ჩავნიშნ" not in out
+    reply = "საკვირაო სკოლა 7 წლიდან იღებს ბავშვებს."
+    assert not hasattr(parent_flow, "_ensure_ineligible_young_age_message")
+    assert parent_flow._strip_consultation_cta_if_ineligible(conv, reply) == reply
 
 
 def test_bugc_format_handoff_paragraphs_helper():
