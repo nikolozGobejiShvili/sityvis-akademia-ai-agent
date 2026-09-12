@@ -5439,6 +5439,18 @@ def _in_camp_context(conversation: Conversation) -> bool:
     child age (9–17), the bot recently asked the child age, or a camp booking is
     pending. Used to gate the parent contact/visit answer so it never fires on an
     out-of-context first message."""
+    # None of the signals below are the CAMP's — a known child age and „the bot
+    # asked the child's age" are true of every kids programme, because every one
+    # of them is served by this flow. Sunday School takes children from 7, so a
+    # 12-year-old on record put a Sunday-School conversation in „camp context"
+    # and a parent asking whether they can call or visit their child got the
+    # camp's answer about daily photos from the camp.
+    #
+    # The same narrowing the age handlers already carry: when the conversation is
+    # demonstrably on another programme, this is not camp context. Camp turns,
+    # and conversations with no other programme in them, are unchanged.
+    if _msg_names_other_program(getattr(conversation, "last_user_message", "") or "")             or _conversation_names_other_program(conversation):
+        return False
     lead = getattr(conversation, "lead", None)
     if _child_age_known(lead):
         age = _extract_age_digits((getattr(lead, "child_age", "") or ""))
