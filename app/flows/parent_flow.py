@@ -2564,14 +2564,6 @@ def _handle_core(conversation: Conversation, message: str) -> str:
             engine_response = _strip_consultation_cta_if_ineligible(
                 conversation, engine_response,
             )
-            # P0 Stabilization (2026-06-09) — deterministically guarantee
-            # the explicit ineligible message when the parent has just
-            # disclosed a child age below the camp minimum (SC-06). Scoped
-            # to the disclosure turn + age < age_min only; over-age (18+)
-            # and eligible 9–17 paths are untouched.
-            engine_response = _ensure_ineligible_young_age_message(
-                conversation, message, engine_response,
-            )
             # Booked State Polish (2026-05-30) — same idea for an
             # already-booked parent: never offer another consultation.
             engine_response = _strip_consultation_cta_if_booked(
@@ -4534,25 +4526,25 @@ def _strip_consultation_cta_if_ineligible(
     return response
 
 
-# P0 Stabilization (2026-06-09) — ineligible-young deterministic message.
+# The camp's age band used to REPLACE the reply whenever a parent mentioned a
+# child younger than the camp minimum — on any turn, in any conversation, whether
+# or not the camp was even running. Live 2026-09-12, in a conversation entirely
+# about Sunday School:
 #
-# Live audit found SC-06 ("Ineligible Age — 8 წლის") flaky (~40% pass):
-# the LLM's reply for a sub-minimum-age child intermittently omitted the
-# explicit age boundary AND/OR the manager-handoff offer, failing the
-# CRITICAL assertion. The existing `_strip_consultation_cta_if_ineligible`
-# only appends the handoff line WHEN a booking CTA was present, so a
-# CTA-free-but-vague reply slipped through. This helper closes that gap
-# deterministically — on the turn the parent discloses an age BELOW
-# `age_min`, the response is replaced with a fixed, correct message that
-# always states the eligible age range, declines the booking, and offers
-# the manager. Scope is intentionally narrow: only `age < age_min`. The
-# over-age (18+) path is untouched (handled by the adult-switch / over-17
-# wording) and eligible 9–17 ages pass straight through.
-_INELIGIBLE_YOUNG_MESSAGE_TEMPLATE = (
-    "ბანაკში მონაწილეობა შესაძლებელია {lo}–{hi} წლის ბავშვებისთვის. "
-    "ამ ასაკისთვის ბანაკში ჩაწერას ვერ შემოგთავაზებთ. "
-    "თუ გსურთ, მენეჯერთან დაგაკავშირებთ და დამატებით ინფორმაციას მოგაწვდიან."
-)
+#   the parent asked whether a 6-year-old could come
+#   → the reply named the CAMP, its 9-17 band, and declined a place in it
+#   [parent_flow] ineligible-young deterministic message (child_age='6', bounds=9-17)
+#
+# Sunday School takes children from 7 and has a 7-8 group, so the parent was told
+# the wrong thing about the wrong programme. Two of the three age-refusal layers
+# were removed on 2026-09-11 (the executor's `age_not_eligible` and the CTA
+# scrubber); this one was kept on the grounds that it merely stated a fact about
+# the camp. It did not: it answered FOR the camp in another programme's
+# conversation. Deleted, so all three are gone and an age decides nothing.
+#
+# The programme's own age range still reaches the parent — it is in the panel
+# section the answer is built from, which is why „7 წლის ბავშვისთვის რა დროები
+# გაქვთ?" was answered correctly on the same day.
 
 
 def _camp_age_bounds() -> tuple[int, int]:
@@ -4564,55 +4556,6 @@ def _camp_age_bounds() -> tuple[int, int]:
     `_camp_age_bounds` caller."""
     from app.services import admin_config_service
     return admin_config_service.get_camp_age_bounds()
-
-
-def _ensure_ineligible_young_age_message(
-    conversation: Conversation, message: str, response: str,
-) -> str:
-    """Guarantee the explicit ineligible message when the parent has just
-    disclosed a child age BELOW the camp minimum.
-
-    Fires only when ALL of the following hold, so it never disturbs the
-    eligible flow or the over-age (18+) path:
-
-      * the lead's resolved age status is ``ineligible``;
-      * the lead's child age is a parseable number ``< age_min``;
-      * the CURRENT user message carries that same age (i.e. this is the
-        disclosure turn) — this prevents re-stating the boundary on every
-        subsequent thank-you / follow-up turn from the same lead.
-
-    Returns the canonical deterministic message in that case, otherwise
-    the response unchanged.
-    """
-    lead = getattr(conversation, "lead", None)
-    if lead is None:
-        return response
-    if _age_status_for_lead(lead) != "ineligible":
-        return response
-    age_digits = _extract_age_digits(lead.child_age or "")
-    if not age_digits:
-        return response
-    try:
-        age = int(age_digits)
-    except ValueError:
-        return response
-    lo, hi = _camp_age_bounds()
-    if age >= lo:
-        # Over-age (e.g. 18) — leave to the existing adult/over-17 handling.
-        return response
-    # Disclosure-turn guard: only act when the current message carries the
-    # same sub-minimum age, so later turns are not overwritten.
-    if _extract_age_digits(message or "") != age_digits:
-        return response
-    logger.info(
-        "[parent_flow] ineligible-young deterministic message "
-        "(child_age=%r, bounds=%d-%d)",
-        getattr(lead, "child_age", None), lo, hi,
-    )
-    # BUG C (2026-06-15) — paragraph-break the dense multi-sentence message.
-    return _format_handoff_paragraphs(
-        _INELIGIBLE_YOUNG_MESSAGE_TEMPLATE.format(lo=lo, hi=hi),
-    )
 
 
 # ── Out-of-range child age MUST NOT become a name (live bug 2026-06-27) ────────
@@ -8926,7 +8869,7 @@ def _maybe_handle_availability_question(
     # a lead whose child age is outside the camp band (under-age OR over-age) —
     # they cannot book. Defer to the engine, which applies the ineligible-age
     # guards (`_strip_consultation_cta_if_ineligible` /
-    # `_ensure_ineligible_young_age_message`). Unknown / eligible ages proceed
+    # the age-refusal layers, all removed 2026-09-11/12). Unknown / eligible ages proceed
     # (the bug scenario is a parent asking about free time before/while
     # qualifying).
     if _age_status_for_lead(getattr(conversation, "lead", None)) == "ineligible":
