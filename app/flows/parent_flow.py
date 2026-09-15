@@ -962,6 +962,15 @@ def _conversation_names_other_program(conversation: Conversation) -> bool:
     still empty at the moment it was needed. The parent had named the programme
     at 15:58:58 — the history had the answer all along.
 
+    Each turn is asked the question the routing asks — `_program_id_for_turn`,
+    which the camp-status gate already uses. It used to check for a camp WORD
+    first, so a second camp in the panel was unreachable: measured 2026-09-14
+    with „პარიზის ბანაკი" active and the summer camp ended, „ფასი რა არის?"
+    came back „საზაფხულო ბანაკი უკვე გაიმართა" and „7 წლის არის" got the
+    summer camp's 9–17 band, because „პარიზის ბანაკი" — and a bare „ბანაკი"
+    that only Paris answers to — ended the walk as the summer camp's. A camp
+    word with no single owner still ends it exactly as before.
+
     Never raises → False, which leaves the camp chain exactly as it was.
     """
     try:
@@ -969,10 +978,11 @@ def _conversation_names_other_program(conversation: Conversation) -> bool:
             if not isinstance(turn, dict) or (turn.get("role") or "") != "user":
                 continue
             text = str(turn.get("content") or "")
+            owner = _program_id_for_turn(text)
+            if owner:
+                return owner != "summer_camp"
             if any(k in text.lower() for k in _CAMP_STATUS_KEYWORDS):
                 return False
-            if _msg_names_other_program(text):
-                return True
     except Exception:  # pragma: no cover — defensive
         return False
     return False
