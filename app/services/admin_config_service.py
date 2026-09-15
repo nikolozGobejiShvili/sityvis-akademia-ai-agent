@@ -2124,18 +2124,28 @@ def _manager_phone_from_section(section_id: str) -> str:
     return (section.get("manager_contact") or "").strip()
 
 
-def get_manager_phone() -> str:
+def get_manager_phone(program_id: str | None = None) -> str:
     """Return the manager phone from Admin Config only.
 
-    ``summer_camp.manager_contact`` is the canonical runtime owner for the
-    operator-facing manager contact. The optional manager_contacts mirror is
-    still accepted as an Admin Config override, but user/lead/callback phones,
-    environment values, prompt examples, and legacy knowledge fallbacks must
-    never become ``manager_phone``.
+    Every active programme has its OWN ``manager_contact`` field (2026-09-15—
+    confirmed live: summer_camp and sunday_school were independently set to
+    different numbers). Pass the CONVERSATION's active programme id and its
+    own number wins; omit it (every pre-existing caller does) and the legacy
+    chain below runs unchanged — ``summer_camp.manager_contact`` first, then
+    the shared manager_contacts mirror, then ``adult_events``. That chain
+    predates multi-programme panels and is kept only as the shared default
+    for callers that are not about one specific programme (or ARE genuinely
+    about the camp itself — a camp transport/reservation/registration
+    question is the camp's manager's to answer either way).
 
-    Returns "" when Admin Config has no manager contact; callers must use their
-    approved no-phone fallback instead of substituting another phone.
+    Returns "" when nothing is configured; callers must use their approved
+    no-phone fallback instead of substituting another phone.
     """
+    if program_id:
+        own_phone = _manager_phone_from_section(program_id)
+        if own_phone:
+            return own_phone
+
     section_phone = _manager_phone_from_section("summer_camp")
     if section_phone:
         return section_phone

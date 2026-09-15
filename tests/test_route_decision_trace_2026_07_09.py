@@ -691,7 +691,7 @@ def test_route_decision_records_adult_tool_executor_result(monkeypatch):
 def test_route_decision_records_adult_tool_handoff_without_payload_leak(monkeypatch):
     _enable_trace(monkeypatch)
     adult_tool_executor.reset_state()
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "558 67 47 33")
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda *a, **k: "558 67 47 33")
     monkeypatch.setattr(sheets_service, "create_lead", lambda lead: None)
     monkeypatch.setattr(
         notification_service,

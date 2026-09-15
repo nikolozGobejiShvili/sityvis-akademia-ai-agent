@@ -682,7 +682,10 @@ class AdultToolExecutor:
 
         # Manager phone for the user-facing reply — sourced from
         # admin_config / settings / company.yaml. Never hard-coded.
-        manager_phone = admin_config_service.get_manager_phone() or ""
+        # adult_events' OWN manager contact wins when the operator has set one
+        # (2026-09-15 — every programme has its own field now); falls back to
+        # the shared default chain otherwise, unchanged from before.
+        manager_phone = admin_config_service.get_manager_phone("adult_events") or ""
 
         # Already notified this conversation? Don't double-fire.
         if _is_adult_manager_notified(self.sender_id):

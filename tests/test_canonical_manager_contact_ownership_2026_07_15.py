@@ -44,7 +44,12 @@ def _clear_conversations():
 
 @pytest.fixture
 def canonical_manager(monkeypatch):
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: CANONICAL_MANAGER_SENTINEL)
+    # *a, **k (2026-09-15): get_manager_phone gained an optional program_id
+    # positional arg — every programme now has its own manager_contact field.
+    monkeypatch.setattr(
+        admin_config_service, "get_manager_phone",
+        lambda *a, **k: CANONICAL_MANAGER_SENTINEL,
+    )
     return CANONICAL_MANAGER_SENTINEL
 
 
@@ -122,7 +127,7 @@ def test_admin_config_source_of_truth_wins_over_env_company_and_test_fixture(mon
 
 
 def test_missing_manager_contact_never_falls_back_to_user_or_lead_phone(monkeypatch):
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "")
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda *a, **k: "")
     lead = Lead(sender_id="missing-contact", platform="facebook", segment="PARENT", phone=WRONG_USER_PHONE_DIGITS)
 
     out = parent_flow._render_manager_number_answer(lead)

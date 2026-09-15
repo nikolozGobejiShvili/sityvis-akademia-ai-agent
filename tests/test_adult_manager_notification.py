@@ -73,7 +73,7 @@ def test_adult_lead_segment_persisted(executor_with_lead, monkeypatch):
         notification_service, "send_manager_notification",
         lambda lead, summary: True,
     )
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "558 67 47 33")
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda *a, **k: "558 67 47 33")
 
     executor_with_lead.execute(
         TOOL_REQUEST_ADULT_MANAGER_CALLBACK,
@@ -96,7 +96,7 @@ def test_notification_failure_does_not_crash(executor_with_lead, monkeypatch):
         raise RuntimeError("SMTP server down")
 
     monkeypatch.setattr(notification_service, "send_manager_notification", _boom)
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "558 67 47 33")
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda *a, **k: "558 67 47 33")
 
     result = executor_with_lead.execute(
         TOOL_REQUEST_ADULT_MANAGER_CALLBACK,
@@ -111,7 +111,7 @@ def test_adult_flow_never_books_calendar_in_manager_path(executor_with_lead, mon
 
     monkeypatch.setattr(sheets_service, "create_lead", lambda lead: True)
     monkeypatch.setattr(notification_service, "send_manager_notification", lambda *a, **k: True)
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "558 67 47 33")
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda *a, **k: "558 67 47 33")
     monkeypatch.setattr(
         calendar_service, "book_slot",
         lambda *a, **k: pytest.fail("Adult flow must not book Calendar"),
