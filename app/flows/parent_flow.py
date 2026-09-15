@@ -1792,11 +1792,24 @@ def _maybe_handle_camp_facts_chain(
     calls one node instead of three. The ``camp_off`` gate, the exact order, the
     repeat-price full-block wrapping, and the ``_sanitise_booking_confirmation``
     wrapping are all preserved. Returns the first non-None sanitised response, else None."""
-    # Every handler in this chain answers for THIS camp. A turn that names some
-    # OTHER programme — including by a generic word only that one answers to —
-    # never arrives here: `_is_dynamic_program_turn` sends it to the engine
-    # above, with that programme's own fields. One place decides, so these
-    # handlers keep saying exactly what they always said.
+    # Every handler in this chain answers for THIS camp. A turn that NAMES some
+    # OTHER programme never arrives here — `_is_dynamic_program_turn` sends it
+    # to the engine above, with that programme's own fields. But a LATER turn
+    # that does not re-name anything (a bare „ფასი რა არის?") reaches that gate
+    # too, and the gate reads only the CURRENT message — so with a second camp
+    # active alongside the summer camp, naming the other one and then asking a
+    # bare follow-up still landed here and got the summer camp's own facts.
+    # Measured 2026-09-15: „ზამთრის ბანაკი" → its own overview (right), then
+    # „ფასი რა არის?" → „ბანაკის ფასი არის 2150 ლარი…", the SUMMER camp's price.
+    #
+    # `_maybe_handle_out_of_range_age` and `_maybe_handle_camp_status` already
+    # carry this exact check (2026-09-11/12); restoring it here closes the same
+    # gap for price / exact-detail / topic facts. A conversation demonstrably on
+    # another active programme defers to the engine; a summer-camp conversation,
+    # and any conversation with no other programme in it — every fixture where
+    # the summer camp runs alone — is unchanged.
+    if _msg_names_other_program(message) or _conversation_names_other_program(conversation):
+        return None
     #
     # Client follow-up hotfix (2026-06-30) — EXACT-DETAIL split: a KNOWN
     # general answer + an exact-unknown manager defer (food frequency / exact
