@@ -32,7 +32,11 @@ def test_skill_file_present_and_active():
     assert sk["status"] == "active"
     assert any("საზიზღარ" in t for t in sk["triggers"])
     assert "მენეჯერ" in sk["body"]           # offers the manager
-    assert "558 67 47 33" in sk["body"]
+    # The number itself is no longer typed into the skill (2026-09-15) — the
+    # model already receives it as a live `manager_phone=...` turn fact, so
+    # the skill just needs to say to hand it over, not carry its own digits.
+    assert "ნომერ" in sk["body"]
+    assert "558 67 47 33" not in sk["body"]
 
 
 def test_skill_selected_for_insult():

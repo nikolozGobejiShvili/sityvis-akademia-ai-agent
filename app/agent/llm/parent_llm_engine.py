@@ -3070,6 +3070,21 @@ def _build_system_prompt(message: str = "", segment: str = "") -> str:
     age_min, age_max = admin_config_service.get_camp_age_bounds()
 
     company_name = settings.COMPANY_NAME or "სიტყვის აკადემია"
+    # Manager-phone anti-invention rule (2026-09-15): the prompt's unconfirmed-
+    # detail redirect used to quote the number as a literal "reproduce this
+    # exactly" example, so an admin-panel change never reached it — measured
+    # live 2026-09-15, three redirects (teachers / guests / field trips) kept
+    # answering with the OLD number while the syllabus question (a separate
+    # deterministic handler) correctly picked up the new one. The example's
+    # wording is unchanged; only the digits are now the SAME live fact already
+    # supplied separately in the per-turn context (`manager_phone=...` below),
+    # so the two can never disagree. Falls back to the same literal the prompt
+    # always carried, so a config fault never breaks the format() call.
+    try:
+        manager_phone = (admin_config_service.get_manager_phone() or "").strip()
+    except Exception:  # pragma: no cover - defensive
+        manager_phone = ""
+    manager_phone = manager_phone or "558 67 47 33"
     # Class 4: slim mode loads the short core prompt; Phase 4 lean mode loads
     # the guardrail-preserving lean prompt; default loads the giant prompt
     # exactly as before (do NOT load system_parent_v2.md when slim/lean).
@@ -3086,6 +3101,7 @@ def _build_system_prompt(message: str = "", segment: str = "") -> str:
         company_name=company_name,
         age_min=age_min,
         age_max=age_max,
+        manager_phone=manager_phone,
     )
     base_prompt = _apply_offtopic_intelligence(base_prompt)
     return (

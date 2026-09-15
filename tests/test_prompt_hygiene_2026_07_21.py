@@ -63,6 +63,11 @@ def _company_name():
     return ple.settings.COMPANY_NAME or "სიტყვის აკადემია"
 
 
+def _manager_phone():
+    from app.services import admin_config_service
+    return (admin_config_service.get_manager_phone() or "").strip() or "558 67 47 33"
+
+
 def test_use_lean_prompt_true_iff_flag_on(monkeypatch):
     # Default (no swap) — flag is off.
     assert ple._use_lean_prompt() is False
@@ -80,6 +85,7 @@ def test_build_system_prompt_byte_identical_flag_off():
     raw = load_prompt("system_parent_v2")
     assert ple._build_system_prompt() == raw.format(
         company_name=_company_name(), age_min=9, age_max=17,
+        manager_phone=_manager_phone(),
     )
 
 
@@ -90,16 +96,23 @@ def test_build_system_prompt_flag_on_loads_lean_prompt_with_marker_and_is_shorte
     assert _LEAN_MARKER in lean_prompt
 
     giant_raw = load_prompt("system_parent_v2")
-    giant_prompt = giant_raw.format(company_name=_company_name(), age_min=9, age_max=17)
+    giant_prompt = giant_raw.format(
+        company_name=_company_name(), age_min=9, age_max=17,
+        manager_phone=_manager_phone(),
+    )
     assert len(lean_prompt) < 0.5 * len(giant_prompt)
 
 
-def test_lean_prompt_accepts_same_three_format_kwargs_and_no_others():
-    """parent_lean.md must accept exactly the same 3 `.format()` kwargs as
-    the giant prompt (company_name/age_min/age_max) and never raise
-    KeyError — proves any literal `{`/`}` shown to the LLM was doubled."""
+def test_lean_prompt_accepts_same_four_format_kwargs_and_no_others():
+    """parent_lean.md must accept exactly the same 4 `.format()` kwargs as
+    the giant prompt (company_name/age_min/age_max/manager_phone — the fourth
+    added 2026-09-15, see `test_manager_phone_is_never_hardcoded_2026_09_15.py`)
+    and never raise KeyError — proves any literal `{`/`}` shown to the LLM was
+    doubled."""
     raw = load_prompt("parent_lean")
-    formatted = raw.format(company_name="X", age_min=9, age_max=17)
+    formatted = raw.format(
+        company_name="X", age_min=9, age_max=17, manager_phone="Y",
+    )
     assert "{" not in formatted and "}" not in formatted
 
 

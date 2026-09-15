@@ -44,13 +44,14 @@ def test_live_prompts_still_format_with_only_the_supplied_keys():
     """Removing the dates must not disturb the `.format()` contract — an
     unescaped `{...}` anywhere raises KeyError at engine start-up."""
     reset_cache()
-    supplied = {"company_name", "age_min", "age_max"}
+    supplied = {"company_name", "age_min", "age_max", "manager_phone"}
     for stem in ("system_parent_v2", "parent_lean", "system_adult_v1"):
         raw = load_prompt(stem)
         fields = set(re.findall(r"(?<!\{)\{([^{}]*)\}(?!\})", raw))
         assert fields <= supplied, f"{stem}.md has unsupplied placeholders: {fields - supplied}"
     load_prompt("system_parent_v2").format(
         company_name="სიტყვის აკადემია", age_min=9, age_max=17,
+        manager_phone="558 67 47 33",
     )
 
 

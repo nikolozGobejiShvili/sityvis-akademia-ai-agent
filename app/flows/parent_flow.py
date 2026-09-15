@@ -552,7 +552,7 @@ def _apply_client_emoji_policy(
     # unsupported-detail / organizer manager defer, even when the user greeted in
     # the same turn („გამარჯობა, ოთახში რამდენი ბავშვი?"). The defer carries no
     # emoji (its own contract) and must not gain a „გამარჯობა 💙" opener either.
-    if _UNKNOWN_DETAIL_ENDING in response:
+    if _is_unknown_detail_manager_defer(response):
         # Live hotfix (2026-07-02): a FIRST-TURN greeting + remaining-seats
         # question is a legitimate camp answer, so it earns the „გამარჯობა 💙"
         # opener („გამარჯობა 💙\n\nრაც შეეხება კონკრეტულ ნაკადზე დარჩენილ
@@ -3428,9 +3428,20 @@ def _strip_redundant_age_question_if_known(
 # based, never user-specific.
 _CAMP_AGE_QUESTION: str = "თქვენი შვილი რამდენი წლისაა?"
 
-# The exact approved ending of the unsupported-detail / organizer manager defer
-# (client fix). When a reply carries it, no camp age question is grafted on.
-_UNKNOWN_DETAIL_ENDING: str = "ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"
+# The unsupported-detail / organizer manager defer (client fix) always ends in
+# this exact phrase — the phone number after it is the live admin-panel value
+# (2026-09-15: it used to be a fixed digit string here too, which stopped
+# recognising the defer the moment the model correctly started using an
+# updated number). Detecting the stable prefix, not the number, means an
+# admin-panel phone change can never desynchronise this from what the model
+# actually writes. When a reply carries it, no camp age question is grafted on.
+_UNKNOWN_DETAIL_ENDING_PREFIX: str = "ამ დეტალებს მენეჯერი გაგაცნობთ :"
+
+
+def _is_unknown_detail_manager_defer(response: str) -> bool:
+    """True when `response` carries the unsupported-detail manager-defer
+    sentence, whatever phone number follows it. Never raises."""
+    return _UNKNOWN_DETAIL_ENDING_PREFIX in (response or "")
 
 # Extra child-age-question forms the shared AGE_QUESTION_RE misses —
 # „ასაკი რამდენია?" and „(როგორია) თქვენი შვილის ასაკი" (client-review): the
@@ -3482,8 +3493,8 @@ def _ensure_camp_age_question(
     if _is_thanks_or_farewell_close(message):
         return response
     # Don't append the age question when the reply is itself the unsupported-
-    # detail / organizer manager defer („…მენეჯერი გაგაცნობთ : 558 67 47 33").
-    if _UNKNOWN_DETAIL_ENDING in response:
+    # detail / organizer manager defer („…მენეჯერი გაგაცნობთ : <manager phone>").
+    if _is_unknown_detail_manager_defer(response):
         return response
     # Only in an explicit camp (PARENT) context — not adult events, not
     # an unclassified turn. conversation_service sets segment=PARENT
@@ -5672,11 +5683,11 @@ def _maybe_handle_unclear_phrase(
 
 def _strip_extras_after_unknown_fallback(response: str) -> str:
     """Final-response guard (client 2026-06-30): a reply carrying the unknown-
-    detail manager defer („ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33") must
+    detail manager defer („ამ დეტალებს მენეჯერი გაგაცნობთ : <manager phone>") must
     NOT also carry a child-age question or a consultation CTA / „აგიხსნით". Strips
     those sentences only when present (paragraph structure is otherwise
     preserved). The defer sentence itself is always kept."""
-    if not response or _UNKNOWN_DETAIL_ENDING not in response:
+    if not response or not _is_unknown_detail_manager_defer(response):
         return response
     has_extra = (
         _has_any_child_age_question(response)
