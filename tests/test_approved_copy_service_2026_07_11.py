@@ -186,7 +186,11 @@ def test_camp_price_copy_matches_current_runtime_functions():
 def test_camp_manager_unknown_detail_copy_matches_current_runtime_functions():
     rendered = _render("manager.unknown_detail_ending", manager_phone=_manager_phone())
 
-    assert rendered == parent_flow._UNKNOWN_DETAIL_ENDING
+    # parent_flow no longer keeps its own static copy of this sentence (2026-
+    # 09-15) — the phone number is live, so the sentence itself is no longer a
+    # fixed string to compare against. It still recognises ANY manager-phone
+    # rendering of it, whatever number follows.
+    assert parent_flow._is_unknown_detail_manager_defer(rendered) is True
     assert rendered == camp_topic_facts._unknown_ending()
 
 

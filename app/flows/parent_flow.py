@@ -552,7 +552,7 @@ def _apply_client_emoji_policy(
     # unsupported-detail / organizer manager defer, even when the user greeted in
     # the same turn („გამარჯობა, ოთახში რამდენი ბავშვი?"). The defer carries no
     # emoji (its own contract) and must not gain a „გამარჯობა 💙" opener either.
-    if _UNKNOWN_DETAIL_ENDING in response:
+    if _is_unknown_detail_manager_defer(response):
         # Live hotfix (2026-07-02): a FIRST-TURN greeting + remaining-seats
         # question is a legitimate camp answer, so it earns the „გამარჯობა 💙"
         # opener („გამარჯობა 💙\n\nრაც შეეხება კონკრეტულ ნაკადზე დარჩენილ
@@ -962,6 +962,15 @@ def _conversation_names_other_program(conversation: Conversation) -> bool:
     still empty at the moment it was needed. The parent had named the programme
     at 15:58:58 — the history had the answer all along.
 
+    Each turn is asked the question the routing asks — `_program_id_for_turn`,
+    which the camp-status gate already uses. It used to check for a camp WORD
+    first, so a second camp in the panel was unreachable: measured 2026-09-14
+    with „პარიზის ბანაკი" active and the summer camp ended, „ფასი რა არის?"
+    came back „საზაფხულო ბანაკი უკვე გაიმართა" and „7 წლის არის" got the
+    summer camp's 9–17 band, because „პარიზის ბანაკი" — and a bare „ბანაკი"
+    that only Paris answers to — ended the walk as the summer camp's. A camp
+    word with no single owner still ends it exactly as before.
+
     Never raises → False, which leaves the camp chain exactly as it was.
     """
     try:
@@ -969,10 +978,11 @@ def _conversation_names_other_program(conversation: Conversation) -> bool:
             if not isinstance(turn, dict) or (turn.get("role") or "") != "user":
                 continue
             text = str(turn.get("content") or "")
+            owner = _program_id_for_turn(text)
+            if owner:
+                return owner != "summer_camp"
             if any(k in text.lower() for k in _CAMP_STATUS_KEYWORDS):
                 return False
-            if _msg_names_other_program(text):
-                return True
     except Exception:  # pragma: no cover — defensive
         return False
     return False
@@ -1782,11 +1792,24 @@ def _maybe_handle_camp_facts_chain(
     calls one node instead of three. The ``camp_off`` gate, the exact order, the
     repeat-price full-block wrapping, and the ``_sanitise_booking_confirmation``
     wrapping are all preserved. Returns the first non-None sanitised response, else None."""
-    # Every handler in this chain answers for THIS camp. A turn that names some
-    # OTHER programme — including by a generic word only that one answers to —
-    # never arrives here: `_is_dynamic_program_turn` sends it to the engine
-    # above, with that programme's own fields. One place decides, so these
-    # handlers keep saying exactly what they always said.
+    # Every handler in this chain answers for THIS camp. A turn that NAMES some
+    # OTHER programme never arrives here — `_is_dynamic_program_turn` sends it
+    # to the engine above, with that programme's own fields. But a LATER turn
+    # that does not re-name anything (a bare „ფასი რა არის?") reaches that gate
+    # too, and the gate reads only the CURRENT message — so with a second camp
+    # active alongside the summer camp, naming the other one and then asking a
+    # bare follow-up still landed here and got the summer camp's own facts.
+    # Measured 2026-09-15: „ზამთრის ბანაკი" → its own overview (right), then
+    # „ფასი რა არის?" → „ბანაკის ფასი არის 2150 ლარი…", the SUMMER camp's price.
+    #
+    # `_maybe_handle_out_of_range_age` and `_maybe_handle_camp_status` already
+    # carry this exact check (2026-09-11/12); restoring it here closes the same
+    # gap for price / exact-detail / topic facts. A conversation demonstrably on
+    # another active programme defers to the engine; a summer-camp conversation,
+    # and any conversation with no other programme in it — every fixture where
+    # the summer camp runs alone — is unchanged.
+    if _msg_names_other_program(message) or _conversation_names_other_program(conversation):
+        return None
     #
     # Client follow-up hotfix (2026-06-30) — EXACT-DETAIL split: a KNOWN
     # general answer + an exact-unknown manager defer (food frequency / exact
@@ -3405,9 +3428,20 @@ def _strip_redundant_age_question_if_known(
 # based, never user-specific.
 _CAMP_AGE_QUESTION: str = "თქვენი შვილი რამდენი წლისაა?"
 
-# The exact approved ending of the unsupported-detail / organizer manager defer
-# (client fix). When a reply carries it, no camp age question is grafted on.
-_UNKNOWN_DETAIL_ENDING: str = "ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33"
+# The unsupported-detail / organizer manager defer (client fix) always ends in
+# this exact phrase — the phone number after it is the live admin-panel value
+# (2026-09-15: it used to be a fixed digit string here too, which stopped
+# recognising the defer the moment the model correctly started using an
+# updated number). Detecting the stable prefix, not the number, means an
+# admin-panel phone change can never desynchronise this from what the model
+# actually writes. When a reply carries it, no camp age question is grafted on.
+_UNKNOWN_DETAIL_ENDING_PREFIX: str = "ამ დეტალებს მენეჯერი გაგაცნობთ :"
+
+
+def _is_unknown_detail_manager_defer(response: str) -> bool:
+    """True when `response` carries the unsupported-detail manager-defer
+    sentence, whatever phone number follows it. Never raises."""
+    return _UNKNOWN_DETAIL_ENDING_PREFIX in (response or "")
 
 # Extra child-age-question forms the shared AGE_QUESTION_RE misses —
 # „ასაკი რამდენია?" and „(როგორია) თქვენი შვილის ასაკი" (client-review): the
@@ -3459,8 +3493,8 @@ def _ensure_camp_age_question(
     if _is_thanks_or_farewell_close(message):
         return response
     # Don't append the age question when the reply is itself the unsupported-
-    # detail / organizer manager defer („…მენეჯერი გაგაცნობთ : 558 67 47 33").
-    if _UNKNOWN_DETAIL_ENDING in response:
+    # detail / organizer manager defer („…მენეჯერი გაგაცნობთ : <manager phone>").
+    if _is_unknown_detail_manager_defer(response):
         return response
     # Only in an explicit camp (PARENT) context — not adult events, not
     # an unclassified turn. conversation_service sets segment=PARENT
@@ -5649,11 +5683,11 @@ def _maybe_handle_unclear_phrase(
 
 def _strip_extras_after_unknown_fallback(response: str) -> str:
     """Final-response guard (client 2026-06-30): a reply carrying the unknown-
-    detail manager defer („ამ დეტალებს მენეჯერი გაგაცნობთ : 558 67 47 33") must
+    detail manager defer („ამ დეტალებს მენეჯერი გაგაცნობთ : <manager phone>") must
     NOT also carry a child-age question or a consultation CTA / „აგიხსნით". Strips
     those sentences only when present (paragraph structure is otherwise
     preserved). The defer sentence itself is always kept."""
-    if not response or _UNKNOWN_DETAIL_ENDING not in response:
+    if not response or not _is_unknown_detail_manager_defer(response):
         return response
     has_extra = (
         _has_any_child_age_question(response)

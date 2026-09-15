@@ -198,12 +198,13 @@ def test_prompt_carries_injection_rule(prompt_file):
 
 @pytest.mark.parametrize("prompt_file", ["system_parent_v2.md", "parent_lean.md"])
 def test_prompt_has_no_unexpected_format_placeholders(prompt_file):
-    """`_build_system_prompt` calls `.format(company_name, age_min, age_max)`.
-    Any other single-brace placeholder raises KeyError at runtime."""
+    """`_build_system_prompt` calls
+    `.format(company_name, age_min, age_max, manager_phone)`. Any other
+    single-brace placeholder raises KeyError at runtime."""
     import re
 
     text = (_PROMPTS_DIR / prompt_file).read_text(encoding="utf-8")
-    allowed = {"company_name", "age_min", "age_max"}
+    allowed = {"company_name", "age_min", "age_max", "manager_phone"}
     # Strip escaped braces first ({{x}} survives .format as literal {x}).
     stripped = text.replace("{{", "").replace("}}", "")
     found = set(re.findall(r"\{([^{}]*)\}", stripped))

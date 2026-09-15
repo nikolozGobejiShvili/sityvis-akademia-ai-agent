@@ -53,11 +53,18 @@ def _company():
     return parent_llm_engine.settings.COMPANY_NAME or "სიტყვის აკადემია"
 
 
+def _manager_phone():
+    # Mirrors _build_system_prompt's own fallback (2026-09-15) so this stays a
+    # true byte-identity check regardless of what admin_config resolves to.
+    return (admin_config_service.get_manager_phone() or "").strip() or "558 67 47 33"
+
+
 def test_prompt_band_follows_canonical_config(monkeypatch):
     monkeypatch.setattr(admin_config_service, "get_camp_age_bounds", lambda: (10, 16))
     raw = load_prompt("system_parent_v2")
     assert parent_llm_engine._build_system_prompt() == raw.format(
         company_name=_company(), age_min=10, age_max=16,
+        manager_phone=_manager_phone(),
     )
 
 
@@ -65,6 +72,7 @@ def test_prompt_default_band_unchanged():
     raw = load_prompt("system_parent_v2")
     assert parent_llm_engine._build_system_prompt() == raw.format(
         company_name=_company(), age_min=9, age_max=17,
+        manager_phone=_manager_phone(),
     )
 
 

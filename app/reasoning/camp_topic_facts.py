@@ -431,7 +431,22 @@ def resolve_operational(message: str) -> str | None:
 
 
 def menu_clarification() -> str:
-    return str(_load_data().get("camp_menu_clarification") or "").strip()
+    """The exact-menu clarification, with the live admin-panel manager phone
+    substituted for the YAML's own fallback number (2026-09-15 — this used to
+    return the YAML literal unconditionally, with no admin-config read at
+    all)."""
+    text = str(_load_data().get("camp_menu_clarification") or "").strip()
+    if not text:
+        return text
+    fallback_phone = str(_load_data().get("camp_manager_phone") or "").strip()
+    try:
+        from app.services import admin_config_service
+        live_phone = str(admin_config_service.get_manager_phone() or "").strip()
+    except Exception:  # pragma: no cover — defensive
+        live_phone = ""
+    if live_phone and fallback_phone and fallback_phone in text:
+        text = text.replace(fallback_phone, live_phone)
+    return text
 
 
 def direct_call_fallback() -> str:
@@ -604,9 +619,17 @@ def resolve_camp_answer(message: str) -> str | None:
 
 
 def _canonical_overview_facts() -> dict[str, str]:
-    """Canonical {price, duration, age_min, age_max} from get_camp_facts(), with
-    safe camp_2026 defaults — never hard-coded into the YAML text."""
-    price = duration = age_min = age_max = ""
+    """Canonical {price, duration, age_min, age_max, manager_phone} from
+    get_camp_facts() / get_manager_phone(), with safe defaults — never
+    hard-coded into the YAML text.
+
+    manager_phone (2026-09-15): two topic answers — parent-child contact and
+    the exact-menu clarification — used to carry the manager's number as a
+    literal digit string, unconditionally, with no admin-config read at all.
+    An operator phone change never reached them. The safe default is the
+    YAML's OWN `camp_manager_phone` key (declared, previously unread) rather
+    than a second Python literal to keep in sync."""
+    price = duration = age_min = age_max = manager_phone = ""
     try:
         from app.services import admin_config_service
 
@@ -615,6 +638,7 @@ def _canonical_overview_facts() -> dict[str, str]:
         duration = str(facts.get("duration_days") or "").strip()
         age_min = str(facts.get("age_min") or "").strip()
         age_max = str(facts.get("age_max") or "").strip()
+        manager_phone = str(admin_config_service.get_manager_phone() or "").strip()
     except Exception as exc:  # pragma: no cover — defensive
         logger.warning("[camp_topic_facts] get_camp_facts failed (%s)", exc)
     return {
@@ -622,6 +646,8 @@ def _canonical_overview_facts() -> dict[str, str]:
         "duration": duration or "7",
         "age_min": age_min or "9",
         "age_max": age_max or "17",
+        "manager_phone": manager_phone
+        or str(_load_data().get("camp_manager_phone") or "558 67 47 33").strip(),
     }
 
 
