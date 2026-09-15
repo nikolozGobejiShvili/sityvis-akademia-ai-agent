@@ -220,7 +220,7 @@ def test_request_adult_manager_callback_returns_manager_phone(
     monkeypatch.setattr(notification_service, "send_manager_notification", lambda *a, **k: True)
     monkeypatch.setattr(sheets_service, "create_lead", lambda lead: True)
     monkeypatch.setattr(
-        admin_config_service, "get_manager_phone", lambda: "558 67 47 33",
+        admin_config_service, "get_manager_phone", lambda *a, **k: "558 67 47 33",
     )
 
     result = executor.execute(
@@ -250,7 +250,7 @@ def test_request_adult_manager_callback_writes_sheets_and_notifies(
         lambda lead, summary: notify_calls.append((lead, summary)),
     )
     monkeypatch.setattr(
-        admin_config_service, "get_manager_phone", lambda: "558 67 47 33",
+        admin_config_service, "get_manager_phone", lambda *a, **k: "558 67 47 33",
     )
 
     result = executor.execute(
@@ -275,7 +275,7 @@ def test_request_adult_manager_callback_idempotent(
         notification_service, "send_manager_notification",
         lambda *a, **k: notify_count.__setitem__("n", notify_count["n"] + 1),
     )
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "558 67 47 33")
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda *a, **k: "558 67 47 33")
 
     r1 = executor.execute(
         TOOL_REQUEST_ADULT_MANAGER_CALLBACK,

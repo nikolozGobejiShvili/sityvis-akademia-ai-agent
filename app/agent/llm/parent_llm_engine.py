@@ -3678,11 +3678,21 @@ def _build_context_message(
     # number is a fact the product already owns; it simply never travelled with
     # the turn, so the model could not give what it did not have.
     #
+    # Per-programme (2026-09-15): every programme has its OWN manager contact
+    # — confirmed live, summer_camp and sunday_school set to different
+    # numbers by the operator. Passing `_active_program_id` (already resolved
+    # above, for the SAME turn) means a Sunday-School conversation's
+    # unconfirmed-detail answers hand over Sunday School's own number, not
+    # the camp's — measured live 2026-09-15 still handing over the camp's
+    # number for exactly this class of question after the previous fix.
+    #
     # A fact and its role, not a script: no wording is fixed, and it says
     # nothing about turns the panel DOES answer.
     try:
         from app.services import admin_config_service as _admin_cfg
-        _manager_phone = str(_admin_cfg.get_manager_phone() or "").strip()
+        _manager_phone = str(
+            _admin_cfg.get_manager_phone(_active_program_id) or "",
+        ).strip()
     except Exception:  # pragma: no cover - defensive
         _manager_phone = ""
     if _manager_phone:

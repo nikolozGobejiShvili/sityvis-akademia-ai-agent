@@ -50,7 +50,7 @@ def test_shipped_default_manager_phone_is_the_safe_fallback():
 
 
 def test_changing_canonical_propagates_everywhere(monkeypatch):
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "599 00 11 22")
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda *a, **k: "599 00 11 22")
 
     # camp-info tool phone follows the canonical helper now
     assert admin_config_service.get_camp_facts().get("phone") == "599 00 11 22"

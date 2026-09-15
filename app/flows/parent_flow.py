@@ -828,16 +828,44 @@ def _camp_ended_direct() -> str:
     return "დიახ, " + _camp_over_line() + "\n\n" + _camp_off_alt()
 
 
+def _camp_panel_status_text() -> str:
+    """The camp's own status sentence, as the OPERATOR wrote it in the panel.
+
+    Migration stage 1 (2026-09-14). Sunday School reads its status sentence from
+    its section's `availability_text` and the operator can change it without a
+    deploy; the camp had one sentence per status compiled into this file, so the
+    same edit meant a code change. The camp now reads the SAME field.
+
+    One field, not one per status, for the same reason Sunday School has one:
+    the operator sets the status, then writes what to say about it. Empty — the
+    panel untouched — falls back to the sentences below, so nothing moves until
+    that field is filled. Never raises.
+    """
+    try:
+        from app.services import admin_config_service
+        section = admin_config_service.get_section("summer_camp") or {}
+        text = section.get("availability_text")
+        return text.strip() if isinstance(text, str) else ""
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
 def _camp_status_message(status: str) -> str:
     alt = _camp_off_alt()
+    panel = _camp_panel_status_text()
+    if panel:
+        return panel + "\n\n" + alt
     if status == "full":
-        return "ბანაკის მიმდინარე ნაკადებზე ადგილები შევსებულია.\n\n" + alt
+        return _CAMP_SHORT_FULL + "\n\n" + alt
     if status == "coming_soon":
-        return "ბანაკის დეტალები ჯერ ზუსტდება.\n\n" + alt
+        return _CAMP_SHORT_COMING_SOON + "\n\n" + alt
     return _camp_over_line() + "\n\n" + alt  # hidden / ended
 
 
 def _camp_status_short(status: str) -> str:
+    panel = _camp_panel_status_text()
+    if panel:
+        return panel
     if status == "full":
         return _CAMP_SHORT_FULL
     if status == "coming_soon":
@@ -6346,7 +6374,7 @@ def _maybe_handle_underage_manager_handoff(
             lead.name, lead.name,
         ):
             lead.name = ""
-        _manager_out = _render_manager_number_answer(lead)
+        _manager_out = _render_manager_number_answer(lead, conversation=conversation)
         _mark_manager_number_disclosed(conversation)
         return _manager_out
 
@@ -7250,6 +7278,7 @@ def _mark_manager_number_disclosed(conversation) -> None:
 
 def _render_manager_number_answer(
     lead: Lead | None = None, *, self_call: bool = False,
+    conversation: Conversation | None = None,
 ) -> str:
     """Disclose the configured manager number. CONTEXT-AWARE: when we ALREADY
     have the parent's phone (e.g. a consultation is booked), we do NOT ask for
@@ -7259,11 +7288,26 @@ def _render_manager_number_answer(
     ``self_call`` — the parent said they will phone the manager THEMSELVES
     („მე თვითონ დავურეკავ"). In that case we just give the number and never
     ask for the parent's own number (no callback offer) and never promise an
-    outbound call they did not request (live bug 2026-06-25)."""
+    outbound call they did not request (live bug 2026-06-25).
+
+    ``conversation`` (2026-09-15, optional — every existing caller that omits
+    it keeps the old summer-camp-first behaviour): when given, resolves the
+    SAME active-programme id the model's own per-turn context uses, so „give
+    me the manager's number" in a Sunday-School conversation hands over
+    Sunday School's own configured number, not the camp's."""
     from app.services import admin_config_service
 
+    program_id = None
+    if conversation is not None:
+        try:
+            from app.agent.llm.parent_llm_engine import _active_program_section
+            section = _active_program_section(conversation, "", lead)
+            program_id = (section or {}).get("id") or None
+        except Exception:  # pragma: no cover - defensive
+            program_id = None
+
     phone_known = bool(lead is not None and (lead.phone or "").strip())
-    manager_phone = (admin_config_service.get_manager_phone() or "").strip()
+    manager_phone = (admin_config_service.get_manager_phone(program_id) or "").strip()
     if manager_phone:
         if self_call:
             key = "manager.direct_phone"
@@ -7322,7 +7366,9 @@ def _maybe_handle_explicit_manager_request(
         "disclosure (self_call=%s sender=%s)", is_self_call,
         conversation.sender_id,
     )
-    _manager_out = _render_manager_number_answer(lead, self_call=is_self_call)
+    _manager_out = _render_manager_number_answer(
+        lead, self_call=is_self_call, conversation=conversation,
+    )
     # A self-call (user asking about their OWN number) is not a manager handoff — only
     # block follow-up when the MANAGER's number was actually disclosed.
     if not is_self_call:
@@ -8249,7 +8295,7 @@ def _planner_protect_manager_phone(conversation, message: str, plan) -> str | No
             "[planner][auth] manager-phone request → deterministic disclosure "
             "(overrides pending state, sender=%s)", conversation.sender_id,
         )
-        _manager_out = _render_manager_number_answer(lead)
+        _manager_out = _render_manager_number_answer(lead, conversation=conversation)
         _mark_manager_number_disclosed(conversation)
         return _manager_out
     except Exception:  # pragma: no cover — defensive
@@ -8262,7 +8308,9 @@ def _planner_pre_answer(conversation, message: str, plan) -> str | None:
     try:
         intent = getattr(plan, "user_current_intent", "")
         if intent == "manager_phone_request":
-            _manager_out = _render_manager_number_answer(_ensure_lead(conversation))
+            _manager_out = _render_manager_number_answer(
+                _ensure_lead(conversation), conversation=conversation,
+            )
             _mark_manager_number_disclosed(conversation)
             return _manager_out
         if intent == "camp_registration":
@@ -8421,14 +8469,22 @@ def planner_final_validate(conversation, plan, response: str) -> str:
         # fallback instead of substituting a user/lead/callback/test number.
         if _cp.F_MUST_RETURN_MANAGER_PHONE in forbidden:
             try:
+                from app.agent.llm.parent_llm_engine import _active_program_section
+                _section = _active_program_section(
+                    conversation, "", getattr(conversation, "lead", None),
+                )
                 from app.services import admin_config_service
-                phone = (admin_config_service.get_manager_phone() or "").strip()
+                phone = (admin_config_service.get_manager_phone(
+                    (_section or {}).get("id") or None,
+                ) or "").strip()
             except Exception:
                 phone = ""
             digits = re.sub(r"\D", "", phone)
             if not digits or digits not in re.sub(r"\D", "", out):
                 logger.info("[planner][validator] forced manager-phone disclosure")
-                out = _render_manager_number_answer(getattr(conversation, "lead", None))
+                out = _render_manager_number_answer(
+                    getattr(conversation, "lead", None), conversation=conversation,
+                )
                 _mark_manager_number_disclosed(conversation)
                 low = out.lower()
 
@@ -12668,8 +12724,9 @@ def _program_section_facts(program_id: str) -> dict:
 
     Mirrors the camp fact keys the post-booking composer expects, sourced from
     the product's `sections.yaml` entry; a key is omitted when the section does
-    not provide it. `phone` is the canonical manager phone — dynamic products
-    have no own phone. Never raises.
+    not provide it. `phone` is THIS product's own manager contact when the
+    operator has set one (2026-09-15 — every programme has its own field now),
+    falling back to the shared default chain otherwise. Never raises.
     """
     from app.services import admin_config_service
     try:
@@ -12699,7 +12756,7 @@ def _program_section_facts(program_id: str) -> dict:
     if section.get("name"):
         facts["program_name"] = section.get("name")
     try:
-        phone = admin_config_service.get_manager_phone()
+        phone = admin_config_service.get_manager_phone(program_id)
         if phone:
             facts["phone"] = phone
     except Exception:  # pragma: no cover - phone is best-effort

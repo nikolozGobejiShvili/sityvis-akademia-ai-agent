@@ -252,7 +252,7 @@ def test_h12_latin_intent_word_not_storable():
 def test_c_manager_phone_uses_canonical_helper(monkeypatch):
     # Change the helper → the disclosure must change accordingly (proves it is
     # NOT a hardcoded string).
-    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda: "599 11 22 33")
+    monkeypatch.setattr(admin_config_service, "get_manager_phone", lambda *a, **k: "599 11 22 33")
     conv = _ua_conv()
     out = parent_flow._maybe_handle_underage_manager_handoff(conv, "მენჯერის ნომერი მინდა")
     assert "599 11 22 33" in out
