@@ -2750,7 +2750,9 @@ def run_parent_llm_turn(
     raises.
     """
     try:
-        system_prompt = _build_system_prompt(user_message, "PARENT")
+        system_prompt = _build_system_prompt(
+            user_message, "PARENT", conversation=conversation, lead=lead,
+        )
     except Exception as exc:
         logger.exception(
             "[parent_llm_engine] system prompt assembly failed: %s", exc,
@@ -3062,10 +3064,20 @@ def _apply_offtopic_intelligence(prompt: str) -> str:
     return rewritten + _OFFTOPIC_PROGRAM_AGNOSTIC_DIRECTIVE
 
 
-def _build_system_prompt(message: str = "", segment: str = "") -> str:
+def _build_system_prompt(
+    message: str = "",
+    segment: str = "",
+    *,
+    conversation: Conversation | None = None,
+    lead: Lead | None = None,
+) -> str:
     # Canonical Admin Config age band (5A-2 migration) — runtime prompt
     # context only; the `system_parent_v2.md` file is untouched. With the
     # shipped config the band stays 9–17, so the rendered prompt is identical.
+    # Every sentence that uses this band NAMES the camp ("ბანაკი
+    # {age_min}–{age_max} წლის...") in every prompt variant — it is a fact
+    # ABOUT THE CAMP, not a per-programme fact, so it is intentionally NOT
+    # resolved against the active programme the way `manager_phone` below is.
     from app.services import admin_config_service
     age_min, age_max = admin_config_service.get_camp_age_bounds()
 
@@ -3080,8 +3092,27 @@ def _build_system_prompt(message: str = "", segment: str = "") -> str:
     # supplied separately in the per-turn context (`manager_phone=...` below),
     # so the two can never disagree. Falls back to the same literal the prompt
     # always carried, so a config fault never breaks the format() call.
+    #
+    # Per-programme (2026-09-16): unlike the age band above, this redirect
+    # never names a programme — "ამ დეტალებს მენეჯერი გაგაცნობთ:
+    # {manager_phone}" — so it is the ACTIVE programme's own number that
+    # belongs here, the same fact `_build_context_message` already resolves
+    # for the per-turn `manager_phone=` line (2026-09-15). Without this, a
+    # stray model-composed redirect could still hand over the camp's number
+    # in a Sunday-School conversation even after that fix, because this is a
+    # separate call that feeds the prompt TEXT itself, not the per-turn facts
+    # block.
+    _program_id = ""
+    if conversation is not None:
+        try:
+            _active_section = _active_program_section(conversation, message, lead)
+            _program_id = str((_active_section or {}).get("id") or "").strip()
+        except Exception:  # pragma: no cover - defensive
+            _program_id = ""
     try:
-        manager_phone = (admin_config_service.get_manager_phone() or "").strip()
+        manager_phone = (
+            admin_config_service.get_manager_phone(_program_id) or ""
+        ).strip()
     except Exception:  # pragma: no cover - defensive
         manager_phone = ""
     manager_phone = manager_phone or "558 67 47 33"
