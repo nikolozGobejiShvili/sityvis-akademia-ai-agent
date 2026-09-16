@@ -98,7 +98,7 @@ def test_the_placeholder_is_present_and_balanced(relpath, prompt_name):
 
 
 def test_build_system_prompt_renders_the_live_admin_panel_number(monkeypatch):
-    monkeypatch.setattr(acs, "get_manager_phone", lambda: NEW_PHONE)
+    monkeypatch.setattr(acs, "get_manager_phone", lambda *a, **k: NEW_PHONE)
     prompt = ple._build_system_prompt()
     assert NEW_PHONE in prompt
     assert OLD_PHONE not in prompt
@@ -107,13 +107,13 @@ def test_build_system_prompt_renders_the_live_admin_panel_number(monkeypatch):
 def test_build_system_prompt_falls_back_safely_when_admin_config_is_empty(monkeypatch):
     """No live number configured → the prompt still renders (never a format
     KeyError), with some safe non-empty fallback digits."""
-    monkeypatch.setattr(acs, "get_manager_phone", lambda: "")
+    monkeypatch.setattr(acs, "get_manager_phone", lambda *a, **k: "")
     prompt = ple._build_system_prompt()
     assert "{manager_phone}" not in prompt  # placeholder always resolved
 
 
 def test_build_system_prompt_survives_admin_config_raising(monkeypatch):
-    def _boom():
+    def _boom(*a, **k):
         raise RuntimeError("config unavailable")
     monkeypatch.setattr(acs, "get_manager_phone", _boom)
     prompt = ple._build_system_prompt()  # must not raise
