@@ -14,8 +14,9 @@ Two formatters already existed and neither could help:
     „already paragraphed" and was left alone.
 
 `_format_reply_paragraphs` looks at every block on its own and is tied to no
-topic. Whitespace only: a block that already carries single newlines is a list
-and is never touched, and the wording must come out identical.
+topic. Whitespace only: a short list line is never touched, and the wording
+must come out identical. (2026-09-17: walls inside a block that also holds a
+line break are now caught too — see test_paragraphs_inside_list_blocks.)
 """
 from __future__ import annotations
 
