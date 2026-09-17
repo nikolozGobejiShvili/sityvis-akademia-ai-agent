@@ -1208,6 +1208,8 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
             deterministic_reason="top_level_segment_route",
         )
         response = adult_flow.handle(conversation, message_text)
+        # The kids flow formats paragraphs inside parent_flow; the adult flow had none.
+        response = parent_flow._format_reply_paragraphs(response)
     else:
         _trace.set(route="unclear_routing", segment=route_segment)
         _trace.set_route_decision(

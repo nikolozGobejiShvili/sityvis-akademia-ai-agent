@@ -2846,32 +2846,58 @@ def _apply_privacy_notice_policy(
 # answer has none of. This looks at every block on its own, so a heading plus a wall is formatted,
 # and it is not tied to any topic.
 #
-# Whitespace only — no wording is added, removed or reordered. A block that
-# already carries single newlines is a list and is left exactly as written.
-# Three sentences is what actually marks a wall; the length is the second
-# guard, so a short three-clause answer is not chopped up. Georgian runs about
-# 40 characters to a phone line, so 160 is roughly four lines before a break.
+# Whitespace only — no wording is added, removed or reordered. Three sentences
+# is what actually marks a wall; the length is the second guard, so a short
+# three-clause answer is not chopped up. Georgian runs about 40 characters to a
+# phone line, so 160 is roughly four lines before a break.
+#
+# Measured on Meta's own conversation record 2026-09-17: 4 of the 30 long
+# replies sent after this shipped were still walls. Each sat in a block that
+# also held one single newline — a link on its own line, a phone line, a list
+# item — and the whole block used to be skipped as „a list". So each LINE is
+# judged instead: list lines, links and phone lines stay as written, and only a
+# line that is itself a wall is broken up. The model also ran a numbered point
+# onto the end of the previous one („…რეგისტრაციაში. 3. მენეჯერთან…"); that
+# point starts its own paragraph, and a bare „3." is never split off its text.
 _DENSE_BLOCK_CHARS: int = 160
+_INLINE_LIST_ITEM_RE = re.compile(r"(?<=[.!?])[ \t]+(?=\d{1,2}\.\s)")
+_LIST_NUMBER_RE = re.compile(r"^\d{1,2}\.$")
+
+
+def _line_sentences(line: str) -> list[str]:
+    sentences: list[str] = []
+    for part in _SENTENCE_SPLIT_RE.split(line):
+        part = part.strip()
+        if not part:
+            continue
+        if sentences and _LIST_NUMBER_RE.match(sentences[-1]):
+            sentences[-1] = f"{sentences[-1]} {part}"
+        else:
+            sentences.append(part)
+    return sentences
 
 
 def _format_reply_paragraphs(response: str) -> str:
-    """Break every dense block of a reply into paragraphs. Whitespace only."""
+    """Break every dense line of a reply into paragraphs. Whitespace only."""
     if not response or len(response) < _DENSE_BLOCK_CHARS:
         return response
-    out, changed = [], False
-    for block in response.split("\n\n"):
-        stripped = block.strip()
-        if "\n" in stripped or len(stripped) < _DENSE_BLOCK_CHARS:
-            out.append(block)
-            continue
-        sentences = [
-            x.strip() for x in _SENTENCE_SPLIT_RE.split(stripped) if x.strip()
-        ]
-        if len(sentences) < 3:
-            out.append(block)
-            continue
-        out.append("\n\n".join(sentences))
-        changed = True
+    text = _INLINE_LIST_ITEM_RE.sub("\n\n", response)
+    changed = text != response
+    out = []
+    for block in text.split("\n\n"):
+        lines = []
+        for line in block.split("\n"):
+            stripped = line.strip()
+            sentences = (
+                _line_sentences(stripped)
+                if len(stripped) >= _DENSE_BLOCK_CHARS else []
+            )
+            if len(sentences) >= 3:
+                lines.append("\n\n".join(sentences))
+                changed = True
+            else:
+                lines.append(line)
+        out.append("\n".join(lines))
     if not changed:
         return response
     logger.info("[parent_flow] dense reply reformatted into paragraphs")
