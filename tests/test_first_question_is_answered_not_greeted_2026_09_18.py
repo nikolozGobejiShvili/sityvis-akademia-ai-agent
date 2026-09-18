@@ -74,8 +74,15 @@ def _fresh() -> Conversation:
     return Conversation(sender_id="first-turn", platform="messenger")
 
 
+# Live 13:29 the same day, AFTER the first version of this fix shipped: a polite
+# request carries no question mark and no interrogative word, and was greeted.
+POLITE_REQUEST = "Გამარჯობა, გთხოვთ მომწეროთ პირობები"
+DETAILS_REQUEST = "დეტალები რომ მომწეროთ"
+
+
 @pytest.mark.parametrize("message", [
     OFF_TOPIC_QUESTION, REGISTRATION_QUESTION, LOCATION_QUESTION, ONLINE_QUESTION,
+    POLITE_REQUEST, DETAILS_REQUEST,
 ])
 def test_a_first_turn_question_is_not_answered_with_the_greeting(live_panel, message):
     assert parent_flow._maybe_static_welcome(_fresh(), message) is None, (

@@ -4531,17 +4531,6 @@ def _is_pure_greeting_token(text: str) -> bool:
     return cleaned in _PURE_GREETING_TOKENS
 
 
-# Words a parent's FIRST message uses to ASK something. Matched per token (a
-# token that STARTS with the stem), never as a substring of the whole message —
-# „პარაგრაფში" contains „რა" and must not count as a question.
-_FIRST_TURN_QUESTION_STEMS: tuple[str, ...] = (
-    "რა", "რო", "სად", "ვინ", "ვის", "ვერ", "თუ", "როგორ", "როდის", "რამდენ",
-    "გაქვთ", "გყავთ", "შეიძლებ", "შესაძლებელ", "მაინტერესებ", "დამაინტერესებ",
-    "მინდა", "მსურს", "ინფორმაცი", "დეტალებ", "how", "what", "when", "where",
-    "do", "does", "can",
-)
-
-
 # „გამარჯობა, როგორ ხართ?" is a greeting with a question mark, not a question.
 # Courtesy phrases are removed before the message is judged.
 _FIRST_TURN_SMALLTALK: tuple[str, ...] = (
@@ -4578,11 +4567,12 @@ def _first_turn_asks_something(message: str) -> bool:
         return False
     if "?" in text:
         return True
-    return any(
-        token.startswith(stem)
-        for token in core
-        for stem in _FIRST_TURN_QUESTION_STEMS
-    )
+    # No question mark: a REQUEST still says more than one word. Live 2026-09-18
+    # 13:29 „გამარჯობა, გთხოვთ მომწეროთ პირობები" was greeted because the first
+    # version of this rule looked for interrogative words, and a polite request
+    # contains none. A bare topic word („ბანაკი") is still one word, so its
+    # shipped menu contract is untouched.
+    return len(core) >= 2
 
 
 def _age_status_for_lead(lead: Lead | None) -> str:
@@ -8367,7 +8357,7 @@ def _bot_recently_listed_events(conversation: Conversation) -> bool:
 
 _HUMAN_TONE_ACK = (
     "რა თქმა უნდა, მარტივად და ბუნებრივად გიპასუხებთ. "
-    "რა გაინტერესებთ — ბანაკის პირობები, ფასი, ასაკი თუ კონსულტაცია?"
+    "რა გაინტერესებთ — პირობები, ფასი, ასაკი თუ კონსულტაცია?"
 )
 
 
@@ -9884,8 +9874,7 @@ def _build_state_recall_reply(conversation: Conversation) -> str:
     if not lines:
         return (
             "ამ ეტაპზე ბევრი ინფორმაცია არ მაქვს შენახული. "
-            "თუ ბანაკთან დაკავშირებით კითხვა გაქვთ, მომწერეთ და "
-            "დაგეხმარებით."
+            "თუ კითხვა გაქვთ, მომწერეთ და დაგეხმარებით."
         )
 
     body = "თქვენზე შენახული ინფორმაციაა:\n" + "\n".join(lines)
