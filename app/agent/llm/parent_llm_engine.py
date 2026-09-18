@@ -3684,6 +3684,36 @@ def _build_context_message(
     # `active_program=პარიზის ბანაკი` reads as though PARIS were over, which is
     # the leak this whole arc has been closing.
     _active_program_id = str((active_section or {}).get("id") or "").strip()
+
+    # What is actually on sale travels with the turn (2026-09-18).
+    #
+    # Live 08:46 „თანხას წინასწარ ვიხდით?" came back „საბანაკო პროგრამა 2026
+    # უკვე დასრულებულია… 558 67 47 33… მომდევნო ბანაკის შესახებ". The
+    # deterministic gate had already stood down, so this was the model's own
+    # answer — and on the captured input for that turn the system prompt said
+    # „ბანაკ" 51 times, the SYSTEM DATA block said the camp was over and gave the
+    # camp's number, and nothing anywhere named the programme the client is
+    # actually selling. The model was told what is closed and never what is open,
+    # so it answered with the only programme it had.
+    #
+    # A fact from the panel, not a rule about wording: the names on sale right
+    # now, and where their details come from. A programme the operator activates
+    # tomorrow appears here on its own.
+    try:
+        from app.services import admin_config_service as _admin_cfg
+        _on_sale = _admin_cfg.get_active_sections() or []
+    except Exception:  # pragma: no cover - defensive
+        _on_sale = []
+    _on_sale_names = [
+        str(s.get("name") or "").strip() for s in _on_sale
+        if str(s.get("name") or "").strip()
+    ]
+    if _on_sale_names:
+        parts.append(
+            "active_programs=" + ", ".join(_on_sale_names)
+            + " (on sale now; facts via get_program_info. Not listed = not sold)"
+        )
+
     if _active_program_id in ("", "summer_camp"):
         try:
             from app.services import admin_config_service as _admin_cfg
@@ -3697,8 +3727,8 @@ def _build_context_message(
             )
             parts.append(
                 "camp_intake_list=ბანაკის მსურველთა სია (the list a parent's "
-                "name and contact number goes on while no camp intake is open; "
-                "the manager then contacts them about the next one)"
+                "contact goes on while no camp intake is open; the manager "
+                "then calls them about the next one)"
             )
 
     # What the agent can actually hand over when the panel has no answer.
@@ -3719,10 +3749,18 @@ def _build_context_message(
     #
     # A fact and its role, not a script: no wording is fixed, and it says
     # nothing about turns the panel DOES answer.
+    # Sole programme (2026-09-18): with nothing named yet, `_active_program_id` is
+    # empty and the chain falls back to the camp's number — the 08:47 reply handed
+    # over 558 67 47 33 while the camp was closed and Sunday School was the only
+    # thing on sale. When the panel has exactly one programme, an unattributed
+    # turn is that programme's, so its own contact is the one to hand over.
+    _phone_program_id = _active_program_id
+    if not _phone_program_id and len(_on_sale) == 1:
+        _phone_program_id = str(_on_sale[0].get("id") or "").strip()
     try:
         from app.services import admin_config_service as _admin_cfg
         _manager_phone = str(
-            _admin_cfg.get_manager_phone(_active_program_id) or "",
+            _admin_cfg.get_manager_phone(_phone_program_id) or "",
         ).strip()
     except Exception:  # pragma: no cover - defensive
         _manager_phone = ""
