@@ -903,6 +903,16 @@ def _msg_has_camp_intent(message: str) -> bool:
 _CAMP_WORD_STEMS: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ")
 
 
+def _camp_is_not_active() -> bool:
+    """True when the panel says the camp is not running. Never raises → False,
+    so a fault can never make the camp stand down."""
+    try:
+        from app.services import admin_config_service
+        return admin_config_service.get_camp_status() != "active"
+    except Exception:  # pragma: no cover — defensive
+        return False
+
+
 def _conversation_names_camp(conversation: Conversation) -> bool:
     """True when the newest programme the PARENT named is this camp.
 
@@ -4503,6 +4513,60 @@ def _is_pure_greeting_token(text: str) -> bool:
     return cleaned in _PURE_GREETING_TOKENS
 
 
+# Words a parent's FIRST message uses to ASK something. Matched per token (a
+# token that STARTS with the stem), never as a substring of the whole message —
+# „პარაგრაფში" contains „რა" and must not count as a question.
+_FIRST_TURN_QUESTION_STEMS: tuple[str, ...] = (
+    "რა", "რო", "სად", "ვინ", "ვის", "ვერ", "თუ", "როგორ", "როდის", "რამდენ",
+    "გაქვთ", "გყავთ", "შეიძლებ", "შესაძლებელ", "მაინტერესებ", "დამაინტერესებ",
+    "მინდა", "მსურს", "ინფორმაცი", "დეტალებ", "how", "what", "when", "where",
+    "do", "does", "can",
+)
+
+
+# „გამარჯობა, როგორ ხართ?" is a greeting with a question mark, not a question.
+# Courtesy phrases are removed before the message is judged.
+_FIRST_TURN_SMALLTALK: tuple[str, ...] = (
+    "როგორ ხართ", "როგორა ხართ", "როგორ ხარ", "როგორ არიან",
+    "რას შვრებით", "how are you", "how r u",
+)
+
+
+def _first_turn_asks_something(message: str) -> bool:
+    """True when the parent's first message ASKS, rather than only greets.
+
+    Measured live 2026-09-18: „ვატერლოოს ბრძოლა როდის მოხდა?" (08:20) and
+    „სალამი" + „6 წლის ბავშვს ვერ დავარეგისტრირებ?" (08:25) both came back
+    „გამარჯობა. რით შემიძლია დაგეხმაროთ?" — the parent's own question read back
+    to them.
+
+    A question mark is enough. Without one, one of the asking words above has to
+    be its own token, so a bare topic word („ბანაკი") — whose menu contract is
+    shipped behaviour — still is not a question."""
+    text = (message or "").strip()
+    if not text:
+        return False
+    low = text.lower().replace("\n", " ")
+    for phrase in _FIRST_TURN_SMALLTALK:
+        low = low.replace(phrase, " ")
+    core = []
+    for raw in low.split():
+        token = raw.strip("!.,:;?()[]„“\"'-—–")
+        if not token or token in _PURE_GREETING_TOKENS:
+            continue
+        core.append(token)
+    if not core:
+        # Nothing but a greeting and courtesy — the greeting is the right answer.
+        return False
+    if "?" in text:
+        return True
+    return any(
+        token.startswith(stem)
+        for token in core
+        for stem in _FIRST_TURN_QUESTION_STEMS
+    )
+
+
 def _age_status_for_lead(lead: Lead | None) -> str:
     """Return one of 'unknown' | 'eligible' | 'ineligible' for an
     optional lead. Mirrors the engine's `_age_status` but kept here to
@@ -4854,6 +4918,26 @@ def _maybe_handle_out_of_range_age(
         logger.info(
             "[parent_flow] out-of-range age deferred — conversation is on "
             "another active program (sender=%s)", conversation.sender_id,
+        )
+        return None
+
+    # Naming is not the only way. Measured 2026-09-18 on the live panel shape
+    # (camp ended, Sunday School the one programme on sale): a parent's FIRST
+    # message „6 წლის ბავშვს ვერ დავარეგისტრირებ?" — and „…8წლიან
+    # ჯგუფებისთვის?", whose child IS inside Sunday School's own 7-8 bracket —
+    # came back „ბანაკი განკუთვნილია 9–17 წლის ბავშვებისთვის". Nothing had been
+    # named yet, so the guard above could not fire. Same three conditions as the
+    # camp-status gate, same flag: a closed camp does not rule on another
+    # programme's age band.
+    if (
+        getattr(settings, "USE_PROGRAM_ISOLATION", False)
+        and _camp_is_not_active()
+        and not _conversation_names_camp(conversation)
+        and _other_active_child_programs_exist()
+    ):
+        logger.info(
+            "[parent_flow] out-of-range age deferred — the camp is closed and "
+            "another programme is active (sender=%s)", conversation.sender_id,
         )
         return None
     logger.info(
@@ -8051,6 +8135,12 @@ def _maybe_static_welcome(conversation: Conversation, message: str) -> str | Non
     #       routes to the adult path (an events answer or the „no active event"
     #       line), never the camp menu.
     if _first_turn_adult_events_intent(message):
+        return None
+    #   (c) ANY question (2026-09-18). The menu is the last resort, and a parent
+    #       who asked something has already told us what they want — answering
+    #       „რით შემიძლია დაგეხმაროთ?" makes them say it twice. A bare greeting
+    #       still gets the greeting; a bare topic word still gets the menu.
+    if _first_turn_asks_something(message):
         return None
     try:
         # R2 data-driven welcome (flag-gated): list the programs ACTIVE in the
