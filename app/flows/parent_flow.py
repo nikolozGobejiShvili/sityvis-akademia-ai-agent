@@ -3423,6 +3423,24 @@ def _maybe_handle_multi_child_age(
             getattr(conversation, "sender_id", "?"),
         )
         return None
+
+    # Live 2026-09-18 12:22, camp ended and Sunday School the one programme on
+    # sale: „მაინტერესებს 16 და 13 წლის მოზარდების ჯგუფში თუ გაქვთ ადგილი?" came
+    # back „ბანაკი ორივე ასაკისთვის შესაბამისია. რას ელოდებით ბანაკისგან?" —
+    # nothing had been named, so the guard above could not fire. Same three
+    # conditions as the camp-status gate and the out-of-range-age handler.
+    if (
+        getattr(settings, "USE_PROGRAM_ISOLATION", False)
+        and _camp_is_not_active()
+        and not _conversation_names_camp(conversation)
+        and _other_active_child_programs_exist()
+    ):
+        logger.info(
+            "[parent_flow] multi-child age deferred — the camp is closed and "
+            "another programme is active (sender=%s)",
+            getattr(conversation, "sender_id", "?"),
+        )
+        return None
     # Age already known → nothing to record (a later different-child correction
     # is owned by _maybe_requalify_child, which runs earlier).
     if _child_age_known(lead):

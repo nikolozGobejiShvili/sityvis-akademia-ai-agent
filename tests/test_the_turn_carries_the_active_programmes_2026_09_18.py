@@ -104,6 +104,37 @@ def test_two_programmes_on_sale_are_both_named(monkeypatch):
     assert "ზრდასრულთა ღონისძიებები" in context
 
 
-def test_the_camp_status_fact_is_still_carried(camp_ended_school_on_sale):
-    """The camp being over is true and useful — it must not be dropped."""
-    assert "camp_status=ended" in _context(PAYMENT_QUESTION)
+def test_the_closed_camp_is_not_the_only_fact_an_unnamed_turn_gets(
+    camp_ended_school_on_sale,
+):
+    """Measured live 2026-09-18 12:22, AFTER active_programs shipped:
+
+      „მაინტერესებს დეტალები"  → „ბანაკი ამ წელს წარსულია… ბანაკის მსურველთა
+                                  სიაში შეგიყვანოთ"
+
+    The turn named nothing, and the only programme facts it carried were the
+    camp's closure and the camp's waiting list — so that is what the model
+    offered. While another child programme is on sale, an unnamed turn no longer
+    carries them; a camp turn still does (below)."""
+    context = _context(PAYMENT_QUESTION)
+    assert "camp_status" not in context, (
+        "an unattributed turn was handed the closed camp as its only fact"
+    )
+    assert "camp_intake_list" not in context
+
+
+def test_a_camp_turn_still_carries_the_camp_status(camp_ended_school_on_sale, monkeypatch):
+    """Ask about the camp and the honest closure fact must still travel."""
+    monkeypatch.setattr(
+        admin_config_service, "get_section",
+        lambda section_id=None, *a, **k: (
+            {"id": "summer_camp", "name": "საზაფხულო ბანაკი", "type": "camp"}
+            if section_id == "summer_camp" else dict(SCHOOL)
+        ),
+    )
+    conv = Conversation(sender_id="ctx", platform="messenger")
+    lead = Lead(sender_id="ctx", platform="messenger", segment="PARENT")
+    lead.program_id = "summer_camp"
+    conv.lead = lead
+    context = ple._build_context_message(conv, lead, "ბანაკი მაინტერესებს")
+    assert "camp_status=ended" in context
