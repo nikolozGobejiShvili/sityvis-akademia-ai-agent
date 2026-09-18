@@ -903,7 +903,53 @@ def _msg_has_camp_intent(message: str) -> bool:
 _CAMP_WORD_STEMS: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ")
 
 
-def _camp_off_suppresses_info(message: str) -> bool:
+def _conversation_names_camp(conversation: Conversation) -> bool:
+    """True when the newest programme the PARENT named is this camp.
+
+    The mirror of `_conversation_names_other_program`, walked the same way and
+    for the same reason: a follow-up („ფასი რა არის?") inside a camp conversation
+    is a camp question, so the camp keeps answering it. Never raises → False."""
+    try:
+        for turn in reversed(list(getattr(conversation, "history", None) or [])):
+            if not isinstance(turn, dict) or (turn.get("role") or "") != "user":
+                continue
+            text = str(turn.get("content") or "")
+            owner = _program_id_for_turn(text)
+            if owner:
+                return owner == "summer_camp"
+            if any(k in text.lower() for k in _CAMP_STATUS_KEYWORDS):
+                return True
+    except Exception:  # pragma: no cover — defensive
+        return False
+    return False
+
+
+def _other_active_child_programs_exist() -> bool:
+    """True when the panel has an ACTIVE programme for CHILDREN other than the camp.
+
+    A closed camp is then not the only thing a parent can be asking about, so it
+    must not claim a turn that never named it — measured live 2026-09-18, with
+    Sunday School the one programme on sale, „…16 წლის მოზარდისთვის" and „…3 თვის
+    გადასახადის გადახდა…" both came back „საზაფხულო ბანაკი უკვე გაიმართა".
+
+    Adult events do not count: they are not what a parent's question competes
+    with, and a PARENT turn must never be handed to them. Reads the panel on every
+    call (no cache), so it follows the operator's edits. Never raises → False,
+    which keeps the camp chain exactly as it was."""
+    try:
+        from app.services import admin_config_service
+        return any(
+            (s.get("id") or "").strip() != "summer_camp"
+            and (s.get("type") or "").strip() != "adult_events"
+            for s in (admin_config_service.get_active_sections() or [])
+        )
+    except Exception:  # pragma: no cover — defensive
+        return False
+
+
+def _camp_off_suppresses_info(
+    message: str, conversation: Conversation | None = None,
+) -> bool:
     """USE_CAMP_OFF_GATE: when the camp is NOT active AND the message has no explicit
     camp word, the deterministic camp INFO interceptors that fire on generic markers
     (price „ფასი", topic facts, transport, exact-detail, …) defer to the LLM engine —
@@ -911,17 +957,31 @@ def _camp_off_suppresses_info(message: str) -> bool:
     program's data instead of leaking camp facts (2150 / ამბასადორი) or a rote camp
     answer. Explicit camp questions (ბანაკ/საზაფხულო/ლაგერ) are never suppressed —
     they still get the clean „camp ended" status via `_maybe_handle_camp_status`.
-    Fail-open: any error → False. OFF ⇒ False ⇒ camp chain byte-identical."""
-    if not getattr(settings, "USE_CAMP_OFF_GATE", False):
-        return False
+    Fail-open: any error → False.
+
+    Live 2026-09-18: the flag was not the only way this must hold. With the camp
+    ended and Sunday School the one programme on sale, „…3 თვის გადასახადის
+    გადახდა…" reached the camp price detector and „…16 წლის მოზარდისთვის" the
+    operational one. So with the flag OFF the suppression still holds for a turn
+    that is generic (no camp topic of its own), in a conversation that is not the
+    camp's, while another programme is active. Camp active, camp alone in the
+    panel, a camp-topic question, or a camp conversation ⇒ False ⇒ byte-identical."""
     low = (message or "").lower()
     if any(k in low for k in _CAMP_WORD_STEMS):
         return False
     try:
         from app.services import admin_config_service
-        return admin_config_service.get_camp_status() != "active"
+        if admin_config_service.get_camp_status() == "active":
+            return False
     except Exception:  # pragma: no cover — never suppress camp on a fault
         return False
+    if getattr(settings, "USE_CAMP_OFF_GATE", False):
+        return True
+    if not getattr(settings, "USE_PROGRAM_ISOLATION", False):
+        return False
+    if conversation is None or _conversation_names_camp(conversation):
+        return False
+    return _other_active_child_programs_exist()
 
 
 def _msg_is_child_offering(message: str) -> bool:
@@ -1407,6 +1467,26 @@ def _maybe_handle_camp_status(
             logger.info(
                 "[parent_flow] camp-status deferred — conversation names another "
                 "active program (sender=%s)", getattr(conversation, "sender_id", "?"),
+            )
+            return None
+
+        # Naming another programme is not the only way a turn can fail to be about
+        # the camp. Live 2026-09-18, camp ended and Sunday School the only thing on
+        # sale: „…დარჩენილი ადგილი 16 წლის მოზარდისთვის" and „…3 თვის გადასახადის
+        # გადახდა…" were a parent's FIRST substantive messages, so neither they nor
+        # the conversation had named anything yet — and both came back „საზაფხულო
+        # ბანაკი უკვე გაიმართა". A closed camp answers when it is named; while
+        # another programme is active, a generic turn belongs to the engine and
+        # that programme's own panel data. Camp alone in the panel ⇒ unchanged.
+        if (
+            getattr(settings, "USE_PROGRAM_ISOLATION", False)
+            and not _conversation_names_camp(conversation)
+            and _other_active_child_programs_exist()
+        ):
+            logger.info(
+                "[parent_flow] camp-status deferred — the camp is %s, this turn "
+                "is generic and another programme is active (sender=%s)",
+                status, getattr(conversation, "sender_id", "?"),
             )
             return None
 
@@ -2334,7 +2414,7 @@ def _handle_core(conversation: Conversation, message: str) -> str:
     # (dynamic) program's data — no 2150 / ამბასადორი leak, no rote camp answer. The
     # non-camp guards (injection/identity/political/adult/unclear) and the
     # booking/contact/safety interceptors are NEVER gated. OFF ⇒ False ⇒ unchanged.
-    camp_off = _camp_off_suppresses_info(message)
+    camp_off = _camp_off_suppresses_info(message, conversation)
 
     camp_info_early_response = _maybe_handle_camp_info_early(
         conversation, message, camp_off,
