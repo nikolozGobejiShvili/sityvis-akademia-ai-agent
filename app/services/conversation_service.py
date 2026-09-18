@@ -420,6 +420,31 @@ def _match_active_program_segment(message_text: str) -> str | None:
     return "ADULT" if match.get("type") == "adult_events" else "PARENT"
 
 
+def _sole_active_program_segment() -> str | None:
+    """The segment of the ONE programme on sale, or None when there are 0 or 2+.
+
+    The UNCLEAR menu exists to ask which programme the parent means. With a single
+    active programme there is nothing to ask: measured live 2026-09-18, „სად ხართ
+    ტერიტორიულად და რა განრიგი გაქვთ 8წლიან ჯგუფებისთვის?" and „8 წლის ბიჭისთვის
+    … თუ გაქვთ ონლაინ კურსები" carry no camp/adult keyword, so `_classify_segment`
+    returned UNCLEAR and three parents were answered „რით შემიძლია დაგეხმაროთ?" —
+    their own question read back to them.
+
+    Panel-driven like `_match_active_program_segment` and with the same type rule,
+    so the menu returns by itself the moment a second programme goes active. None
+    on flag-off or any failure ⇒ the classifier decides exactly as before."""
+    if not getattr(settings, "USE_DYNAMIC_PROGRAMS", False):
+        return None
+    try:
+        from app.services import admin_config_service
+        sections = admin_config_service.get_active_sections() or []
+    except Exception:  # pragma: no cover — defensive
+        return None
+    if len(sections) != 1:
+        return None
+    return "ADULT" if (sections[0].get("type") == "adult_events") else "PARENT"
+
+
 # PARENT Reschedule State + Segment Override Patch (2026-06-10).
 #
 # Live bug: a conversation that had been locked to ADULT (from earlier
@@ -1050,6 +1075,20 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
             sentry_service.mask_sender(sender_id),
         )
         conversation.segment = named_segment
+
+    # A parent who asks about the one programme on sale should not be asked which
+    # programme they mean. UNCLEAR is the classifier saying „no camp or adult
+    # keyword here" — which, with a single active programme, is not a question
+    # about WHICH programme; it is a question about THAT one. A bare greeting is
+    # still UNCLEAR (the greeting is the right answer to a greeting).
+    if conversation.segment == "UNCLEAR" and not _is_pure_greeting(message_text):
+        sole_segment = _sole_active_program_segment()
+        if sole_segment:
+            logger.info(
+                "[routing] one active programme — UNCLEAR → %s (sender=%s)",
+                sole_segment, sentry_service.mask_sender(sender_id),
+            )
+            conversation.segment = sole_segment
 
     # Conversation Planner (Phase 3) — compute the unified TurnPlan ONCE per turn
     # and stash it on the conversation so the downstream handlers (parent_flow)
