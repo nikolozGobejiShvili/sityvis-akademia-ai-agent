@@ -3714,7 +3714,21 @@ def _build_context_message(
             + " (on sale now; facts via get_program_info. Not listed = not sold)"
         )
 
-    if _active_program_id in ("", "summer_camp"):
+    # …and only while the camp is what this turn could be about. Live 2026-09-18
+    # 12:22 „მაინტერესებს დეტალები" — nothing named, Sunday School the one
+    # programme on sale — came back „ბანაკი ამ წელს წარსულია… ბანაკის მსურველთა
+    # სიაში შეგიყვანოთ": the model was handed the camp's closure and its waiting
+    # list as the only facts about a turn that never mentioned the camp. A turn
+    # the camp owns still gets them, and so does a panel with no other child
+    # programme on sale (every camp-only fixture).
+    _other_child_on_sale = any(
+        (s.get("id") or "").strip() != "summer_camp"
+        and (s.get("type") or "").strip() != "adult_events"
+        for s in _on_sale
+    )
+    if _active_program_id == "summer_camp" or (
+        _active_program_id == "" and not _other_child_on_sale
+    ):
         try:
             from app.services import admin_config_service as _admin_cfg
             _camp_status = _admin_cfg.get_camp_status()
