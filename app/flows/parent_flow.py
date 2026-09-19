@@ -3680,6 +3680,24 @@ def _ensure_camp_age_question(
     # predicate fires and the qualifier is untouched.
     if _msg_names_other_program(message) or _conversation_names_other_program(conversation):
         return response
+
+    # …and naming is not the only way a turn fails to be the camp's. The check
+    # above only stands down when another programme is NAMED, so every turn that
+    # named nothing still collected the camp's qualifier. Measured 2026-09-19 on
+    # the live panel shape: „ფასი", „რომელ დღეს ტარდება", „მისამართი" and
+    # „რეგისტრაცია შევსებულიაა" each came back with „თქვენი შვილი რამდენი
+    # წლისაა?" grafted on — the camp's eligibility question asked on behalf of a
+    # programme whose answers do not depend on it.
+    #
+    # Same predicates, same flag as the sibling gates. A camp turn is untouched,
+    # and so is a camp alone in the panel.
+    if (
+        getattr(settings, "USE_PROGRAM_ISOLATION", False)
+        and not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS)
+        and not _conversation_names_camp(conversation)
+        and _other_active_child_programs_exist()
+    ):
+        return response
     # Reply already asks for the age (any phrasing, incl. „ასაკი რამდენია?") →
     # leave it (never append a second age question).
     if _has_any_child_age_question(response):
@@ -7334,6 +7352,34 @@ def _maybe_handle_camp_registration_link(
             is_request = False
     if not is_request:
         return None
+
+    # The one camp handler that never got the isolation guard its nine siblings
+    # have. „რეგისტრაცია" names no programme — every programme has one — so this
+    # fired for whoever asked, and with the camp closed it answered with the
+    # camp's closed-registration sentence, deterministically, no model involved.
+    #
+    # Measured live 2026-09-19 09:40 and 09:41: a Sunday-School parent asked
+    # „რეგისტრაცია შევსებულიაა" and „როდის იწყება მეორე რეგისტრაცია" and got the
+    # camp both times — on the very turns the camp-status gate three handlers
+    # earlier had already stood down for („camp-status deferred — this turn is
+    # generic and another programme is active" is in the log for both).
+    #
+    # Same guard, same wording, same flag as the siblings: a turn that names the
+    # camp still gets the camp's answer, and a camp alone in the panel is
+    # untouched.
+    if (
+        getattr(settings, "USE_PROGRAM_ISOLATION", False)
+        and not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS)
+        and not _conversation_names_camp(conversation)
+        and _other_active_child_programs_exist()
+    ):
+        logger.info(
+            "[parent_flow] camp registration-link deferred — this turn names no "
+            "programme and another one is active (sender=%s)",
+            getattr(conversation, "sender_id", "?"),
+        )
+        return None
+
     _ensure_lead(conversation)
     logger.info(
         "[parent_flow] camp registration-link intent → deterministic link answer "
