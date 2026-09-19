@@ -201,14 +201,51 @@ def _registration_closed_tool_result(**extra: Any) -> dict[str, Any]:
     return {"success": False, "reason": "camp_registration_closed", **extra}
 
 
-def _camp_public_info_limited_tool_result(topic: str) -> dict[str, Any]:
+def _turn_belongs_to_the_camp(conversation: Any, user_message: str) -> bool:
+    """Is THIS turn the camp's? Asked with the same predicates the camp-status
+    gate uses, so the two cannot drift apart.
+
+    Yes when the message or the conversation names the camp, and yes when the
+    camp is the only child programme in the panel — there is nothing else the
+    turn could be about. No otherwise. Any fault answers yes, which is the
+    behaviour that shipped."""
     try:
         from app.flows import parent_flow
 
-        message = parent_flow._camp_registration_closed_answer()
-    except Exception:  # pragma: no cover - defensive structured fallback
-        logger.exception("[parent_executor] closed camp policy message failed")
-        message = ""
+        text = (user_message or "").lower()
+        if any(k in text for k in parent_flow._CAMP_STATUS_KEYWORDS):
+            return True
+        if parent_flow._conversation_names_camp(conversation):
+            return True
+        return not parent_flow._other_active_child_programs_exist()
+    except Exception:  # pragma: no cover - never decide a turn on a fault
+        return True
+
+
+def _camp_public_info_limited_tool_result(
+    topic: str, *, turn_is_camps: bool = True,
+) -> dict[str, Any]:
+    """The closed camp's refusal.
+
+    `message` used to carry `_camp_registration_closed_answer()` unconditionally
+    — so the gate that successfully kept 2150 away from the model handed it the
+    camp sentence instead, and the model relayed it. Measured live 2026-09-18/19
+    on four different parents who had asked only „ფასი", „ტერიტორიულად სად
+    ხართ?", „რომელ დღეს ტარდება" and „მისამართი".
+
+    A parent who NAMES the camp still gets the honest closed answer — that is
+    what `turn_is_camps` is for, and the default keeps every existing caller on
+    the shipped behaviour. A turn that names nothing while another programme is
+    on sale gets a bare refusal, and answers from that programme instead."""
+    message = ""
+    if turn_is_camps:
+        try:
+            from app.flows import parent_flow
+
+            message = parent_flow._camp_registration_closed_answer()
+        except Exception:  # pragma: no cover - defensive structured fallback
+            logger.exception("[parent_executor] closed camp policy message failed")
+            message = ""
     return {
         "success": False,
         "reason": "camp_public_info_limited",
@@ -661,7 +698,12 @@ class ParentToolExecutor:
             # reach — it cannot quote what it was never given. The parent who
             # genuinely asks „ბანაკის ფასი" still gets the camp-ended answer,
             # which is what the other topics have always returned.
-            return _camp_public_info_limited_tool_result(topic)
+            return _camp_public_info_limited_tool_result(
+                topic,
+                turn_is_camps=_turn_belongs_to_the_camp(
+                    self.conversation, self.user_message,
+                ),
+            )
         # Config-unification patch: read camp facts from the admin-first
         # helper so an operator price/location/streams edit in the
         # Admin Panel takes effect immediately for the LLM's
