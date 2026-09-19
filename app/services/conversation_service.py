@@ -287,9 +287,28 @@ ADULT_KEYWORDS = (
     "კულტურ",     # კულტურა, კულტურული
     "პოეზი",      # პოეზია, პოეზიის
     "მუსიკ",      # მუსიკა, მუსიკალური
-    "შეხვედრ",    # შეხვედრა, შეხვედრის
     "კლუბ",       # კლუბი, კლუბში
 )
+# „შეხვედრ" used to be here and is deliberately gone (2026-09-19).
+#
+# A cultural evening announces itself as „ღონისძიება" or „საღამო". „შეხვედრა" is
+# just a meeting, and Sunday School is SOLD as „12 ინტერაქციული შეხვედრა" — the
+# word is in its own panel description, so the stem claimed the programme's own
+# vocabulary for the adult flow.
+#
+# The damage is recorded twice. 2026-09-10, noted in the comment further down:
+# a Sunday-School enquiry opened „…გრძელდება ერთი შეხვედრა", was assigned ADULT
+# permanently, and the parent's „ღონისძიება არა, საკვირაო სკოლაზე გეუბნები" could
+# not undo it. The fix then was `_match_active_program_segment`, which answers
+# from the panel when a turn NAMES a programme — and cannot help a turn that
+# names none. 2026-09-19 09:49, a parent asked „შეხვედრებს როდიდან ანახლებთ?"
+# about her child's 11-12 group, was answered by the adult-events flow, and the
+# adult engine had to call `switch_to_parent_flow` to hand her back.
+#
+# Deleting the stem does not leave such a turn homeless: it is UNCLEAR, and
+# `_sole_active_program_segment` routes it from the PANEL — to adult events when
+# they are what is on sale, and to the choice question when two things are. The
+# panel decides instead of one ambiguous word.
 
 # Price-only keyword stems. A message that ONLY signals price (no camp or
 # adult signal) stays UNCLEAR — adult events also have ticket prices, so
