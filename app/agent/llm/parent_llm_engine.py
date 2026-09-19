@@ -3043,12 +3043,10 @@ _OFFTOPIC_UNCLEAR_NEW = (
 # redirect to the ACTIVE programs from the tool. Logic (reflects camp status = data), not
 # a sanitizer ban. Reflects the camp-always-off constraint; gated by the same flag.
 _OFFTOPIC_PROGRAM_AGNOSTIC_DIRECTIVE = (
-    "\n\n[პროგრამა-აგნოსტიკური წესი — CRITICAL] საზაფხულო ბანაკი ამჟამად დასრულებულია "
-    "და აქტიური შეთავაზება არ არის. *არასოდეს* შესთავაზო ან default-ად ახსენო ბანაკი, "
-    "როგორც ხელმისაწვდომი. როცა კითხვა ჩვენს პროგრამებს არ ეხება (off-topic), ან "
-    "გჭირდება გადამისამართება, ან მომხმარებელი კითხულობს რას სთავაზობთ — ახსენე მხოლოდ "
-    "ამჟამად აქტიური პროგრამები — მათი სახელები აიღე list_programs / get_program_info "
-    "ხელსაწყოდან, არა მეხსიერებიდან. თუ არ იცი აქტიური პროგრამები, გამოიძახე list_programs."
+    "\n\n[პროგრამა-აგნოსტიკური წესი — CRITICAL] პროგრამის სახელი და სტატუსი მხოლოდ "
+    "list_programs / get_program_info-დან, არა მეხსიერებიდან. რაც სიაში არაა — არ იყიდება. "
+    "თუ კითხვა პროგრამას არ ასახელებს: active_programs ერთია — უპასუხე იმის ფაქტებით; "
+    "რამდენიმეა — ჯერ ჰკითხე, რომელი. პროგრამა, რომელიც დასრულებულია, შენით არ ახსენო."
 )
 
 
@@ -3549,6 +3547,47 @@ def _active_program_section(
             decided, section = _named_in(str(turn.get("content") or ""))
             if decided:
                 return section
+
+        # 4. Nothing in the turn, the lead or the history names a programme.
+        #
+        #    Steps 1-3 answer "which programme did someone NAME?" and return
+        #    None when the answer is nobody. Every isolation guard downstream is
+        #    built the same way — it stands down only when ANOTHER programme is
+        #    named — so an unattributed turn has a default owner, and with a
+        #    camp-centric prompt (43 of 519 lines) that owner is the camp.
+        #
+        #    Measured live 2026-09-18/19, camp ended and Sunday School the only
+        #    thing on sale. Eight replies in seventeen hours, six different
+        #    parents, not one of whom typed a programme name:
+        #      „ტერიტორიულად სად ხართ?" „ფასი" „რომელ დღეს ტარდება"
+        #      „თქვენი მისამართი რომ მითხრათ" „რეგისტრაცია შევსებულიაა"
+        #    all came back about the camp. Two of them without a single camp
+        #    tool call — the prompt alone was enough.
+        #
+        #    Naming is not the only way a turn belongs to a programme. When the
+        #    panel offers exactly ONE, there is nothing to infer: that is what
+        #    the parent is asking about, because it is all there is to ask
+        #    about. Stating it is the same kind of fact as `booking_hours` —
+        #    not a route, not a prohibition.
+        #
+        #    Two or more on sale and this deliberately stays None: with a real
+        #    choice to make, guessing is the defect. The turn reaches the model
+        #    unattributed and `active_programs` (already in the context) lets it
+        #    ask which one.
+        #
+        #    `adult_events` is not a candidate — it is a different segment with
+        #    its own engine, and counting it would make a Sunday-School-only
+        #    panel look like a choice. The camp IS a candidate: alone in the
+        #    panel it owns an unattributed turn exactly as it always has, which
+        #    is every camp-only fixture in the suite.
+        if getattr(settings, "USE_PROGRAM_ISOLATION", False):
+            on_sale = [
+                s for s in by_id.values()
+                if _if_active(s) is not None
+                and (s.get("type") or "").strip() != "adult_events"
+            ]
+            if len(on_sale) == 1:
+                return on_sale[0]
     except Exception:  # pragma: no cover — never break a turn over context
         return None
     return None
