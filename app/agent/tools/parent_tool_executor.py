@@ -212,8 +212,10 @@ def _turn_belongs_to_the_camp(conversation: Any, user_message: str) -> bool:
     try:
         from app.flows import parent_flow
 
-        text = (user_message or "").lower()
-        if any(k in text for k in parent_flow._CAMP_STATUS_KEYWORDS):
+        # `_msg_names_the_camp`, not a keyword scan: with „პარიზის ბანაკი" also
+        # in the panel, „ბანაკი" no longer means THIS camp, and a raw scan sent
+        # Paris questions the summer camp's closed answer.
+        if parent_flow._msg_names_the_camp(user_message):
             return True
         if parent_flow._conversation_names_camp(conversation):
             return True

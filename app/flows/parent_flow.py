@@ -934,6 +934,30 @@ def _conversation_names_camp(conversation: Conversation) -> bool:
     return False
 
 
+def _msg_names_the_camp(message: str) -> bool:
+    """True when THIS message names THIS camp.
+
+    The per-text half of `_conversation_names_camp`, extracted so the guards
+    that only have the current message read it the same way a history turn is
+    read — and cannot drift from it.
+
+    Why it is not a keyword scan: „ბანაკი" and „საზაფხულო" stop meaning THIS
+    camp the moment the operator opens another one. Measured with
+    „პარიზის ბანაკი" active and the summer camp ended, a raw keyword check made
+    „პარიზის ბანაკზე როგორ დავრეგისტრირდე" a summer-camp turn and answered it
+    with the summer camp's closed-registration sentence. So the panel is asked
+    first — which single active programme does this text identify? — and the
+    keywords decide only when it identifies none. Never raises → False."""
+    try:
+        text = str(message or "")
+        owner = _program_id_for_turn(text)
+        if owner:
+            return owner == "summer_camp"
+        return any(k in text.lower() for k in _CAMP_STATUS_KEYWORDS)
+    except Exception:  # pragma: no cover — defensive
+        return False
+
+
 def _other_active_child_programs_exist() -> bool:
     """True when the panel has an ACTIVE programme for CHILDREN other than the camp.
 
@@ -3693,7 +3717,7 @@ def _ensure_camp_age_question(
     # and so is a camp alone in the panel.
     if (
         getattr(settings, "USE_PROGRAM_ISOLATION", False)
-        and not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS)
+        and not _msg_names_the_camp(message)
         and not _conversation_names_camp(conversation)
         and _other_active_child_programs_exist()
     ):
@@ -7369,13 +7393,13 @@ def _maybe_handle_camp_registration_link(
     # untouched.
     if (
         getattr(settings, "USE_PROGRAM_ISOLATION", False)
-        and not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS)
+        and not _msg_names_the_camp(message)
         and not _conversation_names_camp(conversation)
         and _other_active_child_programs_exist()
     ):
         logger.info(
-            "[parent_flow] camp registration-link deferred — this turn names no "
-            "programme and another one is active (sender=%s)",
+            "[parent_flow] camp registration-link deferred — this turn is not "
+            "the camp's and another programme is active (sender=%s)",
             getattr(conversation, "sender_id", "?"),
         )
         return None
@@ -7648,12 +7672,48 @@ def _is_phone_correction(message: str) -> bool:
     return any(m in low for m in _PHONE_CORRECTION_MARKERS)
 
 
+# Words that make a turn be ABOUT a name. „ვარ" is deliberately absent — it
+# carries almost any sentence, and „ნინო კი არა, მარიამი ვარ" is already an
+# explicit marker above.
+_NAME_ANCHORS: tuple[str, ...] = ("მქვია", "მქვიან", "სახელ", "მერქმევა", "მეძახი")
+
+# „არა, მარიამი ვარ" is three tokens. A refusal that happens to open with „არა"
+# runs longer, and that length is the only thing separating them when no anchor
+# is present.
+_BARE_REFUSAL_NAME_TOKEN_CAP: int = 3
+
+
 def _has_name_correction_signal(message: str) -> bool:
     low = (message or "").lower().strip()
     if any(m in low for m in _NAME_CORRECTION_SIGNAL_MARKERS):
         return True
     # „არა, მარიამი" — a leading „არა" followed by at least one more token.
-    return low.startswith("არა") and len(low.split()) >= 2
+    #
+    # That alone used to be the whole gate, so EVERY sentence opening with „არა"
+    # was a name correction and `_extract_corrected_name` took its last word as
+    # the name. Live 2026-09-19 15:13, after a reply that ended „გაქვთ სხვა
+    # შეკითხვა?", a parent wrote „არა . მადლიბა . ამომწურავად მიპასუხეთ
+    # ყველაფერზე" and was answered „გასაგებია, ყველაფერზე." — her refusal read
+    # as „no, my name is Everything". Measured on the same code:
+    # „არა მადლობა ყველაფერზე ამომწურავად მიპასუხეთ" yields „მიპასუხეთ", and
+    # „არა კიდევ მაქვს შეკითხვა" yields „შეკითხვა" — a parent saying she still
+    # HAS a question, answered with a name acknowledgement and her question
+    # dropped.
+    #
+    # The phone branch of this same handler never had the problem because it has
+    # an anchor: it fires only when the message actually contains a number. The
+    # name branch had none.
+    #
+    # So: a name, or a turn that says it is about a name. The cap is the same
+    # reasoning `_parse_name_phone` already applies (`_NAME_TOKEN_CAP`) — a real
+    # name is a couple of tokens, a longer run is a sentence. Widening the
+    # rejected-word list instead would be endless; Georgian has more words than
+    # any list can hold.
+    if not low.startswith("არა"):
+        return False
+    if any(a in low for a in _NAME_ANCHORS):
+        return True
+    return 2 <= len(low.split()) <= _BARE_REFUSAL_NAME_TOKEN_CAP
 
 
 def _extract_corrected_name(message: str) -> str:
