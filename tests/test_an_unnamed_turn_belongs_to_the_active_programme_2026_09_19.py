@@ -275,6 +275,53 @@ def test_the_agents_own_camp_reply_does_not_make_the_next_turn_the_camps(
         assert after is None
 
 
+# --------------------------------------------------------------------------
+# 3. A SECOND camp in the panel („პარიზის ბანაკი") — the operator's own check.
+# --------------------------------------------------------------------------
+
+PARIS = {
+    "id": "paris_camp", "name": "პარიზის ბანაკი", "type": "kids_program",
+    "status": "active", "age_min": 10, "age_max": 17,
+    "hashtags": ["parisi", "პარიზი"], "price_text": "4500 ლარი",
+}
+
+PARIS_TURNS = (
+    "პარიზის ბანაკის ფასი რა არის?",
+    "პარიზის ბანაკზე როგორ დავრეგისტრირდე",
+    "პარიზი მაინტერესებს",
+)
+
+
+@pytest.mark.parametrize("message", PARIS_TURNS)
+def test_a_second_camp_is_not_this_camp(monkeypatch, message):
+    """The guards added today read the message for the word „ბანაკი". The moment
+    the operator opens „პარიზის ბანაკი" that word stops meaning THIS camp, and a
+    raw keyword scan hands Paris questions the summer camp's closed answer —
+    measured, before `_msg_names_the_camp` existed:
+
+        პარიზის ბანაკზე როგორ დავრეგისტრირდე -> the SUMMER camp's answer
+        პარიზის ბანაკის ფასი რა არის?        -> counted as the camp's turn
+
+    So the panel is asked first, exactly as `_conversation_names_camp` already
+    asks it for a history turn."""
+    from app.agent.tools import parent_tool_executor as executor
+
+    _panel(monkeypatch, [CAMP_OFF, SCHOOL, PARIS])
+    _flags(monkeypatch, parent_flow)
+
+    assert parent_flow._msg_names_the_camp(message) is False
+    assert executor._turn_belongs_to_the_camp(_fresh(), message) is False
+    assert parent_flow._maybe_handle_camp_registration_link(
+        _fresh(), message) is None, "Paris got the summer camp's answer"
+
+
+def test_the_camp_still_owns_its_own_turn_when_it_is_the_only_camp(monkeypatch):
+    """Without a second camp, „ბანაკი" means this one — unchanged."""
+    _panel(monkeypatch, [CAMP_OFF, SCHOOL])
+    _flags(monkeypatch, parent_flow)
+    assert parent_flow._msg_names_the_camp("ბანაკის ფასი") is True
+
+
 def test_a_named_camp_registration_request_still_answers(monkeypatch):
     """The camp keeps every turn that names it — including the honest closed
     answer. Only the default changes."""
