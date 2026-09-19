@@ -253,6 +253,15 @@ GREETING_ONLY_KEYWORDS = (
     "ჰაი", "ჰელო", "hi", "hello", "hey",
 )
 
+# Every Georgian time-of-day greeting carries this, and no programme or event
+# does: „დილა მშვიდობისა", „საღამო მშვიდობისა", „ღამე მშვიდობისა".
+_GREETING_PEACE_ANCHOR = "მშვიდობის"
+# What may stand beside it and still leave the message a bare greeting. („ა" is
+# the tail of „მშვიდობისა" once the anchor is cut out of the joined spelling.)
+_GREETING_TIME_WORDS: frozenset[str] = frozenset({
+    "დილა", "დილის", "საღამო", "საღამოს", "ღამე", "ღამის", "ა", "",
+})
+
 # Camp / children's-camp keyword stems. Matching is substring on a lower-
 # cased message. Stems cover Georgian declension (e.g. "ბანაკ" catches
 # ბანაკი, ბანაკში, ბანაკის, ბანაკიდან).
@@ -331,7 +340,32 @@ def _is_pure_greeting(text: str) -> bool:
     cleaned = (text or "").strip().lower().strip("!.,?:;")
     if not cleaned:
         return False
-    return cleaned in GREETING_ONLY_KEYWORDS
+    if cleaned in GREETING_ONLY_KEYWORDS:
+        return True
+    # Georgian time-of-day greetings — „დილა მშვიდობისა", „საღამო მშვიდობისა",
+    # „ღამე მშვიდობისა" — which the exact list above never learned. Parents type
+    # them as one word as often as two.
+    #
+    # Live 2026-09-19 19:29 a parent wrote „საღამომშვიდობის" and was answered
+    # „ამ სახელით ღონისძიება ვერ მოვძებნე. ამ ეტაპზე აქტიური ღონისძიება სიაში
+    # არ მაქვს." — because „საღამო" is an ADULT_KEYWORDS stem and a hello
+    # therefore classified as a search for a cultural evening. The segment then
+    # stuck, so her next message („12 წლის ბიჭი მინდა მოვიყვანო თქვენს
+    # აკადემიაში") had to be handed across flows and came back as an apology
+    # about routing rather than an answer.
+    #
+    # The stem is not at fault — a soirée really is a „საღამო". The greeting is:
+    # every Georgian time-of-day greeting carries „მშვიდობის", and no programme
+    # or event does. One anchor, checked only when the message is nothing but
+    # the greeting, so „საღამო მშვიდობისა, ბანაკი მაინტერესებს" still carries
+    # its question to the classifier.
+    if _GREETING_PEACE_ANCHOR in cleaned:
+        rest = cleaned.replace(_GREETING_PEACE_ANCHOR, " ")
+        return all(
+            token in _GREETING_TIME_WORDS
+            for token in rest.split()
+        )
+    return False
 
 
 _IDENTITY_QUESTION_STEMS: tuple[str, ...] = (
