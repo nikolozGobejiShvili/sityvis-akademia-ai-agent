@@ -7523,6 +7523,18 @@ def _is_explicit_manager_number_request(message: str) -> bool:
     return True
 
 
+# The two sentences in which this flow invites the parent to leave a number so
+# the MANAGER can call back. Named rather than inlined so the detector below can
+# be built from the messages themselves — re-word one and the detector follows.
+_MANAGER_CALLBACK_INVITE_TAIL: str = (
+    "თუ გირჩევნიათ, დატოვეთ თქვენი ნომერი და მენეჯერი თავად დაგიკავშირდებათ."
+)
+_MANAGER_CALLBACK_INVITE_NO_PHONE: str = (
+    "მენეჯერი სიამოვნებით დაგეხმარებათ — დატოვეთ თქვენი ნომერი და "
+    "თავად დაგიკავშირდებათ."
+)
+
+
 def _manager_number_answer_fallback(
     manager_phone: str,
     *,
@@ -7534,10 +7546,7 @@ def _manager_number_answer_fallback(
         return base
     if phone_known:
         return base + " მენეჯერი ასევე თავად დაგიკავშირდებათ."
-    return (
-        base + " თუ გირჩევნიათ, დატოვეთ თქვენი ნომერი და მენეჯერი თავად "
-        "დაგიკავშირდებათ."
-    )
+    return base + " " + _MANAGER_CALLBACK_INVITE_TAIL
 
 
 def _mark_manager_number_disclosed(conversation) -> None:
@@ -7555,6 +7564,57 @@ def _mark_manager_number_disclosed(conversation) -> None:
             conversation.followup_blocked_reason = "manager_handoff_completed"
     except Exception:  # pragma: no cover — defensive
         pass
+
+
+def _manager_callback_invitations() -> tuple[str, ...]:
+    """The closing sentence of every message in which THIS FLOW offers to have
+    the manager call back. Rendered from the messages it actually sends — the
+    approved copy first, then the Python fallbacks — so re-wording any of them
+    carries this detector with it instead of leaving it behind.
+    """
+    texts = (
+        _approved_camp_copy(
+            "manager.direct_phone_with_callback", manager_phone="000") or "",
+        _manager_number_answer_fallback(
+            "000", phone_known=False, self_call=False),
+        _MANAGER_CALLBACK_INVITE_NO_PHONE,
+    )
+    return tuple({s for s in (_last_sentence(t) for t in texts) if s})
+
+
+def _answering_a_promised_callback(conversation: Conversation) -> bool:
+    """True when the parent's contact is the answer to a callback THIS FLOW
+    promised („leave your number and the manager will contact you").
+
+    Live 2026-09-21 19:42: the agent made exactly that offer, the parent sent
+    her number twenty seconds later, and no mail reached the manager. The
+    hand-off arms on `_bot_in_sunday_school_collection`, which also requires the
+    programme to be named, and the manager-number answer names none — so the
+    number went to the consultation path, which stores a contact and asks which
+    day suits. A question she had not asked, and a lead nobody saw.
+
+    Same discipline as that check, for the same reason (2026-09-12): only this
+    flow's OWN fixed messages count. A callback the MODEL promised arms nothing,
+    however warmly it phrases it.
+
+    The walk back over the flow's own two „still missing a piece" asks is what
+    lets „593535551" then „ნანა" arrive as separate turns and still be kept —
+    the debounce usually merges them, but it does not have to.
+    """
+    invitations = _manager_callback_invitations()
+    if not invitations:
+        return False
+    still_collecting = (_CONTACT_GOT_NUMBER_ASK_NAME, _BOOKING_ASK_PHONE_ONLY)
+    for turn in reversed(list(getattr(conversation, "history", []) or [])):
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content") or "")
+        if any(invite in content for invite in invitations):
+            return True
+        if content.strip() in still_collecting:
+            continue
+        return False
+    return False
 
 
 def _render_manager_number_answer(
@@ -7608,10 +7668,7 @@ def _render_manager_number_answer(
     # substitutes the parent's callback phone for the manager contact.
     if phone_known or self_call:
         return "მენეჯერი თავად დაგიკავშირდებათ."
-    return (
-        "მენეჯერი სიამოვნებით დაგეხმარებათ — დატოვეთ თქვენი ნომერი და "
-        "თავად დაგიკავშირდებათ."
-    )
+    return _MANAGER_CALLBACK_INVITE_NO_PHONE
 
 # Positive give-me / write-me / send-me request markers. Used to distinguish an
 # explicit request for the manager's number („მენეჯერის ნომერი მომწერეთ") from a
@@ -10116,6 +10173,14 @@ def _is_thanks_or_farewell_close(message: str) -> bool:
         return False
     if any(p in t for p in _CLOSE_PROCEED_TOKENS if p not in _AFFIRM):
         return False
+    # A phone number is the strongest proceed signal there is, and the check
+    # above only looks for proceed WORDS. Live 2026-09-21 19:42: the debounce
+    # merged „593535551" + „ნანა" + „მადლობა" into one turn, no proceed word
+    # was present, and a parent handing over her number was warmly shown the
+    # door — name, number and lead all lost. Someone who leaves a number is
+    # not saying goodbye, whatever polite word rides along with it.
+    if _distinct_valid_phones(raw):
+        return False
     return len(t.split()) <= 6
 
 
@@ -10853,6 +10918,12 @@ def _maybe_handle_contact_collection(
             )
             if not (lead.phone or "").strip():
                 return _BOOKING_ASK_PHONE_ONLY
+            # The missing half of a promised callback has just arrived.
+            if (
+                getattr(conversation, "pending_booking", None) is None
+                and _answering_a_promised_callback(conversation)
+            ):
+                return _sunday_school_dispatch(conversation, lead, text)
             # BUG 1 (2026-07-06) — the user just gave a NAME, not a number.
             # Thank by name and move to day/time; never repeat „ნომერი მივიღე"
             # (which wrongly re-acknowledges the phone the user already gave).
@@ -10923,6 +10994,20 @@ def _maybe_handle_contact_collection(
         logger.info(
             "[parent_flow] contact-collection: captured name=%r", cand_name,
         )
+
+    # The contact answers a callback this flow itself promised, and both halves
+    # are now in hand → keep the promise here. Otherwise the booking path stores
+    # the contact and asks which day suits — a question the parent never asked,
+    # and a lead the manager never sees (live 2026-09-21 19:42).
+    # A booking mid-build keeps its own contact turn — the defer above covers a
+    # CONFIRMED future slot, this covers every other half-built one.
+    if (
+        name_known
+        and (lead.phone or "").strip()
+        and getattr(conversation, "pending_booking", None) is None
+        and _answering_a_promised_callback(conversation)
+    ):
+        return _sunday_school_dispatch(conversation, lead, text)
 
     # Reply: name+phone in one message → thank by name + ask time; phone
     # with a known name → ack number + ask time; phone with no name → ack
