@@ -6965,6 +6965,14 @@ def _ss_capture_contact(lead, text: str) -> tuple[str, str]:
         cand_name, cand_phone = _parse_name_phone(text)
     except Exception:
         cand_name, cand_phone = ("", "")
+    # An age / description sentence is not a contact disclosure. The
+    # consultation capture has refused these since 2026-06-27, when „6 წლის
+    # არის მაგრამ 10 წლის ბავშვივით აზროვნებს" was stored as the name „მაგრამ
+    # აზროვნებს"; this path parses the same messages and was never given the
+    # same guard. Live 2026-09-21: „8 წლის ბავშვი მყავს" arrived mid-collection
+    # and the manager was mailed a lead named „მყავს".
+    if _message_has_child_age_expression(text) and not _distinct_valid_phones(text):
+        cand_name = ""
     if cand_phone and not (lead.phone or "").strip():
         lead.phone = cand_phone
     name_known = bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
@@ -12175,6 +12183,12 @@ NAME_FILLER_WORDS = {
     # greeting / politeness — never a real Georgian first name. Exact-match
     # only, so real names (ანა, დავითი, არისტო) are unaffected.
     "ჩემი", "ან", "და", "გამარჯობა", "არის", "გთხოვთ",
+    # 2026-09-21 — spelled-out counts, found while measuring the „მყავს" fix:
+    # „ორი შვილი მყავს" left „ორი" as the only surviving token once the verb
+    # and the relationship word were rejected. A count is never a first name,
+    # and exact match means no real name can collide.
+    "ერთი", "ორი", "სამი", "ოთხი", "ხუთი",
+    "ექვსი", "შვიდი", "რვა", "ცხრა", "ათი",
 }
 NAME_REFUSAL_KEYWORDS = {
     "არაფერი", "უარი", "არ", "მინდა",
@@ -12254,6 +12268,13 @@ _NAME_REJECT_STEMS: tuple[str, ...] = (
     # a real name. „მოგწერ" (I-wrote-to-you) mirrors the existing „მომწერ"
     # (write-to-me); none of these is ever a real Georgian first name.
     "მოგწერ", "გასაგებ", "ნებისმიერ", "მადლობ", "გმადლობ", "გავიგ",
+    # Live 2026-09-21 — the manager was mailed a lead called „მყავს". Every
+    # other word in „8 წლის ბავშვი მყავს" was already rejected here („წლ",
+    # „ბავშვ"); the verb was the only survivor, and it is the one parents use
+    # constantly when they describe a child. Same class as „მომწერ" / „მოგწერ"
+    # above — a first-person verb, never a Georgian first name. The stem also
+    # covers „მყავდა" / „მყავხარ".
+    "მყავ",
 )
 
 # Exact-token rejects — short ambiguous words that must NOT be matched by
