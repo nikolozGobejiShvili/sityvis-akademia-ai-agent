@@ -387,6 +387,33 @@ def _format_booked_datetime_georgian(iso: str | None) -> str:
     return f"{dt.day} {month}, {dt.strftime('%H:%M')}"
 
 
+def _sole_child_program_on_sale() -> dict:
+    """The ONE child programme on sale, or {}.
+
+    The same rule the conversation layer applies to an unattributed turn
+    (`parent_llm_engine._active_program_section`, step 4): with exactly one
+    programme on sale there is nothing to infer — that is what the lead is
+    about, because it is all there is to be about. Two or more and this
+    deliberately answers {} so the mail names none rather than guessing.
+
+    `adult_events` is excluded: a PARENT lead is never handed to the adult
+    catalogue, so Sunday School alongside it is still ONE child programme.
+    Never raises → {}, which leaves the caller's own wording in place.
+    """
+    try:
+        from app.services import admin_config_service
+        on_sale = [
+            s for s in (admin_config_service.get_active_sections() or [])
+            if (s.get("type") or "").strip() != "adult_events"
+            and str(s.get("name") or "").strip()
+        ]
+        if len(on_sale) == 1:
+            return dict(on_sale[0])
+    except Exception:  # pragma: no cover — a name must never block a handoff
+        pass
+    return {}
+
+
 def _program_interest_phrase(lead: Lead) -> str:
     """The program the lead is interested in, for the manager summary. A non-camp
     per-product booking tags ``lead.program_id``; when USE_PER_PRODUCT_BOOKING is on,
@@ -402,17 +429,38 @@ def _program_interest_phrase(lead: Lead) -> str:
     if resolved:
         return f'პროგრამით „{resolved}"'
     pid = (getattr(lead, "program_id", "") or "").strip()
-    if not pid or not getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
+    if pid and getattr(settings, "USE_PER_PRODUCT_BOOKING", False):
+        try:
+            from app.services import admin_config_service
+            section = admin_config_service.get_section(pid) or {}
+            name = str(section.get("name") or "").strip()
+            if name:
+                return f'პროგრამით „{name}"'
+        except Exception:  # pragma: no cover - defensive
+            pass
+    # Nothing tagged this lead. „ბანაკით" was the unconditional answer here —
+    # written when the camp was the only product, and the last place this week
+    # where the camp still owned something unattributed.
+    #
+    # Live 2026-09-20 22:23 and 2026-09-21 13:31: two Sunday-School parents whose
+    # booking did not complete, so the flow took a name and number instead, and
+    # the manager's mail read „მშობელი დაინტერესებულია ბანაკით". Neither had
+    # mentioned a camp. The Sheet row was right both times; only the mail was
+    # wrong, because it alone had this fallback.
+    #
+    # Same rule as everywhere else now: the sole programme on sale answers for
+    # an untagged lead. With the camp alone on sale that IS the camp, so the
+    # legacy wording is returned verbatim — byte-identical to what the manager
+    # has always read, and what every fixture written before this week asserts.
+    sole = _sole_child_program_on_sale()
+    name = str(sole.get("name") or "").strip()
+    if name and (sole.get("id") or "").strip() != "summer_camp":
+        return f'პროგრამით „{name}"'
+    if name:
         return "ბანაკით"
-    try:
-        from app.services import admin_config_service
-        section = admin_config_service.get_section(pid) or {}
-        name = str(section.get("name") or "").strip()
-        if name:
-            return f'პროგრამით „{name}"'
-    except Exception:  # pragma: no cover - defensive
-        pass
-    return "ბანაკით"
+    # Nothing on sale, or a real choice between two — naming one would be a
+    # guess, so name none.
+    return "ჩვენი პროგრამით"
 
 
 def _build_parent_summary(lead: Lead) -> str:
