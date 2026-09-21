@@ -7030,6 +7030,28 @@ def _sunday_school_dispatch(conversation: Conversation, lead, text: str) -> str:
             resolved = _resolve_consultation_program_name(
                 conversation, lead, extra_text=text or "",
             )
+            if not resolved:
+                # The resolver reads the PARENT's words, and in the ordinary
+                # shape nobody says the programme's name: the parent asks the
+                # price, the AGENT answers for whichever programme is on sale,
+                # the agent asks for a number, the parent leaves one. Measured
+                # 2026-09-21 with Paris as the only programme on sale — the
+                # mail read „საკვირაო სკოლა", which is simply the literal this
+                # notifier falls back to.
+                #
+                # Same rule the rest of the agent applies to an unattributed
+                # turn, and the one `_program_interest_phrase` already uses for
+                # the model's own hand-off tool: the sole programme on sale owns
+                # it. Two or more and this stays empty, so the mail names none
+                # rather than guessing. Sunday School alone stays empty too,
+                # which keeps that mail byte-identical to what the manager has
+                # always read.
+                from app.services.notification_service import (
+                    _sole_child_program_on_sale,
+                )
+                sole = _sole_child_program_on_sale()
+                if (sole.get("id") or "").strip() != "sunday_school":
+                    resolved = str(sole.get("name") or "").strip()
             if resolved:
                 lead.consultation_program_name = resolved
         except Exception:  # pragma: no cover — never block a handoff on a name
