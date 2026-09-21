@@ -730,7 +730,20 @@ _CAMP_OVERAGE_ADULT_REDIRECT: str = (
     "ბანაკი 9–17 წლის ბავშვებისთვისაა. " + _CAMP_OFF_ADULT_POINTER
 )
 
-_CAMP_STATUS_KEYWORDS: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ", "ნაკად")
+_CAMP_STATUS_KEYWORDS: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ")
+# „ნაკად" used to be the fourth entry and is deliberately gone (2026-09-21).
+#
+# An intake is what ANY programme calls its next cohort. Sunday School is sold
+# as a 3-month module and plainly has them; the camp has no monopoly on the
+# word. Live 09:31:22 UTC a parent asked „ეს სამთვიანი კურსები როდის იწყება და
+# შემდეგი ნაკადის მიღება როდის მოხდება?" — the three-month course, by name —
+# and was answered „საზაფხულო ბანაკი უკვე გაიმართა და რეგისტრაცია
+# დასრულებულია." in 105 ms, so the model never saw the turn.
+#
+# Third occurrence of one shape. „შეხვედრ" left ADULT_KEYWORDS on 2026-09-19
+# because Sunday School is sold as twelve interactive meetings; this is its
+# twin. The three stems that remain name the camp and nothing else, so the
+# camp keeps every turn that is actually about it.
 _CAMP_ENDED_Q_MARKERS: tuple[str, ...] = (
     "დასრულ", "აღარ არის", "აღარ ტარდ", "ჩატარდ", "დამთავრ", "აღარ იქნებ",
     "უკვე ჩავიდ", "უკვე გავიდ", "გასულია",
@@ -8069,6 +8082,22 @@ def _maybe_handle_camp_stream_query(
 
     if not sentences and not want_price:
         return None
+    # This handler is about to answer. Registration closed ⇒ the stream dates
+    # are not an offer, so do not read them out; say what is true instead.
+    #
+    # The guard used to be implicit: „ნაკად" was a camp-status keyword, so
+    # `_maybe_handle_camp_status` answered first and this point was never
+    # reached. That keyword left on 2026-09-21 (an intake belongs to whichever
+    # programme has one — see `_CAMP_STATUS_KEYWORDS`), which exposed the dates:
+    # on the shipped 2026-07-07 fixture „3 ნაკადის ასაკი მაინტერესებს" began
+    # answering „ბანაკის მე-3 ნაკადი ტარდება 14–20 ივლისს" for a camp nobody can
+    # enrol in. Stated here, it holds whatever the keyword list does next.
+    #
+    # Placed after the defer checks above, not before them: the seats question
+    # and the bare dates question have their own handlers and must still reach
+    # them (both pinned by this file's own tests).
+    if not _is_camp_registration_open():
+        return _camp_registration_closed_answer()
     paras = [" ".join(sentences)] if sentences else []
     if want_price:
         paras.append(_camp_price_answer(text))
