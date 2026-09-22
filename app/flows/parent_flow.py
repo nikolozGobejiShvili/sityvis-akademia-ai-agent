@@ -6579,6 +6579,35 @@ def _maybe_handle_underage_manager_handoff(
             "another programme (sender=%s)", getattr(conversation, "sender_id", ""),
         )
         return None
+
+    # Every branch above asks whether the PARENT named another programme, and
+    # `_conversation_names_other_program` reads only user turns — deliberately,
+    # so a wrong answer cannot pin itself in place. But the AGENT names the
+    # programme at least as often as the parent does.
+    #
+    # Measured live 2026-09-22 12:12, camp ended and Sunday School (7–17) the one
+    # programme on sale: the agent quoted Sunday School's price, offered its
+    # slots, agreed a time — and the manager was mailed „7 წლის ბავშვი — ასაკი
+    # ბანაკის ქვემოთ (9–17 წელი)" about a child that programme accepts. The
+    # parent had never typed a programme name, so nothing above could fire.
+    #
+    # Same three conditions as `_maybe_handle_camp_status`,
+    # `_maybe_handle_out_of_range_age` and the multi-child age handler — both of
+    # the first two stood down on every turn of this very conversation. Copied,
+    # not invented. A running camp, or a camp alone in the panel, is untouched.
+    if (
+        getattr(settings, "USE_PROGRAM_ISOLATION", False)
+        and _camp_is_not_active()
+        and not _conversation_names_camp(conversation)
+        and _other_active_child_programs_exist()
+    ):
+        logger.info(
+            "[parent_flow] under-age handoff deferred — the camp is closed and "
+            "another programme is active (sender=%s)",
+            getattr(conversation, "sender_id", ""),
+        )
+        return None
+
     age_digits = _extract_age_digits(lead.child_age or "")
     if not age_digits:
         return None
