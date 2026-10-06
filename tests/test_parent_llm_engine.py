@@ -4883,26 +4883,24 @@ def test_sanitiser_replaces_harsh_ineligibility_phrase():
 # =========================================================================
 
 
-def test_system_prompt_has_age_outside_range_adult_pivot_rule():
-    """ADULT LLM Engine Patch — Part 9: when the child's age is outside
-    [age_min, age_max] (including ≥ 18), the engine must ask a polite
-    follow-up question BEFORE switching to the adult flow — never auto-
-    pivot. The prompt now describes a two-step sequence: (a) ask „თუ
-    გაინტერესებთ ჩვენი ზრდასრულთა კულტურული საღამოები, სიამოვნებით
-    გაგაცნობთ პროგრამას"; (b) only call ``switch_to_adult_flow`` if the
-    user confirms.
-    """
+def test_system_prompt_age_rule_is_each_programmes_own():
+    """The age rule (2026-10-06, replacing ADULT LLM Engine Patch Part 9).
+
+    Part 9 told the model that a child outside the summer camp's 9–17 band
+    gets no consultation offer and an adult-events pivot instead. Both are
+    gone by operator decision: an age never refuses a consultation
+    (2026-09-11, the executor no longer returns `age_not_eligible`), adult
+    events are switched off, and every programme's age band is its own
+    (Sunday School is 7–17) — so the band in the prompt is the summer camp's
+    alone and the model offers only what `active_programs` lists."""
     from app.agent.llm.prompt_loader import load_prompt, reset_cache
     reset_cache()
     text = load_prompt("system_parent_v2")
-    # New Part 9 wording: polite question, not auto-switch.
-    assert "ასაკი დიაპაზონს არ ერგება" in text
-    assert "ზრდასრულთა კულტურული საღამოები" in text
-    assert "switch_to_adult_flow" in text
-    # Polite phrase from the patch spec.
-    assert (
-        "სიამოვნებით გაგაცნობთ პროგრამას" in text
-    ), "Polite adult-events question must be in the prompt."
+    assert "{age_min}–{age_max} მხოლოდ საზაფხულო ბანაკისაა" in text
+    assert "უარის მიზეზი არ არის" in text
+    assert "active_programs" in text
+    assert "age_not_eligible" not in text
+    assert "switch_to_adult_flow" in text  # the tool itself is still described
 
 
 # =========================================================================

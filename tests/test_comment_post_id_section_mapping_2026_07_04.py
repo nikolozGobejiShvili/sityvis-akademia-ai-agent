@@ -14,6 +14,13 @@ into the Camp flow with the approved child-age question — instead of the menu.
 
 CRITICAL: the existing caption-hashtag routing and the Sunday-School / Adult
 branches are UNCHANGED. Hashtag routing still works with NO post_id mapping.
+
+Since 2026-10-05 the post_id map is NOT consulted by comment routing (operator:
+„post ids are not used — too many posts"; the panel has no field for them). A
+post's hashtags alone say which programme it is about, and a post without one
+gets the general menu. The camp-DM tests below still pass a segment explicitly,
+which is what selects the camp DM there; tests 5 and 9 pinned routing BY the
+map and now pin that it is ignored.
 """
 from __future__ import annotations
 
@@ -150,16 +157,17 @@ def test_4_camp_mapped_location(mapped_sections, caption, sent):
     assert _CATEGORY not in m
 
 
-def test_5_camp_mapped_caption_fetch_empty_still_routes(mapped_sections, caption, sent):
-    caption["text"] = ""  # simulate Meta caption fetch failure
-    # Route with segment=None so send_dm_from_comment resolves it via post_id.
+def test_5_a_mapped_post_without_a_hashtag_gets_the_menu(mapped_sections, caption, sent):
+    """Until 2026-10-05 the post_id map routed this comment to the camp's price
+    DM. The map is no longer read: no hashtag → the general menu."""
+    caption["text"] = ""  # no hashtag in the caption
     assert _run(comment_service.send_dm_from_comment(
         "user5", "facebook", "CAMP_POST_1", None,
         comment_id="c5", comment_text="ფასი რა არის?",
     ))
     m = sent["msg"]
-    assert "2150" in m
-    assert _CATEGORY not in m
+    assert "2150" not in m
+    assert _CATEGORY in m
 
 
 # ── Existing hashtag routing regression (NO post_id mapping) ──────────────────
@@ -196,8 +204,11 @@ def test_8_unmapped_empty_caption_category_remains(caption, sent):
 
 
 # ── Sunday School safety ─────────────────────────────────────────────────────
-def test_9_ss_mapped_no_camp_content(mapped_sections, caption, sent):
-    assert _dm("SS_POST_1", "ფასი რა არის?", "PARENT")
+def test_9_ss_post_no_camp_content(mapped_sections, caption, sent):
+    """Until 2026-10-05 the Sunday-School post reached its DM through the
+    post_id map; it now does through its own hashtag, the only routing left."""
+    caption["text"] = "საკვირაო სკოლა #საკვირაოსკოლა"
+    assert _dm("SS_POST_1", "ფასი რა არის?")
     m = sent["msg"]
     assert "საკვირაო" in m
     assert "2150" not in m

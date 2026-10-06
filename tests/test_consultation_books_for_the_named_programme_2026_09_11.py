@@ -92,11 +92,22 @@ def test_a_dynamic_programme_is_unchanged(panel):
 
 
 def test_the_camp_still_resolves_to_the_camp_default(panel):
-    """"" IS the camp band and the camp gate — camp behaviour must not move."""
-    panel()
+    """"" IS the camp band and the camp gate — a RUNNING camp's behaviour must
+    not move.
+
+    Changed 2026-10-05 (operator goals G2/G6): this panel's camp is ENDED, and
+    the old assertion booked a consultation for it through the camp default.
+    An ended programme does not drive an action — naming it is now refused as
+    a closed programme. The running camp keeps exactly the old answer."""
+    panel([dict(_CAMP, status="active"), _SCHOOL, _PARIS, _ADULT])
     pid, _ = _resolve("საზაფხულო ბანაკზე კონსულტაცია მინდა")
     assert pid == ""
     assert _band(pid) == (9, 17)
+
+    panel()  # the camp ended
+    pid, ex = _resolve("საზაფხულო ბანაკზე კონსულტაცია მინდა")
+    assert pid == pte._PROGRAM_CLOSED
+    assert ex._booking_refusal(pid)["reason"] == "camp_registration_closed"
 
 
 def test_the_band_is_the_operators(panel):
@@ -155,9 +166,18 @@ def test_a_bare_confirm_keeps_the_programme_already_established(panel):
 
 
 def test_explicit_camp_intent_clears_a_stale_tag(panel):
-    panel()
-    pid, _ = _resolve("საზაფხულო ბანაკი მაინტერესებს", tagged="sunday_school")
+    """The newer explicit name outranks the older tag in both cases. Changed
+    2026-10-05: with the camp ENDED the booking is refused as closed instead of
+    being judged by the camp default (see the test above)."""
+    panel([dict(_CAMP, status="active"), _SCHOOL, _PARIS, _ADULT])
+    pid, ex = _resolve("საზაფხულო ბანაკი მაინტერესებს", tagged="sunday_school")
     assert pid == ""
+    assert ex.lead.program_id == ""
+
+    panel()  # the camp ended
+    pid, ex = _resolve("საზაფხულო ბანაკი მაინტერესებს", tagged="sunday_school")
+    assert pid == pte._PROGRAM_CLOSED
+    assert ex.lead.program_id == ""
 
 
 def test_the_flag_off_is_byte_identical(panel, monkeypatch):

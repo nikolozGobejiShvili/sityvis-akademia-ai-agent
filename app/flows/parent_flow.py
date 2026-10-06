@@ -1370,6 +1370,22 @@ _PROGRAM_CHOICE_TEMPLATE_ID = "program_choice_question"
 _PROGRAM_CHOICE_FALLBACK = "რომელი გაინტერესებთ: {listed}?"
 
 
+def _which_programme_question(names: list[str]) -> str:
+    """„Which one?" over the panel's programme names, in the operator's own
+    wording (`_PROGRAM_CHOICE_TEMPLATE_ID`, editable in the panel), falling back
+    to the built-in sentence. Never raises."""
+    listed = " თუ ".join(names) if len(names) == 2 else ", ".join(names)
+    rendered = ""
+    try:
+        from app.services import admin_config_service
+        rendered = admin_config_service.render_template(
+            _PROGRAM_CHOICE_TEMPLATE_ID, {"listed": listed},
+        )
+    except Exception:  # pragma: no cover — defensive
+        rendered = ""
+    return (rendered or "").strip() or _PROGRAM_CHOICE_FALLBACK.format(listed=listed)
+
+
 def _maybe_ask_which_programme(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -1409,17 +1425,7 @@ def _maybe_ask_which_programme(
         names = [n for n in names if n]
         if len(names) < 2:
             return None
-        listed = " თუ ".join(names) if len(names) == 2 else ", ".join(names)
-        rendered = ""
-        try:
-            rendered = admin_config_service.render_template(
-                _PROGRAM_CHOICE_TEMPLATE_ID, {"listed": listed},
-            )
-        except Exception:  # pragma: no cover — defensive
-            rendered = ""
-        question = (rendered or "").strip() or _PROGRAM_CHOICE_FALLBACK.format(
-            listed=listed,
-        )
+        question = _which_programme_question(names)
         for turn in (conversation.history or []):
             if ((turn or {}).get("role") == "assistant"
                     and ((turn or {}).get("content") or "").strip() == question):
@@ -1733,19 +1739,33 @@ def _program_id_for_turn(message: str) -> str:
 
     Nothing here decides what to DO with the programme: a reserved one is still
     filtered out by the caller and keeps its curated flow. Never raises.
+
+    A programme that is NOT on sale can still be named — „საზაფხულო ბანაკი" is
+    the ended camp's full name. Read only against the active sections, that
+    name was made of generic words alone, and „ბანაკი" then had one active
+    owner, so the ended camp's own name was answered as Paris (2026-10-05
+    review). A message that names an off-sale programme identifies no active
+    one: "" here, and the caller's own camp reading takes it from there.
     """
     try:
         from app.services import admin_config_service
         from app.reasoning.dynamic_program_match import (
             match_dynamic_program, programs_answering_to_ambiguous_word,
         )
+        fuzzy = getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False)
         sections = admin_config_service.get_active_sections() or []
-        match = match_dynamic_program(
-            message, sections,
-            fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
-        )
+        match = match_dynamic_program(message, sections, fuzzy=fuzzy)
         if match:
             return str(match.get("program_id") or "").strip()
+        active_ids = {(s.get("id") or "").strip() for s in sections}
+        off_sale = [
+            dict(s, status="active")
+            for s in (admin_config_service.load_sections() or [])
+            if (s.get("id") or "").strip()
+            and (s.get("id") or "").strip() not in active_ids
+        ]
+        if off_sale and match_dynamic_program(message, off_sale, fuzzy=fuzzy):
+            return ""
         candidates = programs_answering_to_ambiguous_word(message, sections)
         if len(candidates) == 1:
             return str(candidates[0].get("id") or "").strip()
@@ -1773,10 +1793,19 @@ def _tag_per_product_booking(conversation: Conversation, message: str) -> None:
     try:
         from app.reasoning.dynamic_program_match import match_dynamic_program
         from app.services import admin_config_service
-        match = match_dynamic_program(
-            message or "", admin_config_service.get_active_sections(),
-            fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
-        )
+        active = admin_config_service.get_active_sections()
+        fuzzy = getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False)
+        match = match_dynamic_program(message or "", active, fuzzy=fuzzy)
+        # A message naming TWO programmes on sale („საკვირაო სკოლაც და
+        # პარიზის ბანაკიც მაინტერესებს") chooses neither: the first one in panel
+        # order used to be tagged and own every later turn (verification
+        # 2026-10-06). The older tag is no longer what the parent is asking.
+        if match and sum(
+            1 for s in (active or [])
+            if match_dynamic_program(message or "", [s], fuzzy=fuzzy) is not None
+        ) > 1:
+            lead.program_id = ""
+            return
     except Exception:  # pragma: no cover - defensive
         return
     if not match:
@@ -1804,6 +1833,7 @@ def _is_active_per_product_booking(conversation: Conversation) -> bool:
 
 def _resolve_consultation_program_name(
     conversation: Conversation, lead: Lead, extra_text: str = "",
+    include_panel: bool = False,
 ) -> str:
     """The NAME of the program THIS consultation was requested for — for the CRM
     „Program" column (USE_CONSULTATION_PROGRAM_NAME, 2026-07-27 live test #6).
@@ -1826,6 +1856,46 @@ def _resolve_consultation_program_name(
         # is for — writing "" there, or the wrong name, is how a camp booking
         # ends up filed under another programme.
         pid = (getattr(lead, "program_id", "") or "").strip()
+
+        # The same reader the booking gate and the model's context use, so the
+        # name on the record, the programme that answered and the programme
+        # whose gate admitted the booking can never disagree. It reads the
+        # chat — the agent's replies included — and the panel, so a Sunday
+        # School booking nobody typed the name of is still filed under Sunday
+        # School, and with two programmes on sale and none chosen it names
+        # neither rather than guessing.
+        #
+        # What this replaced read the parent's last eight turns and then
+        # mapped any camp word („ბანაკ", „საზაფხულო", „ლაგერ") to the summer
+        # camp — an alias rule the operator ruled out on 2026-10-01: only the
+        # name „საზაფხულო ბანაკი" means the summer camp.
+        #
+        # The panel's own answer — the one programme on sale — names a BOOKING
+        # (`include_panel`, from the booking write: it is the programme whose
+        # gate admitted it). A contact hand-off applies that rule itself, with
+        # its own exception for Sunday School (`_sunday_school_dispatch`). A
+        # programme that is off sale and was the last one the parent named is
+        # what a hand-off is about (2026-09-09: a camp enquiry with every camp
+        # off was mailed as Sunday School).
+        from app.agent.llm.parent_llm_engine import resolve_programme
+        attribution = resolve_programme(conversation, extra_text or "", lead)
+        if attribution.state == "closed" and attribution.program_id:
+            return _name(attribution.program_id)
+        if attribution.state == "open" and attribution.program_id and (
+            attribution.source != "panel" or include_panel
+        ):
+            return _name(attribution.program_id)
+        closed = attribution.closed_in_chat or {}
+        if (closed.get("id") or "").strip():
+            return _name(str(closed.get("id")).strip())
+        # Two or more on sale and nothing chose one: no name. A generic word in
+        # the recent turns („ბავშვს სკოლა 3-ზე უმთავრდება") used to name Sunday
+        # School through the legacy tiers below (verification 2026-10-06).
+        if attribution.state == "ambiguous":
+            return ""
+        # The tag — read after the chat since 2026-10-06, as `resolve_programme`
+        # does. It still names a lead whose programme the reader cannot see (a
+        # reserved one, or one switched off since).
         if pid:
             return _name(pid)
 
@@ -1836,17 +1906,11 @@ def _resolve_consultation_program_name(
             + ([extra_text] if (extra_text or "").strip() else [])
         )
         if recent.strip():
-            # The same resolver the routing uses, so the name on the record and
-            # the programme that answered can never disagree. It reads a generic
-            # word too, which `match_dynamic_program` refuses — „ბანაკი" names a
-            # camp here exactly as it does everywhere else.
             resolved = _program_id_for_turn(recent)
             if resolved:
                 return _name(resolved)
             if _is_sunday_school_intent(recent):
                 return _name("sunday_school", "საკვირაო სკოლა")
-            if any(k in recent.lower() for k in _CAMP_STATUS_KEYWORDS):
-                return _name("summer_camp", "ბანაკი")
     except Exception:  # pragma: no cover - defensive
         pass
     return ""
@@ -2413,6 +2477,26 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                 conversation, hoisted_engine_out,
             )
             return _sanitise_booking_confirmation(conversation, hoisted_engine_out)
+        # The model gave no answer on a programme turn. Falling through reached
+        # the summer camp's own deterministic answers whenever the message had
+        # a camp word — which Paris's own name has („ბანაკი"): its transport
+        # line, its price block and the camp's manager number went to Paris
+        # parents (verification 2026-10-06). Only that turn stops here: one
+        # more model attempt, then the neutral reply. Every other turn falls
+        # through exactly as before — the chain below books a held slot on
+        # „კი", closes a decline, gives the manager's number and asks the model
+        # again (regression hunt 2026-10-06), and ends in the same neutral
+        # reply when the model is still silent.
+        if any(stem in (message or "").lower() for stem in _CAMP_WORD_STEMS):
+            hoisted_retry = _run_llm_engine_safely(conversation, message)
+            if hoisted_retry:
+                hoisted_retry = _ensure_adult_intro_followup_for_parent_flow(
+                    conversation, hoisted_retry,
+                )
+                return _sanitise_booking_confirmation(conversation, hoisted_retry)
+            hoisted_outage = _engine_unavailable_reply(conversation, message)
+            if hoisted_outage is not None:
+                return _sanitise_booking_confirmation(conversation, hoisted_outage)
 
     # Camp admin-status gate (2026-07-01) — when the operator turns the camp off
     # (`summer_camp.status` != active), a CAMP question is answered with the
@@ -2637,9 +2721,12 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         # hijack it. Flag off / camp / adult / no-program-named ⇒ False ⇒ chain
         # unchanged (byte-identical).
         if _is_dynamic_program_turn(message):
-            return _sanitise_booking_confirmation(
-                conversation, _run_llm_engine_safely(conversation, message),
-            )
+            dynamic_out = _run_llm_engine_safely(conversation, message)
+            if not dynamic_out:
+                # No answer from the model: this returned "" and the parent got
+                # nothing at all — see `_engine_unavailable_reply`.
+                dynamic_out = _engine_unavailable_reply(conversation, message) or ""
+            return _sanitise_booking_confirmation(conversation, dynamic_out)
 
         # Reasoning Layer (Phase 1, 2026-06-23) — gated, DETERMINISTIC analyzer.
         # When USE_REASONING_LAYER is on, classify the turn into structured
@@ -2837,6 +2924,10 @@ def _handle_core(conversation: Conversation, message: str) -> str:
                         validator_changed=(engine_response != _before),
                     )
             return _sanitise_booking_confirmation(conversation, engine_response)
+        # The model gave no answer — see `_engine_unavailable_reply`.
+        outage_reply = _engine_unavailable_reply(conversation, message)
+        if outage_reply is not None:
+            return _sanitise_booking_confirmation(conversation, outage_reply)
 
     response = _handle_impl(conversation, message)
     # Legacy state-machine fallback path also gets the state-driven age-reask
@@ -2852,6 +2943,139 @@ def _handle_core(conversation: Conversation, message: str) -> str:
         if _trace is not None:
             _trace.set(validator_ran=True, validator_changed=(response != _before))
     return _sanitise_booking_confirmation(conversation, response)
+
+
+# When the model gives no answer at all (provider error, credit exhausted, an
+# empty reply — `run_parent_llm_turn` returns "" only then), the turn fell to
+# the legacy state machine, which was written for the camp alone: measured
+# 2026-10-05 with the camp ended, „ფასი რა არის?" from a Sunday-School parent
+# came back with the camp's 2150 price block and „10 წლისაა" with the camp's
+# introduction. Operator, 2026-10-06: answer such a turn neutrally — ask for
+# the name and number, and the manager calls back. The contact goes through the
+# model's own hand-off tool (`request_manager_callback`), so the mail and the
+# CRM row name the programme exactly as they do when the model calls it.
+_OUTAGE_ASK_CONTACT: str = (
+    "მომწერეთ თქვენი სახელი და საკონტაქტო ნომერი, მენეჯერი დაგიკავშირდებათ."
+)
+_OUTAGE_ASK_NAME: str = "მომწერეთ თქვენი სახელი, რომ მენეჯერს გადავცე."
+_OUTAGE_ASK_PHONE: str = "მომწერეთ თქვენი საკონტაქტო ნომერი, რომ მენეჯერს გადავცე."
+_OUTAGE_ALREADY: str = (
+    "თქვენი მონაცემები მენეჯერს უკვე გადავეცი. მალე დაგიკავშირდებიან."
+)
+
+
+def _last_assistant_text(conversation: Conversation) -> str:
+    return next(
+        (str(t.get("content") or "").strip()
+         for t in reversed(conversation.history or [])
+         if isinstance(t, dict) and t.get("role") == "assistant"),
+        "",
+    )
+
+
+def _outage_answer_brings_contact(conversation: Conversation, message: str) -> bool:
+    """True when the message carries the contact an outage reply asked for: a
+    phone number, or — while no name is known — a plain name answering the ask.
+
+    Any short phrase without „?" passed for a name before (regression hunt
+    2026-10-06): „რა ღირს" was stored as the parent's name, a hand-off went to
+    the manager under it, and with a name already known the same ask came back
+    on every such turn."""
+    text = (message or "").strip()
+    if _distinct_valid_phones(text):
+        return True
+    last_reply = _last_assistant_text(conversation)
+    if not any(
+        ask in last_reply for ask in (_OUTAGE_ASK_CONTACT, _OUTAGE_ASK_NAME, _OUTAGE_ASK_PHONE)
+    ):
+        return False
+    lead = conversation.lead
+    if lead is not None and is_valid_person_name(lead.name or ""):
+        return False
+    if "?" in text or any(m in text.lower() for m in _SUNDAY_SCHOOL_PIVOT_MARKERS):
+        return False
+    try:
+        cand_name, _cand_phone = _parse_name_phone(text)
+    except Exception:  # pragma: no cover — defensive
+        return False
+    return _is_storable_person_name(cand_name, text)
+
+
+def _engine_unavailable_reply(conversation: Conversation, message: str) -> str | None:
+    """The reply to a turn the model did not answer, or None to keep the legacy
+    flow (the camp on sale — what that flow was written for)."""
+    if not _camp_is_not_active():
+        return None
+    lead = _ensure_lead(conversation)
+    if getattr(lead, "calendly_booked", False):
+        # A booked parent: the legacy flow answered with camp-worded lines
+        # („…ბანაკზე ან კონსულტაციაზე…") or nothing at all. Their manager's
+        # number, without promising a call nobody was asked to make.
+        return _render_manager_number_answer(lead, self_call=True, conversation=conversation)
+    text = (message or "").strip()
+    phones = _distinct_valid_phones(text)
+    if not phones and _message_has_overlong_number(text):
+        return _OUTAGE_ASK_PHONE
+    # Is this the answer to one of our own contact asks? Compared as contained
+    # text: the greeting policy may prepend „გამარჯობა 💙" to the stored reply.
+    last_reply = _last_assistant_text(conversation)
+    answering_ask = any(
+        ask in last_reply for ask in (_OUTAGE_ASK_CONTACT, _OUTAGE_ASK_NAME, _OUTAGE_ASK_PHONE)
+    )
+    name_before = lead.name or ""
+    # A contact is read only from a message that carries a number, or from a
+    # plain answer to our ask — never from a question or a topic word: the
+    # parser takes any short phrase for a name, and „ფასი რა არის?" was stored
+    # as the parent's name „ფასი რა".
+    if _outage_answer_brings_contact(conversation, text):
+        _ss_capture_contact(lead, text)
+        # A number with a question („599…, რა ღირს?"): the number is the
+        # contact, the question is not a name (review 2026-10-06).
+        if (lead.name or "") != name_before and not _is_storable_person_name(
+            lead.name or "", text,
+        ):
+            lead.name = name_before
+    got_name = (lead.name or "") != name_before
+    got_phone = bool(phones)
+    have_phone = bool((lead.phone or "").strip())
+    have_name = bool((lead.name or "").strip()) and is_valid_person_name(lead.name or "")
+    if have_phone and have_name and not (got_phone or got_name or answering_ask):
+        # The contact is known from earlier and this turn is about something
+        # else: give the manager's number rather than hand the parent over
+        # unasked.
+        return _render_manager_number_answer(lead, self_call=True, conversation=conversation)
+    if have_phone and have_name:
+        try:
+            from app.agent.tools.parent_tool_executor import ParentToolExecutor
+            result = ParentToolExecutor(
+                conversation=conversation, lead=lead,
+                sender_id=conversation.sender_id, platform=conversation.platform,
+                user_message=message,
+            ).execute("request_manager_callback", {"name": lead.name, "phone": lead.phone})
+        except Exception:  # pragma: no cover — defensive
+            logger.exception("[parent_flow] outage hand-off raised")
+            result = {}
+        logger.info(
+            "[parent_flow] engine gave no answer — hand-off success=%s reason=%s",
+            result.get("success"), result.get("reason"),
+        )
+        if result.get("reason") == "already_notified":
+            return _OUTAGE_ALREADY
+        if result.get("success"):
+            return _SUNDAY_SCHOOL_SUCCESS
+        # Not handed over: never claim it was — give the manager's number, and
+        # do not promise the call (`self_call`: no „…თავად დაგიკავშირდებათ").
+        return _render_manager_number_answer(lead, self_call=True, conversation=conversation)
+    # Ask for the missing half only when this message brought the other half;
+    # otherwise the one sentence the operator approved.
+    if got_phone and not have_name:
+        return _OUTAGE_ASK_NAME
+    if have_name and not have_phone:
+        # The name is known (this turn, or the Meta profile): ask only for the
+        # number — asking for both again repeated the same ask (review
+        # 2026-10-06).
+        return _OUTAGE_ASK_PHONE
+    return _OUTAGE_ASK_CONTACT
 
 
 def _run_llm_engine_safely(conversation: Conversation, message: str) -> str:
@@ -3464,12 +3688,13 @@ def _maybe_handle_multi_child_age(
     # Live 2026-09-18 12:22, camp ended and Sunday School the one programme on
     # sale: „მაინტერესებს 16 და 13 წლის მოზარდების ჯგუფში თუ გაქვთ ადგილი?" came
     # back „ბანაკი ორივე ასაკისთვის შესაბამისია. რას ელოდებით ბანაკისგან?" —
-    # nothing had been named, so the guard above could not fire. Same three
-    # conditions as the camp-status gate and the out-of-range-age handler.
+    # nothing had been named, so the guard above could not fire. The same
+    # conditions as the out-of-range-age handler — which, like this one, no
+    # longer keeps the camp's band for a conversation that named the camp
+    # (operator 2026-10-02: an ended camp says nothing about a child's age).
     if (
         getattr(settings, "USE_PROGRAM_ISOLATION", False)
         and _camp_is_not_active()
-        and not _conversation_names_camp(conversation)
         and _other_active_child_programs_exist()
     ):
         logger.info(
@@ -3971,9 +4196,11 @@ def _maybe_acknowledge_stored_state(
     logger.info(
         "[parent_flow] FIX3 acknowledged stored child_age on resume",
     )
+    # Names no programme (2026-10-05): a returning Sunday-School parent was
+    # asked whether they were still interested in the CAMP.
     return (
         f"გამარჯობა! წინა საუბრიდან ვიცი, რომ თქვენი შვილი {age} წლისაა. "
-        "ბანაკით ისევ ინტერესდებით?"
+        "ისევ ინტერესდებით?"
     )
 
 
@@ -4989,13 +5216,16 @@ def _maybe_handle_out_of_range_age(
     # message „6 წლის ბავშვს ვერ დავარეგისტრირებ?" — and „…8წლიან
     # ჯგუფებისთვის?", whose child IS inside Sunday School's own 7-8 bracket —
     # came back „ბანაკი განკუთვნილია 9–17 წლის ბავშვებისთვის". Nothing had been
-    # named yet, so the guard above could not fire. Same three conditions as the
-    # camp-status gate, same flag: a closed camp does not rule on another
-    # programme's age band.
+    # named yet, so the guard above could not fire. Same flag as the camp-status
+    # gate: a closed camp does not rule on another programme's age band.
+    #
+    # Unlike the camp-status gate this does NOT ask whether the parent named
+    # the camp (operator, 2026-10-02): with the camp ended, its age band is not
+    # an answer to anything — a parent who wrote „ბანაკი" and then a 7-year-old
+    # was told the camp is for 9–17 while Sunday School takes seven-year-olds.
     if (
         getattr(settings, "USE_PROGRAM_ISOLATION", False)
         and _camp_is_not_active()
-        and not _conversation_names_camp(conversation)
         and _other_active_child_programs_exist()
     ):
         logger.info(
@@ -6591,14 +6821,14 @@ def _maybe_handle_underage_manager_handoff(
     # ბანაკის ქვემოთ (9–17 წელი)" about a child that programme accepts. The
     # parent had never typed a programme name, so nothing above could fire.
     #
-    # Same three conditions as `_maybe_handle_camp_status`,
-    # `_maybe_handle_out_of_range_age` and the multi-child age handler — both of
-    # the first two stood down on every turn of this very conversation. Copied,
-    # not invented. A running camp, or a camp alone in the panel, is untouched.
+    # The conditions `_maybe_handle_out_of_range_age` uses. Not whether the
+    # parent named the camp (operator, 2026-10-02, Screenshot_51): an ENDED
+    # camp's age band is no reason to tell the manager a child is too young —
+    # the child may be exactly who the programme on sale takes. A running camp,
+    # or a camp alone in the panel, is untouched.
     if (
         getattr(settings, "USE_PROGRAM_ISOLATION", False)
         and _camp_is_not_active()
-        and not _conversation_names_camp(conversation)
         and _other_active_child_programs_exist()
     ):
         logger.info(
@@ -7081,6 +7311,27 @@ def _sunday_school_dispatch(conversation: Conversation, lead, text: str) -> str:
                 sole = _sole_child_program_on_sale()
                 if (sole.get("id") or "").strip() != "sunday_school":
                     resolved = str(sole.get("name") or "").strip()
+            else:
+                # Since 2026-10-05 the resolver also reads the AGENT's replies.
+                # Sunday School alone on sale and the parent never naming it is
+                # the case the paragraph above keeps byte-identical — the
+                # wording the manager has always read — so an answer that came
+                # only from the agent's words leaves it that way.
+                from app.services.notification_service import (
+                    _sole_child_program_on_sale,
+                )
+                sole = _sole_child_program_on_sale()
+                parent_words = [
+                    str(m.get("content") or "")
+                    for m in (getattr(conversation, "history", []) or [])
+                    if isinstance(m, dict) and m.get("role") == "user"
+                ] + [text or ""]
+                if (
+                    (sole.get("id") or "").strip() == "sunday_school"
+                    and resolved == str(sole.get("name") or "").strip()
+                    and not any(_is_sunday_school_intent(w) for w in parent_words)
+                ):
+                    resolved = ""
             if resolved:
                 lead.consultation_program_name = resolved
         except Exception:  # pragma: no cover — never block a handoff on a name
@@ -7090,17 +7341,47 @@ def _sunday_school_dispatch(conversation: Conversation, lead, text: str) -> str:
     except Exception:
         logger.exception("[parent_flow] sunday-school email dispatch raised")
         dispatched = False
+    # The CRM row: the SundaySchoolLeads tab files every row as „sunday_school",
+    # so a lead for ANOTHER programme (Paris, via „მენეჯერის ნომერი" → name and
+    # number) was filed there as Sunday School (verification 2026-10-06). Such a
+    # lead goes to the Leads tab, whose Program column carries its name — the
+    # row the model's own hand-off tool writes. Sunday School keeps its tab.
+    other_programme = ""
     try:
-        sheets_service.log_sunday_school_lead(
-            lead, user_message=text,
-            notification_status="sent" if dispatched else "failed",
-        )
+        from app.services import admin_config_service as _acs
+        ss_name = str((_acs.get_section("sunday_school") or {}).get("name") or "").strip()
+        named = (getattr(lead, "consultation_program_name", "") or "").strip()
+        if named and named != ss_name:
+            other_programme = named
+    except Exception:  # pragma: no cover — defensive
+        other_programme = ""
+    try:
+        if other_programme:
+            # Written whether or not the mail went out, as the Sunday-School
+            # row always was: a failed mail must not lose the contact too
+            # (regression hunt 2026-10-06).
+            sheets_service.create_lead(lead)
+        else:
+            sheets_service.log_sunday_school_lead(
+                lead, user_message=text,
+                notification_status="sent" if dispatched else "failed",
+            )
     except Exception:
         logger.exception("[parent_flow] sunday-school sheet log raised")
     if dispatched:
         _sunday_school_notified_senders.add(conversation.sender_id)
-        logger.info("[parent_flow] sunday-school handoff dispatched")
+        # The manager has the contact now: no follow-up after it (the model's
+        # hand-off tool and the manager-number answer block it the same way).
+        _mark_manager_number_disclosed(conversation)
+        logger.info(
+            "[parent_flow] sunday-school handoff dispatched programme=%r",
+            other_programme or "sunday_school",
+        )
         return _SUNDAY_SCHOOL_SUCCESS
+    if other_programme:
+        # The failure line names Sunday School; for another programme the
+        # honest fallback is its manager's number, without promising a call.
+        return _render_manager_number_answer(lead, self_call=True, conversation=conversation)
     return _SUNDAY_SCHOOL_FAIL
 
 
@@ -7697,17 +7978,35 @@ def _render_manager_number_answer(
     Sunday School's own configured number, not the camp's."""
     from app.services import admin_config_service
 
-    program_id = None
+    phone_known = bool(lead is not None and (lead.phone or "").strip())
+    # Since 2026-10-05: `programme_manager_phone`, the operator's rule of
+    # 2026-10-04 — the programme the chat is about hands over its own number;
+    # with two programmes on sale and none chosen, their shared number if they
+    # share one, else the parent is asked which programme (once — asked again,
+    # each programme's number is given by name rather than looping).
+    per_programme: list[tuple[str, str]] = []
     if conversation is not None:
         try:
-            from app.agent.llm.parent_llm_engine import _active_program_section
-            section = _active_program_section(conversation, "", lead)
-            program_id = (section or {}).get("id") or None
+            from app.agent.llm.parent_llm_engine import programme_manager_phone
+            manager_phone, per_programme = programme_manager_phone(
+                conversation, "", lead,
+            )
         except Exception:  # pragma: no cover - defensive
-            program_id = None
+            manager_phone = ""
+    else:
+        manager_phone = (admin_config_service.get_manager_phone() or "").strip()
+    if not manager_phone and per_programme:
+        question = _which_programme_question([name for name, _ in per_programme])
+        # Contained, not equal: the greeting policy may prepend „გამარჯობა 💙".
+        asked = any(
+            (turn or {}).get("role") == "assistant"
+            and question in ((turn or {}).get("content") or "")
+            for turn in (getattr(conversation, "history", None) or [])
+        )
+        if not asked:
+            return question
+        manager_phone = "; ".join(f"{name} — {number}" for name, number in per_programme)
 
-    phone_known = bool(lead is not None and (lead.phone or "").strip())
-    manager_phone = (admin_config_service.get_manager_phone(program_id) or "").strip()
     if manager_phone:
         if self_call:
             key = "manager.direct_phone"
@@ -8924,14 +9223,10 @@ def planner_final_validate(conversation, plan, response: str) -> str:
         # fallback instead of substituting a user/lead/callback/test number.
         if _cp.F_MUST_RETURN_MANAGER_PHONE in forbidden:
             try:
-                from app.agent.llm.parent_llm_engine import _active_program_section
-                _section = _active_program_section(
+                from app.agent.llm.parent_llm_engine import programme_manager_phone
+                phone, _ = programme_manager_phone(
                     conversation, "", getattr(conversation, "lead", None),
                 )
-                from app.services import admin_config_service
-                phone = (admin_config_service.get_manager_phone(
-                    (_section or {}).get("id") or None,
-                ) or "").strip()
             except Exception:
                 phone = ""
             digits = re.sub(r"\D", "", phone)
@@ -10141,10 +10436,9 @@ def _build_state_recall_reply(conversation: Conversation) -> str:
             "შემოგთავაზოთ."
         )
     else:
-        cta = (
-            "თუ ბანაკთან დაკავშირებით კითხვა გაქვთ, მომწერეთ და "
-            "დაგეხმარებით."
-        )
+        # Names no programme, like the empty reply above (2026-09-18): what is
+        # stored about a parent is not a camp fact. This branch was missed then.
+        cta = "თუ კითხვა გაქვთ, მომწერეთ და დაგეხმარებით."
     return f"{body}\n\n{cta}"
 
 
@@ -10551,8 +10845,10 @@ _RESCHEDULE_INTENT_STEMS: tuple[str, ...] = (
     "დროის შეცვლა", "დრო შევცვალოთ", "დროის გადატანა", "reschedule",
 )
 
+# Names no programme (2026-10-05): a Sunday-School or Paris parent moving
+# their consultation was told „ბანაკის კონსულტაციის…" — the summer camp's.
 _RESCHEDULE_ASK_NEW_TIME: str = (
-    "კი, ბანაკის კონსულტაციის გადატანაში დაგეხმარებით. "
+    "კი, კონსულტაციის გადატანაში დაგეხმარებით. "
     "რომელი ახალი დღე და დრო გირჩევნიათ?"
 )
 
@@ -10911,6 +11207,25 @@ def _maybe_handle_contact_collection(
     text = (message or "").strip()
     if not text:
         return None
+
+    # The contact the outage reply asked for: it was promised to the manager
+    # („…მენეჯერი დაგიკავშირდებათ"), so it goes to the manager — not on into a
+    # booking question („რომელი დღე და დრო გირჩევნიათ?").
+    last_reply = _last_assistant_text(conversation)
+    # Contained, not equal: the greeting policy may prepend „გამარჯობა 💙".
+    _held_iso = _confirmed_pending_iso(conversation)
+    if any(
+        ask in last_reply for ask in (_OUTAGE_ASK_CONTACT, _OUTAGE_ASK_NAME, _OUTAGE_ASK_PHONE)
+    ) and _outage_answer_brings_contact(conversation, text) and not (
+        # A slot is held: the contact completes the booking (commit helper),
+        # not a manager hand-off (review 2026-10-06).
+        _held_iso and _pending_iso_is_future_bookable(_held_iso)
+    ):
+        # Only a message that brings the contact; anything else („რა ღირს",
+        # a question, once the model answers again) goes on to the model.
+        outage_reply = _engine_unavailable_reply(conversation, text)
+        if outage_reply is not None:
+            return outage_reply
 
     # A question is a discussion turn — never hijack it (BUG 4 boundary).
     if "?" in text:
@@ -11272,6 +11587,104 @@ def _maybe_request_full_contact_on_intent(
     )
 
 
+def _turn_says_no(message: str) -> bool:
+    """True when the message carries a negation WORD — „არა", „არ", „ვერ" (the
+    engine's own `_CONFIRM_NEGATION_TOKENS`), each as a whole word.
+
+    Read as letters inside other words they refused ordinary confirmations
+    (regression hunt 2026-10-06): „თანახმა ვარ" holds „არ ", „პარასკევს 12-ზე"
+    and „თამარა 599…" hold „არა". Never raises."""
+    try:
+        from app.agent.llm.parent_llm_engine import _CONFIRM_NEGATION_TOKENS
+        words = {t.strip() for t in _CONFIRM_NEGATION_TOKENS}
+        return any(tok in words for tok in re.findall(r"\w+", (message or "").lower()))
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+def _says_yes_to_the_held_slot(message: str) -> bool:
+    """True when the message says yes to the slot the agent is holding.
+
+    Read with the word sets the code already has — the booking confirmation
+    phrases, the bare affirmations, the explicit booking requests — and a short
+    message that OPENS with one of those yes-words („კი ჩანიშნეთ", „დიახ,
+    ჩამწერეთ"). A negation, a question or an objection („მაგრამ", „ძვირ…")
+    is never a yes. Anything this does not read as a yes is not refused: it
+    goes to the model, which reads it with the whole chat. Never raises."""
+    try:
+        from app.agent.llm.parent_llm_engine import (
+            _STRONG_CONFIRM_LEAD_PHRASES,
+            _user_confirmed_booking,
+        )
+        low = re.sub(r"\s+", " ", (message or "").lower()).strip()
+        if not low:
+            return False
+        if _turn_says_no(low):
+            return False
+        if _user_confirmed_booking(message) or _is_affirmation_only(message):
+            return True
+        if "?" in low or any(w in low for w in _DECLINE_OVERRIDE_INTEREST):
+            return False
+        if _is_explicit_consultation_request(message):
+            return True
+        tokens = [t for t in re.split(r"[\s,.!:;]+", low) if t]
+        # A first word the engine already reads as the start of a confirmation
+        # („კი", „დიახ", „მაწყობს"…). Not a bare „მინდა": „მინდა სხვა დრო",
+        # „მინდა ვიფიქრო" open with it (review 2026-10-06), and the engine
+        # keeps „მინდა" out of its leading phrases for the same reason.
+        yes_words = {p.split()[0].strip(",") for p in _STRONG_CONFIRM_LEAD_PHRASES}
+        return bool(tokens) and len(tokens) <= 4 and tokens[0] in yes_words
+    except Exception:  # pragma: no cover - defensive → let the model read it
+        return False
+
+
+def _turn_allows_booking_the_held_slot(message: str) -> bool:
+    """W1 for `book_consultation` itself (verification 2026-10-06): a lead whose
+    programme is tagged takes the hoisted engine path, which never reaches the
+    commit helper below — so whether „არა" booked the held slot was the model's
+    call. The model's `user_confirmed_datetime=true` stands unless the turn
+    itself says otherwise: a negation word („არა"), a question, or a request
+    for another time that names none. A turn that brings a time („12-ზე",
+    „11:00"), a date, a number or the child's age books — the executor applies
+    the stated time and re-checks the calendar.
+
+    Refusing everything it could not read as a yes refused ordinary bookings
+    — „იყოს", „12-ზე", „თამარა 599…" (regression hunt 2026-10-06) — and the
+    prompt answers a refusal by asking for the day and time the parent had
+    just given. Empty message (an internal caller) → True. Never raises."""
+    text = (message or "").strip()
+    if not text:
+        return True
+    try:
+        if _says_yes_to_the_held_slot(text):
+            return True
+        if _turn_says_no(text):
+            return False
+        if "?" in text:
+            # A yes followed by a question confirms („კი, მაწყობს ეს დრო,
+            # მენეჯერი რომელ საათამდე მუშაობს?", „დიახ, ჩამწერეთ. სად
+            # ტარდება?") — the confirmation re-ask fixed live on 2026-06-10.
+            # The opening clause is read with the same yes-reading; an
+            # objection anywhere („მაგრამ", „ძვირ…") or any other question
+            # does not book.
+            head = re.split(r"[?.!,]", text, 1)[0].strip()
+            return bool(head) and _says_yes_to_the_held_slot(head) and not any(
+                w in text.lower() for w in _DECLINE_OVERRIDE_INTEREST
+            )
+        try:
+            from app.agent.services.timestamps import extract_colloquial_hour
+            from app.flows.parent_turn_router import _parse_booking_datetime
+            if _parse_booking_datetime(text) or extract_colloquial_hour(text):
+                return True
+        except Exception:  # pragma: no cover - defensive
+            pass
+        if _distinct_valid_phones(text) or _message_has_child_age_expression(text):
+            return True
+        return not _has_time_change_signal(text)
+    except Exception:  # pragma: no cover - defensive → the model's reading stands
+        return True
+
+
 def _maybe_commit_pending_booking_engine(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -11322,6 +11735,9 @@ def _maybe_commit_pending_booking_engine(
         _record_pending_booking_for_slot(conversation, lead, matched_slot)
 
     pending_iso = _confirmed_pending_iso(conversation)
+    # Did THIS message add anything to the held slot? See the check before the
+    # commit below (W1).
+    compound_booking = False
 
     # Stale confirmed-slot guard (Live Bug 1, 2026-06-11). A confirmed
     # pending datetime that has already elapsed must NEVER be auto-booked
@@ -11381,6 +11797,7 @@ def _maybe_commit_pending_booking_engine(
                 },
             )
             pending_iso = _confirmed_pending_iso(conversation)
+            compound_booking = bool(pending_iso)
         if not pending_iso:
             # Contact-only (or stale-cleared) turn — save any contact and
             # ask for the preferred date/time instead of booking a random
@@ -11397,6 +11814,7 @@ def _maybe_commit_pending_booking_engine(
     # would only be reached when the new time matches the existing
     # pending slot, in which case skipping extraction is safe).
     candidate_name, candidate_phone = ("", "")
+    name_captured = False
     if matched_slot is None and not _has_time_change_signal(message):
         try:
             candidate_name, candidate_phone = _parse_name_phone(message)
@@ -11416,6 +11834,7 @@ def _maybe_commit_pending_booking_engine(
         # bare ASCII filler ("ok", "hi") as a Georgian name.
         if re.search(r"[ა-ჰ]", candidate_name):
             lead.name = candidate_name
+            name_captured = True
             logger.info(
                 "[parent_flow] pending commit: captured name=%r", candidate_name,
             )
@@ -11436,11 +11855,14 @@ def _maybe_commit_pending_booking_engine(
             _bot_recently_asked_child_age,
             maybe_capture_child_age_fallback,
         )
+        age_before = (lead.child_age or "").strip()
         maybe_capture_child_age_fallback(
             lead, message,
             age_question_pending=_bot_recently_asked_child_age(conversation),
         )
+        age_captured = (lead.child_age or "").strip() != age_before
     except Exception:
+        age_captured = False
         logger.exception(
             "[parent_flow] pending commit: child_age capture raised — ignored",
         )
@@ -11472,6 +11894,25 @@ def _maybe_commit_pending_booking_engine(
             missing,
         )
         return None
+
+    # W1 — this helper exists to finish a booking on the turn that supplies
+    # what was still missing (the slot pick, the name, the number, the age),
+    # or that says yes to it. A held slot with every detail already known
+    # used to book on WHATEVER came next — „არა", „სხვა დრო მინდა", „ფასი რა
+    # არის?" — because nothing here looked at what the message said. A turn
+    # that adds nothing and does not confirm goes to the model, which reads it
+    # with the whole chat and can still book through its own tool.
+    added_something = bool(
+        matched_slot is not None or compound_booking or candidate_phone
+        or name_captured or age_captured
+    )
+    if not added_something:
+        if not _says_yes_to_the_held_slot(message):
+            logger.info(
+                "[parent_flow] pending commit: the turn neither completes nor "
+                "confirms the held slot — deferring to engine",
+            )
+            return None
 
     # All fields present → commit booking deterministically via the
     # executor. We pre-clear the per-conversation tool-success flag so
@@ -12528,6 +12969,17 @@ def _is_storable_person_name(candidate: str, message: str) -> bool:
         return False
     if _is_affirmation_only(message):
         return False
+    # A question word (the decision layer's own `_QUESTION_WORDS`) in the name
+    # makes it a question, not a name: after „მომწერეთ თქვენი სახელი…" the
+    # reply „რა ღირს" was stored as the parent's name (regression hunt
+    # 2026-10-06). Read in the candidate only — „ნინო 599…, რა ღირს" still
+    # brings the name „ნინო".
+    try:
+        from app.domain.decision.conversation_act import _QUESTION_WORDS
+        if any(tok in _QUESTION_WORDS for tok in re.findall(r"\w+", candidate.lower())):
+            return False
+    except Exception:  # pragma: no cover — defensive
+        pass
     return True
 
 
@@ -12983,9 +13435,15 @@ def _generate_summary(conversation: Conversation) -> str:
         return openai_service.generate_summary(conversation.history)
     except Exception:
         lead = _ensure_lead(conversation)
+        # Every placeholder the template carries: with two of its four filled
+        # the format raised KeyError('deeper_concern'), and a booking made while
+        # the model was down failed inside `_book_selected_slot` (regression
+        # hunt 2026-10-06).
         return PARENT_SUMMARY_FALLBACK.format(
             child_age=lead.child_age,
             challenge=lead.challenge,
+            deeper_concern=getattr(lead, "deeper_concern", "") or "",
+            desired_change=getattr(lead, "desired_change", "") or "",
         ).strip()
 
 
@@ -13055,7 +13513,7 @@ def _book_selected_slot(conversation: Conversation, lead: Lead, slot: dict) -> b
     # (each booking already gets its own appended row). Flag-gated ⇒ OFF byte-identical.
     if getattr(settings, "USE_CONSULTATION_PROGRAM_NAME", False):
         lead.consultation_program_name = _resolve_consultation_program_name(
-            conversation, lead,
+            conversation, lead, include_panel=True,
         )
         # The programme was invisible on this path: the live logs of 2026-09-11
         # showed a booking, a CRM row and a sent mail, and no way to tell WHICH

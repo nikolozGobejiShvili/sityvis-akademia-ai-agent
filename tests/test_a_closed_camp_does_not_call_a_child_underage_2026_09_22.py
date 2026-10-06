@@ -36,10 +36,13 @@ programme is active" and „multi-child age deferred — the camp is closed and
 another programme is active" on every one of these turns. This handler is the
 third with the same problem and the only one without the guard.
 
-Same three conditions, copied rather than invented: program isolation on, the
-camp not running, the conversation never named the camp, another child
-programme on sale. A camp that IS running, or a camp alone in the panel, keeps
-this handoff exactly as it is — that is what it was written for.
+Same conditions, copied rather than invented: program isolation on, the camp
+not running, another child programme on sale. A camp that IS running, or a camp
+alone in the panel, keeps this handoff exactly as it is — that is what it was
+written for. (Until 2026-10-05 a fourth condition — the conversation never
+named the camp — kept the handoff for a parent who said „ბანაკი"; the operator
+ruled that out on 2026-10-02 — see
+`test_a_conversation_that_named_the_ended_camp_still_defers`.)
 """
 from __future__ import annotations
 
@@ -158,8 +161,13 @@ def test_the_camp_alone_in_the_panel_is_unchanged(monkeypatch):
     assert out is not None
 
 
-def test_a_conversation_that_named_the_camp_is_unchanged(monkeypatch):
-    """The parent said camp, so the camp answers — closed or not."""
+def test_a_conversation_that_named_the_ended_camp_still_defers(monkeypatch):
+    """Operator, 2026-10-02: an ENDED camp sends no „too young for the camp"
+    reply and no such mail, even when the parent said „ბანაკი". There is no
+    camp to be too young for; the band of a camp nobody can join is not a fact
+    about this child. Until 2026-10-05 a conversation that named the camp kept
+    this handoff — that is the case this test used to pin, and it is the one
+    the operator ruled out."""
     _panel(monkeypatch, [CAMP_OFF, SCHOOL], "ended")
     monkeypatch.setattr(
         parent_flow.notification_service, "notify_manager_handoff",
@@ -169,7 +177,7 @@ def test_a_conversation_that_named_the_camp_is_unchanged(monkeypatch):
         0, {"role": "user", "content": "საზაფხულო ბანაკი მაინტერესებს"})
     out = parent_flow._maybe_handle_underage_manager_handoff(
         conv, "კარგით,დამოკავშირდნენ")
-    assert out is not None
+    assert out is None
 
 
 def test_an_eligible_age_never_reached_this_handler_anyway(monkeypatch):

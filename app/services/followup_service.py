@@ -398,6 +398,53 @@ def _followup_program_eligibility(
     except Exception:  # pragma: no cover — defensive
         pass
     if segment == "PARENT":
+        # A conversation the parent never wrote in — the private reply to a
+        # comment — stays what it was: the parent answers in their own DM
+        # conversation, which is where booking, decline and hand-off are
+        # recorded and where the follow-up is sent from. Read by the reader
+        # below, the comment DM alone made it eligible and a second follow-up
+        # went to parents who had already booked in DM (regression hunt
+        # 2026-10-06).
+        if not any(
+            isinstance(t, dict) and t.get("role") == "user"
+            for t in (getattr(conversation, "history", None) or [])
+        ):
+            return (True, "", False, "")
+        # A lead nobody tagged was a CAMP lead here, and with the camp ended
+        # the gate below silenced it: every follow-up tick from 2026-10-04 to
+        # 10-05 logged sent=0. Ask the same reader the booking and the mail
+        # use which programme the chat was about — the parent's words, the
+        # agent's replies, then the one programme on sale.
+        try:
+            from app.agent.llm.parent_llm_engine import resolve_programme
+            from app.domain.decision.models import ProgramId
+            attribution = resolve_programme(
+                conversation, "", getattr(conversation, "lead", None),
+            )
+            pid = attribution.program_id
+            # The chat's newest named programme is not on sale (the ended
+            # camp, or Paris before it is switched on) and the panel's sole
+            # programme only filled the gap: a follow-up would name a
+            # programme the parent never asked about (verification 2026-10-06).
+            if (
+                attribution.state == "open" and attribution.source == "panel"
+                and (attribution.closed_in_chat or {}).get("id")
+            ):
+                return (False, "", False, "")
+            if attribution.state == "open" and pid and pid not in (
+                ProgramId.SUMMER_CAMP.value, ProgramId.ADULT_EVENTS.value,
+            ):
+                sec = attribution.section or admin_config_service.get_section(pid) or {}
+                return (
+                    True, str(sec.get("name") or ""), True,
+                    str(sec.get("auto_followup_template_id") or ""),
+                )
+            if attribution.state == "ambiguous":
+                # Two or more programmes on sale and the chat never chose one:
+                # no follow-up names a programme the parent did not pick.
+                return (False, "", False, "")
+        except Exception:  # pragma: no cover — defensive → the camp branch
+            pass
         return (True, "", False, "")  # camp lead — unchanged copy
     return (False, "", False, "")
 
@@ -406,18 +453,21 @@ def _program_followup_fallback(template_id: str, program_name: str) -> str:
     """Program-aware fallback follow-up copy (name-injected) when no admin template
     renders for a dynamic-program lead. Mirrors the camp fallbacks' calm tone — no fake
     urgency, no price claim, no booking promise."""
+    # Worded exactly as the shipped `followup_program_*` templates — the name in
+    # „…" quotes, so a two-word name reads „საკვირაო სკოლა"-ის, not
+    # „საკვირაო სკოლა-ის".
     name = program_name or "პროგრამა"
     by_id = {
         "followup_24h": (
-            f"გამარჯობა. {name}-ის შესახებ მოგწერეთ — ხომ არ დაგრჩათ კითხვა? "
+            f"გამარჯობა. „{name}\"-ის შესახებ მოგწერეთ — ხომ არ დაგრჩათ კითხვა? "
             "თუ გსურთ, დეტალები ან კონსულტაციის დრო გაგიზიაროთ."
         ),
         "followup_3d": (
-            f"გამარჯობა. უბრალოდ შეგახსენებთ — თუ {name} ისევ გაინტერესებთ, "
+            f"გამარჯობა. უბრალოდ შეგახსენებთ — თუ „{name}\" ისევ გაინტერესებთ, "
             "სიამოვნებით გაგიზიარებთ პირობებს ან კონსულტაციის დროს."
         ),
         "followup_7d": (
-            f"გამარჯობა. ბოლოს შეგახსენებთ {name}-თან დაკავშირებით. თუ თემა ისევ "
+            f"გამარჯობა. ბოლოს შეგახსენებთ „{name}\"-თან დაკავშირებით. თუ თემა ისევ "
             "აქტუალურია, მომწერეთ და დაგეხმარებით."
         ),
     }
@@ -451,10 +501,15 @@ def _maybe_send_followup_for_conversation(
         _followup_program_eligibility(conversation)
     )
     if not eligible:
+        # A PARENT lead is ineligible only when two or more programmes are on
+        # sale and the chat never chose one — say so instead of the segment.
+        reason = (
+            "program_unresolved" if (conversation.segment or "") == "PARENT"
+            else "non_parent_segment"
+        )
         logger.info(
-            "[followup] skipped reason=non_parent_segment segment=%s "
-            "platform=%s sender=%s",
-            conversation.segment or "", platform_raw, masked,
+            "[followup] skipped reason=%s segment=%s platform=%s sender=%s",
+            reason, conversation.segment or "", platform_raw, masked,
         )
         return "skipped"
 
@@ -635,8 +690,13 @@ def _render_followup_text(
     candidate_ids = [template_id]
     if getattr(settings, "USE_PROGRAM_FOLLOWUP", False) and is_dynamic:
         stage = template_id.replace("followup_", "")  # 24h / 3d / 7d
+        # The camp's own template (`followup_24h`: „გუშინ ბანაკის შესახებ
+        # მოგწერეთ…") is not a fallback for another programme: since 2026-10-05
+        # every Sunday-School / Paris lead reaches this branch, and a panel
+        # without the `followup_program_*` templates would have sent each of
+        # them the summer camp's follow-up. The named fallback below is theirs.
         candidate_ids = [
-            tid for tid in (section_template_id, f"followup_program_{stage}", template_id)
+            tid for tid in (section_template_id, f"followup_program_{stage}")
             if tid
         ]
 

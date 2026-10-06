@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -201,6 +201,34 @@ def _registration_closed_tool_result(**extra: Any) -> dict[str, Any]:
     return {"success": False, "reason": "camp_registration_closed", **extra}
 
 
+def _program_unresolved_tool_result(
+    candidates: tuple | list = (), **extra: Any,
+) -> dict[str, Any]:
+    """Two or more programmes are on sale and nothing in the chat says which one
+    this consultation is for. A FACT for the model, not a reply: it names the
+    candidates from the panel and the model asks the parent, in its own words.
+    Before this the booking fell back to the summer camp's gate and was refused
+    as „camp_registration_closed" — a guess, and the wrong one."""
+    names = [
+        str((c or {}).get("name") or "").strip()
+        for c in (candidates or ())
+        if str((c or {}).get("name") or "").strip()
+    ]
+    return {
+        "success": False,
+        "reason": "program_unresolved",
+        "candidate_programs": names,
+        "next_action": "ask_which_program",
+        **extra,
+    }
+
+
+# Sentinels `_resolve_booking_program_id` returns when the booking has no
+# programme of its own to be judged by. Neither is a programme id.
+_PROGRAM_UNRESOLVED = "\x00unresolved"
+_PROGRAM_CLOSED = "\x00closed"
+
+
 def _turn_belongs_to_the_camp(conversation: Any, user_message: str) -> bool:
     """Is THIS turn the camp's? Asked with the same predicates the camp-status
     gate uses, so the two cannot drift apart.
@@ -255,26 +283,40 @@ def _camp_public_info_limited_tool_result(
         "message": message,
     }
 
+def _price_text_states_the_price(section: dict) -> bool:
+    """True when the operator wrote the price themselves (`price_text`).
+
+    `price_gel` is DERIVED from it on save — the first integer, labelled GEL
+    whatever the currency. For the Paris camp („€2690", paid in lari at the
+    rate) the model was handed `price_gel: 2690` and could say 2690 ლარი
+    (2026-10-06). With the operator's own text present, the derived number is
+    not a second fact; it is only the fallback when the text is empty."""
+    return bool(str((section or {}).get("price_text") or "").strip())
+
+
 def _booking_registration_open(program_id: str) -> bool:
-    """Registration gate for the CONSULTATION path, with the SAME fallback the
-    age band already has: when the panel says nothing about a programme, the
-    camp's known-good value governs.
+    """Registration gate for the CONSULTATION path. "" is the camp's own gate.
 
     `is_program_registration_open` is deliberately fail-closed — a brand-new
     product must not leak a REGISTRATION entry point before the operator sets a
-    status. But letting a consultation inherit that reading took a programme that
-    had the camp's gate the day before and shut it, which is the same defect
-    recorded on 2026-07-23: the camp ending must not close every other
-    programme's consultation. An EXPLICIT closed value still closes. Never
-    raises.
+    status. A consultation is not a registration, and the camp ending must not
+    close every other programme's consultation (2026-07-23).
+
+    A programme whose `registration_status` the operator never set used to
+    inherit the CAMP's gate here — so with the summer camp ended, a Sunday
+    School left blank was closed by a programme the parent never asked about,
+    which is the operator's rule broken outright (2026-09-30: a closed
+    programme never gates another programme's consultation). Blank now reads
+    the way `get_program_info` and the per-turn facts already read it: open.
+    An EXPLICIT closed value still closes. Never raises.
     """
     if not program_id:
         return _is_camp_registration_open()
     try:
         from app.services import admin_config_service
         section = admin_config_service.get_section(program_id) or {}
-        if not str(section.get("registration_status") or "").strip():
-            return _is_camp_registration_open()
+        if section and not str(section.get("registration_status") or "").strip():
+            return True
         return admin_config_service.is_program_registration_open(program_id)
     except Exception:  # pragma: no cover - defensive → camp
         return _is_camp_registration_open()
@@ -319,6 +361,8 @@ class ParentToolExecutor:
     sender_id: str
     platform: str
     user_message: str = ""
+    # Programmes `get_program_info` fetched during THIS turn (see its tag).
+    programs_fetched: set = field(default_factory=set)
 
     @property
     def cache_key(self) -> str:
@@ -565,6 +609,8 @@ class ParentToolExecutor:
             value = section.get(key)
             if value in (None, "", [], {}):
                 continue
+            if key == "price_gel" and _price_text_states_the_price(section):
+                continue
             facts[key] = value
         if reg_open:
             url = section.get("registration_url")
@@ -579,10 +625,18 @@ class ParentToolExecutor:
         # resolves to the right age band + registration even when the
         # booking-confirmation turn does not re-name the product. Flag-gated;
         # a no-op when off. Best-effort (never blocks the info answer).
+        #
+        # Two different programmes fetched in ONE turn („ორივეს ფასი მითხარით")
+        # is an answer about both, not a choice: the tag used to keep whichever
+        # came last, and the booking that followed was filed under it without
+        # the parent ever choosing (verification 2026-10-06). Then no tag.
         try:
             from app.config import settings as _pp_settings
             if getattr(_pp_settings, "USE_PER_PRODUCT_BOOKING", False):
-                self.lead.program_id = program_id
+                self.programs_fetched.add(program_id)
+                self.lead.program_id = (
+                    program_id if len(self.programs_fetched) == 1 else ""
+                )
         except Exception:  # pragma: no cover - defensive: tagging is best-effort
             pass
         payload = {
@@ -669,11 +723,18 @@ class ParentToolExecutor:
         # get_program_info can never apply a dynamic product's WIDER age band to
         # a camp booking and let an under-min child pass camp's age gate. Flag
         # off ⇒ no-op (byte-identical).
+        #
+        # Only while the camp is taking registrations. A camp that has ended
+        # cannot be what the conversation turned to — the model reaching for
+        # this tool in a Paris or Sunday-School chat wiped the parent's
+        # programme and handed the next booking to the ended camp's gate
+        # (2026-10-05 review).
         try:
             from app.config import settings as _pp_settings
             if getattr(_pp_settings, "USE_PER_PRODUCT_BOOKING", False):
                 if (getattr(self.lead, "program_id", "") or "").strip():
-                    self.lead.program_id = ""
+                    if _is_camp_registration_open():
+                        self.lead.program_id = ""
         except Exception:  # pragma: no cover - defensive: best-effort clear
             pass
         topic = str(args.get("topic") or "").strip().lower()
@@ -686,7 +747,12 @@ class ParentToolExecutor:
 
         registration_open = _is_camp_registration_open()
         if not registration_open:
-            if topic == "registration":
+            turn_is_camps = _turn_belongs_to_the_camp(self.conversation, self.user_message)
+            # „registration" told any parent the CAMP's registration is closed —
+            # a Paris parent asking how to sign up included (verification
+            # 2026-10-06). Only a turn that is the camp's gets that answer; any
+            # other gets the bare refusal below, like every other topic.
+            if topic == "registration" and turn_is_camps:
                 return _registration_closed_tool_result(topic="registration")
             # „price" used to be exempt here, so a closed camp still handed the
             # model its 2150 block. Railway, 2026-08-04 19:07 — a parent wrote
@@ -700,12 +766,7 @@ class ParentToolExecutor:
             # reach — it cannot quote what it was never given. The parent who
             # genuinely asks „ბანაკის ფასი" still gets the camp-ended answer,
             # which is what the other topics have always returned.
-            return _camp_public_info_limited_tool_result(
-                topic,
-                turn_is_camps=_turn_belongs_to_the_camp(
-                    self.conversation, self.user_message,
-                ),
-            )
+            return _camp_public_info_limited_tool_result(topic, turn_is_camps=turn_is_camps)
         # Config-unification patch: read camp facts from the admin-first
         # helper so an operator price/location/streams edit in the
         # Admin Panel takes effect immediately for the LLM's
@@ -869,7 +930,8 @@ class ParentToolExecutor:
         )
 
         if not self._registration_open_for_booking():
-            return _registration_closed_tool_result(slots=[])
+            return (self._booking_refusal(slots=[])
+                    or _registration_closed_tool_result(slots=[]))
         if date_iso:
             from datetime import date as _date_cls
             try:
@@ -960,13 +1022,15 @@ class ParentToolExecutor:
         )
 
         if not self._registration_open_for_booking():
-            return _registration_closed_tool_result(
+            refused = dict(
                 datetime_iso=datetime_iso,
                 inside_business_hours=False,
                 calendar_available=False,
                 available=False,
                 alternative_slots=[],
             )
+            return (self._booking_refusal(**refused)
+                    or _registration_closed_tool_result(**refused))
         if not datetime_iso:
             logger.warning("[slot_check] reason=invalid_datetime (missing)")
             return {
@@ -1192,23 +1256,26 @@ class ParentToolExecutor:
     # -- book_consultation ------------------------------------------------
 
     def _resolve_booking_program_id(self) -> str:
-        """Effective admin product id for THIS consultation booking (Cap #2 / R1).
+        """Effective admin programme id for THIS consultation booking (Cap #2 / R1).
 
-        Booking is the GUARDRAIL zone, so this FAILS CLOSED to camp on any doubt.
-        Returns ``""`` (⇒ camp age band + camp registration, byte-identical) when
-        ``USE_PER_PRODUCT_BOOKING`` is off. When on, resolution order:
-          1. the CURRENT message NAMES a dynamic product → that id (and stick it
-             to the lead so a multi-turn confirmation „კი"/„16:00" — which does
-             NOT re-name the product — keeps the right band);
-          2. the CURRENT message shows explicit CAMP intent → clear any sticky
-             tag and return ``""`` (an explicit camp pivot reverts to the camp
-             band; the fuzzy matcher never returns ``summer_camp`` because its
-             name tokens are ambiguous, so this deterministic camp detector is
-             the reliable clear signal);
-          3. the product already stuck to this lead (from ``get_program_info`` or
-             an earlier book turn this conversation) → that id;
-          4. else ``""`` → camp.
-        Never a hardcoded/reserved id. Never raises.
+        ``""`` means the camp's own age band and registration gate, exactly as
+        before — always so with ``USE_PER_PRODUCT_BOOKING`` off, and whenever the
+        booking IS the camp's. With it on, the programme comes from
+        ``parent_llm_engine.resolve_programme`` — the same reader the model's
+        context, the mail and the CRM label use, so the booking cannot be filed
+        under a programme the conversation was not about:
+
+          * a programme on sale → its id, stuck to the lead so a later bare
+            confirmation („კი" / „16:00") keeps it;
+          * a programme the parent named that is not on sale →
+            ``_PROGRAM_CLOSED`` (refused, as a closed programme);
+          * two or more on sale and nothing in the chat picks one →
+            ``_PROGRAM_UNRESOLVED``: the agent asks which.
+
+        What this replaced: the current message alone, then the tag, then ""
+        — and "" meant the summer camp. With the camp ended, every consultation
+        nobody had tagged was refused by a programme the parent never asked
+        about (31 of 31 live refusals, 2026-09-20…29). Never raises.
         """
         try:
             from app.config import settings
@@ -1216,57 +1283,74 @@ class ParentToolExecutor:
                 return ""
         except Exception:  # pragma: no cover - defensive → camp
             return ""
-        # 1. current message names a dynamic product → stick it
         try:
-            from app.reasoning.dynamic_program_match import match_dynamic_program
-            from app.services import admin_config_service
-            m = match_dynamic_program(
-                self.user_message or "", admin_config_service.get_active_sections(),
-                fuzzy=getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False),
+            from app.agent.llm.parent_llm_engine import resolve_programme
+            attribution = resolve_programme(
+                self.conversation, self.user_message or "", self.lead,
             )
-            pid = (m or {}).get("program_id") or ""
-            if pid and pid not in _BOOKING_PROGRAM_DEFAULTS:
-                self.lead.program_id = pid
-                return pid
-        except Exception:  # pragma: no cover - defensive → fall through to camp
-            pass
-        # 2. explicit camp intent → revert to camp, clear a stale sticky tag
-        try:
-            from app.flows import parent_flow
-            if parent_flow._has_explicit_georgian_camp_intent(self.user_message or ""):
-                self.lead.program_id = ""
+        except Exception:  # pragma: no cover - defensive → camp
+            return ""
+        pid = attribution.program_id
+        if attribution.state == "open":
+            if pid in _BOOKING_PROGRAM_DEFAULTS:
+                # The parent turned to the camp itself: an older programme tag
+                # no longer describes this conversation.
+                if pid == ProgramId.SUMMER_CAMP.value:
+                    self.lead.program_id = ""
                 return ""
-        except Exception:  # pragma: no cover - defensive
-            pass
-        # 3. sticky product from earlier this conversation. Two camp signals
-        #    clear the tag so it stays accurate across the NORMAL flow: explicit
-        #    camp intent (step 2, this turn) and any `get_camp_info` fetch (on
-        #    ANY turn). (get_program_info sets it; get_camp_info clears it.) The
-        #    residual gap — a browse-dynamic-then-book-camp conversation whose
-        #    booking turn is a bare confirm AND never fetched get_camp_info — is
-        #    the documented single-product-conversation scope limitation (see
-        #    docs/ENABLEMENT_USE_PER_PRODUCT_BOOKING.md).
-        stuck = (getattr(self.lead, "program_id", "") or "").strip()
-        if stuck and stuck not in _BOOKING_PROGRAM_DEFAULTS:
-            return stuck
-        # 4. camp
+            # Stick it to the lead only when THIS message named it — what the
+            # previous resolver did — so a later bare confirmation keeps it.
+            # A programme read from the chat or the panel is not written: the
+            # tag also routes the conversation, and reading is not routing.
+            if attribution.source == "message":
+                self.lead.program_id = pid
+            return pid
+        if attribution.state == "closed":
+            # A newer explicit name outranks an older tag (operator,
+            # 2026-10-01) — even the name of a programme that is not on sale.
+            self.lead.program_id = ""
+            return _PROGRAM_CLOSED
+        if attribution.state == "ambiguous":
+            return _PROGRAM_UNRESOLVED
         return ""
 
-    def _registration_open_for_booking(self) -> bool:
-        """Registration-open check for the CONSULTATION booking flow, PER-PRODUCT.
-
-        Live bug (2026-07-23): the slot-check / slot-listing / reschedule paths
-        hard-coded `_is_camp_registration_open()`, so once the camp ended EVERY
-        consultation was blocked with „registration closed" — even for a dynamic
-        product (Disneyland). This mirrors `_book_consultation`'s existing gate:
-        resolve the booking product and check ITS registration; fall back to camp
-        when there is no per-product context (USE_PER_PRODUCT_BOOKING off, or a
-        camp booking) — byte-identical to today. Never raises."""
+    def _booking_refusal(
+        self, program_id: str | None = None, **extra: Any,
+    ) -> dict[str, Any] | None:
+        """The gate every consultation path asks first: None when this booking
+        may go ahead, else the tool result that says why not. One place, so the
+        slot list, the slot check, the booking and the reschedule cannot
+        disagree. ``program_id`` is the already-resolved id when the caller has
+        one."""
+        if program_id is None:
+            try:
+                program_id = self._resolve_booking_program_id()
+            except Exception:  # pragma: no cover - defensive → camp
+                program_id = ""
+        if program_id == _PROGRAM_UNRESOLVED:
+            candidates: tuple = ()
+            try:
+                from app.agent.llm.parent_llm_engine import resolve_programme
+                candidates = resolve_programme(
+                    self.conversation, self.user_message or "", self.lead,
+                ).candidates
+            except Exception:  # pragma: no cover - defensive
+                candidates = ()
+            return _program_unresolved_tool_result(candidates, **extra)
+        if program_id == _PROGRAM_CLOSED:
+            return _registration_closed_tool_result(**extra)
         try:
-            return _booking_registration_open(self._resolve_booking_program_id())
+            if _booking_registration_open(program_id):
+                return None
         except Exception:  # pragma: no cover - defensive → camp
-            pass
-        return _is_camp_registration_open()
+            if _is_camp_registration_open():
+                return None
+        return _registration_closed_tool_result(**extra)
+
+    def _registration_open_for_booking(self) -> bool:
+        """True when a consultation may be booked now — see `_booking_refusal`.
+        Kept for callers that only need the yes/no. Never raises."""
+        return self._booking_refusal() is None
 
     def _book_consultation(self, args: dict[str, Any]) -> dict[str, Any]:
         from app.flows import parent_flow
@@ -1330,13 +1414,22 @@ class ParentToolExecutor:
         # product's section; every other gate is unchanged.
         program_id = self._resolve_booking_program_id()
 
-        registration_open = _booking_registration_open(program_id)
-        if not registration_open:
+        refusal = self._booking_refusal(program_id)
+        if refusal is not None:
             logger.warning(
-                "[book_consultation] BLOCKED reason=registration_closed program_id=%s",
-                program_id or "summer_camp",
+                "[book_consultation] BLOCKED reason=%s program_id=%s",
+                refusal.get("reason"),
+                (program_id if not program_id.startswith("\x00") else program_id[1:])
+                or "summer_camp",
             )
-            return _registration_closed_tool_result()
+            # A booking the gate refused does not wait for the gate to open:
+            # the slot held for it used to survive the refusal and book later
+            # under whatever the parent wrote next (Screenshot_50, 2026-09-28).
+            # A booking that only lacks the programme keeps its slot — the
+            # parent's answer to „which one?" completes it.
+            if refusal.get("reason") != "program_unresolved" and self.conversation is not None:
+                self.conversation.pending_booking = None
+            return refusal
 
         # 1. Required fields ------------------------------------------------
         if not name and not (self.lead.name or "").strip():
@@ -1395,6 +1488,21 @@ class ParentToolExecutor:
                 "reason": "verification_requested",
                 "next_action": "check_consultation_slot",
                 "datetime_iso": datetime_iso,
+            }
+
+        # W1 (operator, 2026-10-03) on EVERY path that books — see
+        # `parent_flow._turn_allows_booking_the_held_slot`: „არა", a question
+        # or a turn that adds nothing does not book the slot being held.
+        from app.flows import parent_flow as _pf
+        if not _pf._turn_allows_booking_the_held_slot(self.user_message):
+            logger.warning(
+                "[book_consultation] BLOCKED reason=datetime_not_confirmed "
+                "(this turn neither says yes nor brings a detail)",
+            )
+            return {
+                "success": False,
+                "reason": "datetime_not_confirmed",
+                "required_field": "user_confirmed_datetime",
             }
 
         # 2. Age eligibility ------------------------------------------------
@@ -1885,6 +1993,21 @@ class ParentToolExecutor:
             existing = (self.lead.challenge or "").strip()
             self.lead.challenge = f"{existing} {notes}".strip() if existing else notes
 
+        # Which programme the parent wants the manager to call about — read the
+        # same way the booking reads it (the chat, the agent's own replies
+        # included; with two programmes on sale and none chosen, none). The mail
+        # and the CRM row name it from `consultation_program_name`; without this
+        # a parent the agent had been telling about Paris was mailed as
+        # „ჩვენი პროგრამით" whenever they never typed the name themselves. A
+        # booking made later resolves and writes its own.
+        if getattr(parent_flow.settings, "USE_CONSULTATION_PROGRAM_NAME", False):
+            resolved = parent_flow._resolve_consultation_program_name(
+                self.conversation, self.lead,
+                extra_text=self.user_message or "", include_panel=True,
+            )
+            if resolved:
+                self.lead.consultation_program_name = resolved
+
         # Summary may fail (no OpenAI billing, network blip) — degrade
         # gracefully to whatever is already on the lead, then to a
         # Georgian fallback so the manager never sees an empty or
@@ -2180,7 +2303,8 @@ class ParentToolExecutor:
             return {"success": False, "reason": "invalid_action"}
 
         if action == "reschedule" and not self._registration_open_for_booking():
-            return _registration_closed_tool_result(action="reschedule")
+            return (self._booking_refusal(action="reschedule")
+                    or _registration_closed_tool_result(action="reschedule"))
         # Identify the active booking. We trust the in-memory Lead first
         # (the booking we just made this session) and fall back to the
         # values the LLM passed if those are absent.

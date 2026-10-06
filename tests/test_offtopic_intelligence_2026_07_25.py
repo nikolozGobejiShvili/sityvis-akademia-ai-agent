@@ -58,8 +58,12 @@ def test_helper_rewrites_when_on(monkeypatch):
 
 def test_prompt_byte_identical_when_off(monkeypatch):
     p = _prompt(monkeypatch, False)
-    # the original camp-specific scripts are present unchanged
-    assert "ბანაკთან დაკავშირებულ კითხვებზე დაგეხმარებით" in p
+    # The unclear-phrase script is present unchanged. The political one no
+    # longer names the camp in the prompt itself (2026-10-06, operator: the
+    # ended summer camp must not surface anywhere) — it now reads exactly what
+    # the flag's rewrite produced, so OFF and ON agree on that line.
+    assert "ბანაკთან დაკავშირებულ კითხვებზე დაგეხმარებით" not in p
+    assert ple._OFFTOPIC_POLITICAL_NEW in p
     assert "როცა მომხმარებლის ფრაზა გაუგებარია, ჰკითხე" in p
 
 

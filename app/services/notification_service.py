@@ -179,21 +179,31 @@ def notify_sunday_school_handoff(lead: Lead) -> bool:
         if programme else
         "ახალი მოთხოვნა."
     )
+    # No programme resolved: the Sunday-School wording below is what this mail
+    # has always said, and with Sunday School the one child programme on sale
+    # it is right. With two or more on sale and the chat never choosing one it
+    # was a guess — the mail named Sunday School for a parent who may have been
+    # asking about Paris. Then it names no programme rather than the wrong one.
+    unresolved_choice = not programme and _child_programmes_on_sale_count() > 1
+    if programme:
+        programme_line = f"პროგრამა: {programme}"
+        subject = f"{programme} — ახალი მოთხოვნა — {name}"
+    elif unresolved_choice:
+        programme_line = ""
+        subject = f"ახალი მოთხოვნა — {name}"
+    else:
+        programme_line = "ტიპი: საკვირაო სკოლა (sunday_school)"
+        subject = f"საკვირაო სკოლა — ახალი მოთხოვნა — {name}"
     body = "\n".join([
         headline,
         "",
         f"სახელი: {name}",
         f"ტელეფონი: {phone}",
-        f"პროგრამა: {programme}" if programme
-        else "ტიპი: საკვირაო სკოლა (sunday_school)",
+        *([programme_line] if programme_line else []),
         "",
         f"პლატფორმა: {lead.platform}",
         f"სეგმენტი: {lead.segment}",
     ])
-    subject = (
-        f"{programme} — ახალი მოთხოვნა — {name}" if programme
-        else f"საკვირაო სკოლა — ახალი მოთხოვნა — {name}"
-    )
     try:
         return _send_email(subject=subject, body=body)
     except Exception as exc:
@@ -385,6 +395,20 @@ def _format_booked_datetime_georgian(iso: str | None) -> str:
         )
         month = _fallback[dt.month] if 1 <= dt.month <= 12 else dt.strftime("%B")
     return f"{dt.day} {month}, {dt.strftime('%H:%M')}"
+
+
+def _child_programmes_on_sale_count() -> int:
+    """How many child programmes are on sale (adult events excluded, as in
+    `_sole_child_program_on_sale`). Never raises → 0."""
+    try:
+        from app.services import admin_config_service
+        return len([
+            s for s in (admin_config_service.get_active_sections() or [])
+            if (s.get("type") or "").strip() != "adult_events"
+            and str(s.get("name") or "").strip()
+        ])
+    except Exception:  # pragma: no cover — a name must never block a handoff
+        return 0
 
 
 def _sole_child_program_on_sale() -> dict:

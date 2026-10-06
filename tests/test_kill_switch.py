@@ -334,10 +334,8 @@ def test_comment_flow_runs_normally_when_agent_on(monkeypatch):
     _swap_agent_enabled(monkeypatch, True)
     tw = _block_comment_downstream(monkeypatch)
 
-    # Comment → Specific Event Mapping Patch (2026-06-08): use a
-    # non-keyword comment so the LLM classifier path is the one under
-    # test. Short keyword comments like „მაინტერესებს" now skip the
-    # LLM via the deterministic shortcut.
+    # A non-keyword comment: it used to take the LLM classifier path, and
+    # must still reach the DM.
     asyncio.run(
         webhook.handle_comment(
             comment_id="c_kill_3", post_id="p1", sender_id="user_z",
@@ -345,11 +343,11 @@ def test_comment_flow_runs_normally_when_agent_on(monkeypatch):
             platform="instagram",
         ),
     )
-    # At minimum the intent classifier and the DM/private-reply path
-    # MUST run when the agent is live. (Public reply is gated by
-    # ENABLE_PUBLIC_COMMENT_REPLY, which is independent of the kill
-    # switch — we don't assert on it here.)
-    assert "comment.detect_comment_intent" in tw.calls
+    # At minimum the DM/private-reply path MUST run when the agent is live.
+    # (Public reply is gated by ENABLE_PUBLIC_COMMENT_REPLY, which is
+    # independent of the kill switch — we don't assert on it here.) Until
+    # 2026-10-05 the OpenAI intent classifier ran first and was asserted here;
+    # every comment now gets the DM without it (operator, 2026-10-05).
     assert "comment.send_dm_from_comment" in tw.calls
 
 

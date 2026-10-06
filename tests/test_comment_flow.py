@@ -371,23 +371,28 @@ def test_public_reply_exception_does_not_block_dm(monkeypatch):
     assert len(sent) == 1, "DM must still fire after public-reply exception"
 
 
-def test_not_interested_short_circuits(monkeypatch):
-    """NOT_INTERESTED → no DM, no public reply."""
+def test_a_comment_without_an_interest_word_still_gets_the_dm(monkeypatch):
+    """Every comment gets the DM (operator, 2026-10-05: „DM goes anyway — a
+    post without a hashtag gets a general greeting, a programme's hashtag gets
+    that programme's information").
+
+    Until 2026-10-05 a comment with no interest keyword went to an OpenAI
+    „is this person interested?" call, and NOT_INTERESTED meant no DM and no
+    public reply — this test pinned that. With the OpenAI account out of
+    credit the call failed on every comment and every failure read as
+    NOT_INTERESTED: 23 of 26 comments from 2026-10-01 to 10-05 got no DM
+    (Railway: „Intent detection failed after 3 attempts", 429). The call is
+    gone; even a model that would still say NOT_INTERESTED is not consulted."""
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=["banaki"],
         ADULT_HASHTAGS=[],
         ENABLE_PUBLIC_COMMENT_REPLY=True,
     )
-    # Comment → Specific Event Mapping Patch (2026-06-08): the
-    # deterministic keyword shortcut now overrides the LLM for obvious
-    # interest phrases. Use a non-keyword comment so the LLM mock's
-    # NOT_INTERESTED verdict is the path under test.
-    client, sent = _run_handle_comment(
+    _client, sent = _run_handle_comment(
         monkeypatch, intent="NOT_INTERESTED", comment_text="გილოცავ!",
     )
-    assert client.posts == []
-    assert sent == []
+    assert len(sent) == 1
 
 
 def test_dm_runs_even_without_dm_history(monkeypatch):
@@ -806,23 +811,58 @@ def test_adult_first_contact_via_private_reply_no_events(monkeypatch):
     assert sent[0]["text"] == comment_service.ADULT_NO_EVENTS_DM
 
 
-def test_not_interested_facebook_comment_no_private_reply(monkeypatch):
-    """NOT_INTERESTED comments must NOT trigger a private reply even
-    on Facebook."""
+@pytest.mark.parametrize("own", ["META_PAGE_ID", "INSTAGRAM_ACCOUNT_ID"])
+def test_the_pages_own_comment_gets_no_dm(monkeypatch, own):
+    """The Page's public reply and the operator answering as the Page arrive as
+    comments too. With every comment now answered (2026-10-05) the Page would
+    have written to itself; its own ids are skipped before anything else."""
+    _swap_settings(
+        monkeypatch,
+        PARENT_HASHTAGS=["banaki"],
+        ADULT_HASHTAGS=[],
+        ENABLE_PUBLIC_COMMENT_REPLY=True,
+        **{own: "own_page_1"},
+    )
+
+    async def _intent(_text):
+        return "INTERESTED"
+
+    monkeypatch.setattr(comment_service, "detect_comment_intent", _intent)
+    saved = _patch_sheets(monkeypatch)
+    sent = _patch_messenger(monkeypatch)
+    client = _RecordingAsyncClient(
+        get_response=_FakeAsyncResponse(payload={"caption": "#banaki"}),
+    )
+    _patch_httpx(monkeypatch, client)
+    asyncio.run(
+        webhook.handle_comment(
+            comment_id="c_own", post_id="p1", sender_id="own_page_1",
+            user_name="სიტყვის აკადემია", comment_text="მაინტერესებს",
+            platform="facebook",
+        ),
+    )
+    assert sent == []
+    assert client.posts == []
+    assert saved == []
+
+
+def test_a_facebook_comment_without_an_interest_word_gets_a_private_reply(monkeypatch):
+    """Every comment gets the DM (operator, 2026-10-05) — on Facebook through
+    the private-reply channel. Until 2026-10-05 a NOT_INTERESTED verdict from
+    the OpenAI intent call suppressed it; see
+    `test_a_comment_without_an_interest_word_still_gets_the_dm`."""
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=["banaki"],
         ADULT_HASHTAGS=[],
         ENABLE_PUBLIC_COMMENT_REPLY=False,
     )
-    # Use a non-keyword comment so the LLM mock's NOT_INTERESTED
-    # verdict is the path under test (the deterministic keyword
-    # shortcut bypasses the LLM for obvious interest phrases).
     _client, sent = _run_handle_comment_for_platform(
         monkeypatch, platform="facebook", intent="NOT_INTERESTED",
         comment_text="გილოცავ!",
     )
-    assert sent == []
+    assert len(sent) == 1
+    assert sent[0]["channel"] == "private_reply"
 
 
 def test_legacy_messenger_dm_flow_unchanged(monkeypatch):

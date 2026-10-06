@@ -371,10 +371,13 @@ def test_memory_info_booked_response_uses_help_cta_not_booking_cta():
     assert "შეცვლა გსურთ" in out or "დამატებითი კითხვა" in out
 
 
-def test_memory_info_unbooked_response_uses_camp_help_cta():
+def test_memory_info_unbooked_response_uses_help_cta():
+    """The help CTA names no programme since 2026-10-05 (it said „თუ ბანაკთან
+    დაკავშირებით კითხვა გაქვთ" to every parent, Sunday School's included)."""
     conv = _make_booked_conversation(booked=False, booked_dt_iso="")
     out = parent_flow._maybe_memory_info_reply(conv, "ჩემზე რა ინფორმაცია გაქვს?")
-    assert "ბანაკთან დაკავშირებით კითხვა გაქვთ" in out
+    assert "თუ კითხვა გაქვთ, მომწერეთ და დაგეხმარებით." in out
+    assert "ბანაკ" not in out
     assert "კონსულტაციაზე ჩაგწერთ" not in out
 
 
