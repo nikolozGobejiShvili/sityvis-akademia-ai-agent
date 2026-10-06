@@ -22,6 +22,11 @@ _AMBIGUOUS_TAG_STEMS: tuple[str, ...] = (
     "event", "events", "evening", "school",
     # price
     "ფასი", "ღირს", "რამდენი", "გადახდ",
+    # a description any programme can carry (2026-10-06): the Paris camp is
+    # named „…პარიზში - საგანმანათლებლო ბანაკი", and „საგანმანათლებლო" alone
+    # read as Paris — „საგანმანათლებლო პროგრამები გაქვთ?" was tagged Paris, and
+    # a Sunday-School reply describing itself so filed that chat under Paris.
+    "საგანმანათლებლ",
 )
 _MIN_LEN = 4  # ignore tokens/tags shorter than this (kills 1-3 char noise)
 

@@ -498,6 +498,45 @@ def _sole_active_program_segment() -> str | None:
     return "ADULT" if (sections[0].get("type") == "adult_events") else "PARENT"
 
 
+def _shared_active_program_segment() -> str | None:
+    """The segment EVERY programme on sale belongs to, or None (none on sale, a
+    mix of children's and adult programmes, flag off, or any failure). The same
+    type rule as `_sole_active_program_segment`."""
+    if not getattr(settings, "USE_DYNAMIC_PROGRAMS", False):
+        return None
+    try:
+        from app.services import admin_config_service
+        sections = admin_config_service.get_active_sections() or []
+    except Exception:  # pragma: no cover — defensive
+        return None
+    segments = {
+        "ADULT" if (s.get("type") == "adult_events") else "PARENT" for s in sections
+    }
+    return segments.pop() if len(segments) == 1 else None
+
+
+def _menu_was_the_last_reply(conversation: Conversation) -> bool:
+    """True when the agent's last message was the programme menu itself."""
+    last = next(
+        (t for t in reversed(conversation.history or [])
+         if isinstance(t, dict) and t.get("role") == "assistant"),
+        None,
+    )
+    if last is None:
+        return False
+    try:
+        menu = _maybe_dynamic_welcome(
+            UNCLEAR_ROUTING.format(company_name=settings.COMPANY_NAME).strip())
+    except Exception:  # pragma: no cover — defensive
+        return False
+    # The menu's body, without its greeting line: the greeting policy rewrites
+    # „გამარჯობა." to „გამარჯობა 💙" before the reply is stored, and an exact
+    # comparison then missed the menu after the most common opener — the menu
+    # went out twice (verification 2026-10-06).
+    body = (menu or "").strip().split("\n\n", 1)[-1].strip()
+    return bool(body) and body in str(last.get("content") or "")
+
+
 # PARENT Reschedule State + Segment Override Patch (2026-06-10).
 #
 # Live bug: a conversation that had been locked to ADULT (from earlier
@@ -1142,6 +1181,23 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
                 sole_segment, sentry_service.mask_sender(sender_id),
             )
             conversation.segment = sole_segment
+
+    # The menu asks once. With two programmes on sale every turn that named
+    # neither got the same menu again: measured 2026-10-05 on Sunday School +
+    # Paris, „ფასი რა არის?", „ნინო 591234567", „ორივე მაინტერესებს" and
+    # „10 წლისაა" were all answered with the identical menu, and the parent's
+    # number was never kept. Asked once and not answered with a programme's
+    # name, the turn goes to the flow every programme on sale belongs to; it
+    # reads the whole chat, the menu included, and with nothing chosen the
+    # booking still asks which programme (`resolve_programme` → "ambiguous").
+    if conversation.segment == "UNCLEAR" and not _is_pure_greeting(message_text):
+        shared_segment = _shared_active_program_segment()
+        if shared_segment and _menu_was_the_last_reply(conversation):
+            logger.info(
+                "[routing] the menu was already sent — UNCLEAR → %s (sender=%s)",
+                shared_segment, sentry_service.mask_sender(sender_id),
+            )
+            conversation.segment = shared_segment
 
     # Conversation Planner (Phase 3) — compute the unified TurnPlan ONCE per turn
     # and stash it on the conversation so the downstream handlers (parent_flow)

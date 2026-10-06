@@ -1153,27 +1153,11 @@ async def resolve_section_from_post(
     NOT consulted here — callers route to the legacy
     `determine_segment_from_post` for that path.
     """
-    # (2026-07-04, ADDITIVE) Section-level post_id → section mapping. Consulted
-    # BEFORE the Meta caption fetch so a comment under a mapped Camp / SS / Adult
-    # post routes correctly even when `fetch_post_content` fails or the caption
-    # carries no literal „#" hashtag. Falls through to the UNCHANGED caption-
-    # hashtag path below when no post_id mapping exists — hashtag routing is
-    # untouched.
-    try:
-        mapped = admin_config_service.find_section_from_post_id(post_id)
-    except Exception as exc:
-        mapped = None
-        logger.warning(
-            "[COMMENT] find_section_from_post_id failed for post=%s: %s",
-            post_id, exc,
-        )
-    if mapped is not None:
-        logger.info(
-            "[COMMENT] Post %s → admin_section=%s status=%s via post_id map",
-            post_id, mapped.get("id"), mapped.get("status"),
-        )
-        return mapped
-
+    # The post's hashtags are the ONLY thing that says which programme a post is
+    # about (operator, 2026-10-05: "post ids are not used — too many posts").
+    # A section-level post-id map used to be consulted first; the panel has no
+    # field for it, so it could only hold ids nobody can see or edit, and one
+    # left in the data overrode the hashtag of whatever post it named.
     content = await fetch_post_content(post_id, platform)
     hashtags = extract_hashtags(content)
     try:
@@ -1381,6 +1365,19 @@ def _build_sunday_school_comment_dm(section: dict | None) -> str:
     return _SS_COMMENT_ACTIVE_HANDOFF
 
 
+def _summer_camp_on_sale() -> bool:
+    """True while the summer camp is an active programme in the panel. Its DM
+    (`_build_camp_comment_dm`: price, streams, location) is its own, and it is
+    sent only while it is on sale. Never raises → False."""
+    try:
+        return any(
+            (s.get("id") or "").strip() == "summer_camp"
+            for s in (admin_config_service.get_active_sections() or [])
+        )
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 async def send_dm_from_comment(
     sender_id: str,
     platform: str,
@@ -1493,7 +1490,14 @@ async def send_dm_from_comment(
             # the Summer-Camp rich DM. Route SS to its own status-aware DM builder
             # (never Camp content). Camp (`type=camp`) is unaffected.
             message = _build_sunday_school_comment_dm(admin_section)
-        elif section_type == "camp" and segment == "PARENT":
+        elif (
+            section_type == "camp" and segment == "PARENT"
+            # The summer camp's DM is its own: another programme saved with
+            # type "camp" („პარიზის ბანაკი") gets its own fields below. An
+            # ENDED summer camp never gets here — its hashtags match nothing
+            # (`find_section_from_post_hashtags`).
+            and (admin_section.get("id") or "").strip() == "summer_camp"
+        ):
             # Send a comment-aware Camp DM (price / dates / location / intro)
             # that bridges into the Camp flow, instead of the generic category
             # menu (2026-07-04).
@@ -1537,10 +1541,13 @@ async def send_dm_from_comment(
         # ADULT uses admin_config_service active events only. Both have safe
         # fallbacks (`PARENT_FIRST_CONTACT_DM` / `ADULT_NO_EVENTS_DM`). The
         # UNCLEAR path keeps the existing two-segment routing menu.
-        if segment == "PARENT":
+        if segment == "PARENT" and _summer_camp_on_sale():
             # Comment-aware Camp DM for a PARENT comment resolved via the legacy
             # hashtag fallback (no admin section) — bridge into the Camp flow
-            # instead of the category menu (2026-07-04).
+            # instead of the category menu (2026-07-04). Only while the camp is
+            # on sale: with it ended, a post whose tag only the env list knows
+            # („#ბანაკი" on a Paris post without that tag in the panel) got the
+            # summer camp's price block; it now gets the menu below.
             message = _build_camp_comment_dm(comment_text)
         elif segment == "ADULT":
             # Generic Adult Event Comment Patch (2026-06-09) — mirror

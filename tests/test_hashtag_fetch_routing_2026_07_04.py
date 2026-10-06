@@ -214,12 +214,15 @@ def test_facebook_sunday_school_hashtag_resolves_ss_section_without_map(monkeypa
     assert section.get("id") == "sunday_school"
 
 
-# -- 7. Existing facebook_post_ids mapping still works as a fallback -------
+# -- 7. A facebook_post_ids entry no longer routes (2026-10-05) -----------
 
 
-def test_post_id_mapping_still_resolves_without_caption_fetch(monkeypatch):
-    # Every field would 400 — proving the section-level post_id map
-    # short-circuits BEFORE the caption fetch is even attempted.
+def test_a_post_id_left_in_the_data_no_longer_routes(monkeypatch):
+    """Until 2026-10-05 this post id — listed under the camp's
+    `facebook_post_ids` in the shipped data — resolved to the camp before the
+    caption was even fetched. The operator does not use post ids (the panel has
+    no field for them); the caption's hashtags are the only routing. Here the
+    caption cannot be fetched, so there is no programme."""
     client = _FieldRoutingClient({})
     _patch(monkeypatch, client)
 
@@ -228,9 +231,9 @@ def test_post_id_mapping_still_resolves_without_caption_fetch(monkeypatch):
             "986476147893240_122113415120776096", "facebook",
         ),
     )
-    assert section is not None and section.get("id") == "summer_camp"
-    # post_id map short-circuited — the Graph caption fetch never ran.
-    assert client.calls == []
+    assert section is None
+    # The caption is what is read now.
+    assert client.calls != []
 
 
 # -- 8. Failed fetch + no post_id map → UNCLEAR ---------------------------

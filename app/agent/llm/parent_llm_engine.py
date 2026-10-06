@@ -3100,20 +3100,21 @@ def _build_system_prompt(
     # in a Sunday-School conversation even after that fix, because this is a
     # separate call that feeds the prompt TEXT itself, not the per-turn facts
     # block.
-    _program_id = ""
-    if conversation is not None:
-        try:
-            _active_section = _active_program_section(conversation, message, lead)
-            _program_id = str((_active_section or {}).get("id") or "").strip()
-        except Exception:  # pragma: no cover - defensive
-            _program_id = ""
+    #
+    # Since 2026-10-05 this is `programme_manager_phone`, the same answer the
+    # per-turn facts and the deterministic number reply give. With two
+    # programmes on sale and different numbers, the slot carries each
+    # programme's own number by name — the model hands over the right one, or
+    # asks which programme first. The literal „558 67 47 33" fallback that used
+    # to sit here is gone: it was the summer camp's number, handed over for
+    # whatever programme the parent was asking about.
     try:
-        manager_phone = (
-            admin_config_service.get_manager_phone(_program_id) or ""
-        ).strip()
+        _phone, _per_programme = programme_manager_phone(conversation, message, lead)
     except Exception:  # pragma: no cover - defensive
-        manager_phone = ""
-    manager_phone = manager_phone or "558 67 47 33"
+        _phone, _per_programme = "", []
+    manager_phone = _phone or "; ".join(
+        f"{name} — {number}" for name, number in _per_programme
+    )
     # Class 4: slim mode loads the short core prompt; Phase 4 lean mode loads
     # the guardrail-preserving lean prompt; default loads the giant prompt
     # exactly as before (do NOT load system_parent_v2.md when slim/lean).
@@ -3347,12 +3348,26 @@ def _active_program_facts(section: dict | None) -> str:
         if program_id in reserved_program_ids():
             return ""
 
-        from app.agent.tools.parent_tool_executor import ParentToolExecutor
+        from app.agent.tools.parent_tool_executor import (
+            ParentToolExecutor,
+            _price_text_states_the_price,
+        )
 
+        # The descriptions go LAST (2026-10-06). The block is cut at
+        # `_PROGRAM_FACTS_MAX_CHARS`, and the URL used to be appended after the
+        # long description — a description pasted from a full brief (the Paris
+        # brief is ~10k characters) cut the registration link, the streams and
+        # the inclusions out of what the model reads. Now only the end of the
+        # long description can be cut.
+        descriptions = ("description_short", "description_full")
         parts: list[str] = []
         for key in ParentToolExecutor._PROGRAM_PUBLIC_FIELDS:
+            if key in descriptions:
+                continue
             value = section.get(key)
             if value in (None, "", [], {}):
+                continue
+            if key == "price_gel" and _price_text_states_the_price(section):
                 continue
             parts.append(f"{key}: {value}")
 
@@ -3363,6 +3378,11 @@ def _active_program_facts(section: dict | None) -> str:
             url = str(section.get("registration_url") or "").strip()
             if url:
                 parts.append(f"registration_url: {url}")
+
+        for key in descriptions:
+            value = section.get(key)
+            if value not in (None, "", [], {}):
+                parts.append(f"{key}: {value}")
 
         if not parts:
             return ""
@@ -3384,6 +3404,339 @@ def _active_program_facts(section: dict | None) -> str:
 # block ~2.6 KB against a 55.7 KB system prompt. The ceiling is only a guard
 # against an operator pasting a document into a field.
 _PROGRAM_FACTS_MAX_CHARS = 6000
+
+
+class ProgrammeAttribution:
+    """Which programme a conversation is about, as one answer every consumer reads.
+
+    ``state`` is one of:
+
+    * ``"open"``      — ``section`` is an active programme the turn belongs to;
+    * ``"closed"``    — the parent named a programme that is not on sale now
+                        (``section`` is that programme, e.g. the ended summer camp);
+    * ``"ambiguous"`` — two or more programmes are on sale and nothing in the
+                        message, the lead or the chat picks one; ``candidates``
+                        lists them so the agent can ask;
+    * ``"none"``      — nothing to attribute (no panel, or the isolation flag off).
+    """
+
+    __slots__ = ("state", "section", "candidates", "source", "closed_in_chat")
+
+    def __init__(self, state: str = "none", section: dict | None = None,
+                 candidates: tuple = (), source: str = "") -> None:
+        self.state = state
+        self.section = section
+        self.candidates = tuple(candidates or ())
+        # Where the answer came from: "message" (the current turn), "tag"
+        # (`lead.program_id`), "chat" (an earlier turn) or "panel" (what is on
+        # sale). Callers that WRITE the tag do so only for "message", exactly
+        # as before, so reading the chat never re-routes a conversation.
+        self.source = source
+        # A programme that is NOT on sale which the parent named earlier in the
+        # chat, when nothing newer named one on sale. It does not own the turn
+        # (see step 3), but a record of what the parent asked about may need it.
+        self.closed_in_chat: dict | None = None
+
+    @property
+    def program_id(self) -> str:
+        return str((self.section or {}).get("id") or "").strip()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (f"ProgrammeAttribution({self.state!r}, {self.program_id!r}, "
+                f"{[c.get('id') for c in self.candidates]!r})")
+
+
+def resolve_programme(
+    conversation: Conversation,
+    user_message: str = "",
+    lead: Lead | None = None,
+) -> ProgrammeAttribution:
+    """The programme this conversation is about — see ``ProgrammeAttribution``.
+
+    One reader for the model's context, the booking gate, the manager mail, the
+    CRM label and the follow-up, so they cannot disagree about which programme
+    a parent is talking about. The order is the one ``_active_program_section``
+    always used, with two additions the operator asked for (2026-09-30, 10-05):
+
+    1. The CURRENT message.
+    2. The chat, newest turn first — the parent's turns AND the agent's own
+       replies. A reply counts only when it names exactly ONE programme on
+       sale: the welcome menu and every "we have X and Y" list name several
+       and say nothing about which one the parent wants, so they are skipped.
+       This is how the programme the agent was talking about, or offered the
+       consultation for, becomes the consultation's programme.
+    3. ``lead.program_id`` — what the system already resolved for this lead,
+       for a chat that names nothing (read after the chat since 2026-10-06).
+    4. The panel: one child programme on sale owns the turn; two or more and
+       the answer is ``"ambiguous"`` with the candidates — never a guess.
+
+    A programme the parent names that is not on sale is ``"closed"`` only for
+    the CURRENT message. Found further back in the chat it decides nothing: an
+    ended programme does not own the turns that follow it.
+
+    Panel-driven throughout — names, hashtags and statuses come from the
+    sections; nothing here knows any programme by id. Never raises.
+    """
+    try:
+        from app.services import admin_config_service
+        from app.reasoning.dynamic_program_match import (
+            match_dynamic_program,
+            programs_answering_to_ambiguous_word,
+        )
+
+        # What is ON SALE is the active list — the same `get_active_sections`
+        # the routing reads, so the two cannot disagree. The whole panel is
+        # read as well, only so a programme that is OFF can still be recognised
+        # when a parent names it. In production the active list is a filter of
+        # the panel; the union keeps every on-sale programme visible wherever
+        # either one is substituted.
+        active_list = list(admin_config_service.get_active_sections() or [])
+        active_ids = {(s.get("id") or "").strip() for s in active_list}
+        sections = list(admin_config_service.load_sections() or [])
+        known = {(s.get("id") or "").strip() for s in sections}
+        sections += [dict(s) for s in active_list
+                     if (s.get("id") or "").strip() not in known]
+        if not sections:
+            return ProgrammeAttribution()
+        fuzzy = getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False)
+
+        # `match_dynamic_program` skips anything not `active`, so an OFF
+        # programme would be invisible and the scan would silently fall back to
+        # an older mention. Present every section to the matcher, then decide
+        # on the real status here.
+        by_id: dict[str, dict] = {}
+        probe_sections: list[dict] = []
+        for section in sections:
+            program_id = (section.get("id") or "").strip()
+            if not program_id or program_id in by_id:
+                continue
+            by_id[program_id] = section
+            probe = dict(section)
+            probe["status"] = "active"
+            # A programme that is NOT on sale is recognised by its NAME only.
+            # Its hashtags route old posts' comments; in a chat they are just
+            # words — the ended camp's „bavshvebi" is Latin for „children", and
+            # „chemi bavshvi 10 wlisaa" was read as the ended camp and mailed
+            # as „საზაფხულო ბანაკი" (verification 2026-10-06).
+            if program_id not in active_ids:
+                probe["hashtags"] = []
+            probe_sections.append(probe)
+        if not probe_sections:
+            return ProgrammeAttribution()
+
+        def _if_active(section: dict | None) -> dict | None:
+            # On sale = in the active list (case/whitespace-tolerant status,
+            # a missing status NOT active — `get_active_sections`' own rule).
+            section = section or {}
+            if (section.get("id") or "").strip() not in active_ids:
+                return None
+            return section if str(section.get("name") or "").strip() else None
+
+        def _named_specifically(text: str) -> list[dict]:
+            """Every section (any status) the text names by a specific word,
+            its full name or a specific hashtag — in panel order."""
+            return [
+                by_id[(p.get("id") or "").strip()]
+                for p in probe_sections
+                if match_dynamic_program(text, [p], fuzzy=fuzzy) is not None
+            ]
+
+        from app.flows.parent_flow import _CAMP_WORD_STEMS
+
+        def _read_parent_turn(text: str) -> ProgrammeAttribution | None:
+            """The answer one parent turn gives, or None when it names nothing."""
+            if not text.strip():
+                return None
+            named = _named_specifically(text)
+            if named:
+                on_sale = [s for s in named if _if_active(s) is not None]
+                if len(on_sale) == 1:
+                    return ProgrammeAttribution("open", on_sale[0])
+                if len(on_sale) > 1:
+                    return ProgrammeAttribution("ambiguous", None, on_sale)
+                return ProgrammeAttribution("closed", named[0])
+            # The camp is invisible to the matcher — „ბანაკი" and „საზაფხულო"
+            # are shared words — so a camp word is resolved against the panel:
+            # which ACTIVE programmes answer to it? One is not ambiguous at all;
+            # two or more need the parent to say which; none means the word can
+            # only point at a programme that is not on sale.
+            if any(stem in text.lower() for stem in _CAMP_WORD_STEMS):
+                # The REAL sections, not `probe_sections`: those have every
+                # status forced to active, and counting candidates against them
+                # would see a switched-off camp as a rival.
+                owners = programs_answering_to_ambiguous_word(
+                    text, list(by_id.values()),
+                )
+                owners = [o for o in owners if _if_active(o) is not None]
+                if len(owners) == 1:
+                    return ProgrammeAttribution("open", owners[0])
+                if len(owners) > 1:
+                    return ProgrammeAttribution("ambiguous", None, owners)
+                closed = programs_answering_to_ambiguous_word(text, probe_sections)
+                if len(closed) == 1:
+                    return ProgrammeAttribution(
+                        "closed", by_id.get((closed[0].get("id") or "").strip()),
+                    )
+            # A camp word no programme in the panel answers to („ლაგერი")
+            # names nothing — it decides nothing, and the steps below do.
+            return None
+
+        _STOP_READING = ProgrammeAttribution("none", None)
+
+        def _read_agent_turn(text: str) -> ProgrammeAttribution | None:
+            """An agent reply counts only when it names exactly one programme
+            on sale — see the docstring. A reply that names two or more (a
+            menu, a comparison) ends the chat reading: what came before it no
+            longer says which programme the parent means. Skipping it instead
+            let an older Sunday-School reply outrank a newer Paris tag
+            (regression hunt 2026-10-06)."""
+            if not text.strip():
+                return None
+            on_sale = [s for s in _named_specifically(text) if _if_active(s) is not None]
+            if len(on_sale) == 1:
+                return ProgrammeAttribution("open", on_sale[0])
+            if len(on_sale) > 1:
+                return _STOP_READING
+            return None
+
+        # 1. The current message wins, so a switch is followed immediately.
+        current = _read_parent_turn(str(user_message or ""))
+        if current is not None:
+            current.source = "message"
+            return current
+
+        # 2. The chat, newest first. The WHOLE history, not the model's
+        #    `HISTORY_WINDOW` slice: live 2026-09-03, „საკვირაო სკოლა" was named
+        #    on user turn 2 and the turn that broke was 13 user turns later.
+        closed_in_chat: dict | None = None
+        for turn in reversed(list(getattr(conversation, "history", None) or [])):
+            if not isinstance(turn, dict):
+                continue
+            role = (turn.get("role") or "")
+            text = str(turn.get("content") or "")
+            if role == "user":
+                found = _read_parent_turn(text)
+            elif role == "assistant":
+                found = _read_agent_turn(text)
+            else:
+                continue
+            if found is None:
+                continue
+            if found is _STOP_READING:
+                break
+            if found.state in ("open", "ambiguous"):
+                found.source = "chat"
+                return found
+            # An earlier turn about a programme that is not on sale: it does not
+            # own the turns after it. Stop reading the chat and let the panel
+            # decide (step 4) — exactly what a parent who asked about the ended
+            # camp and then asks „ფასი?" is asking about.
+            if found.state == "closed":
+                closed_in_chat = found.section
+            break
+
+        def _with_closed(answer: ProgrammeAttribution) -> ProgrammeAttribution:
+            answer.closed_in_chat = closed_in_chat
+            return answer
+
+        # 3. What the system already resolved for this lead — `get_program_info`
+        #    and the booking gate tag it. Read AFTER the chat since 2026-10-06:
+        #    the tag is the last programme fetched or named, and it outranked a
+        #    newer turn — a Sunday-School tag kept a conversation that had moved
+        #    on to Paris filed as Sunday School (verification 2026-10-06). It
+        #    still answers when the chat names nothing (2026-09-03: a Sunday
+        #    School chat whose turns never typed the name). A tag for a
+        #    programme that is no longer on sale decides nothing.
+        tagged = (getattr(lead, "program_id", "") or "").strip() if lead is not None else ""
+        if tagged:
+            section = _if_active(by_id.get(tagged))
+            if section is not None:
+                return _with_closed(ProgrammeAttribution("open", section, source="tag"))
+
+        # 4. Nothing in the turn, the lead or the chat names a programme.
+        #
+        #    Measured live 2026-09-18/19, camp ended and Sunday School the only
+        #    thing on sale. Eight replies in seventeen hours, six different
+        #    parents, not one of whom typed a programme name, all came back
+        #    about the camp. When the panel offers exactly ONE child programme,
+        #    there is nothing to infer: that is what the parent is asking about.
+        #
+        #    Two or more on sale and the answer is "ambiguous" with the
+        #    candidates: with a real choice to make, guessing is the defect.
+        #
+        #    `adult_events` is not a candidate — it is a different segment with
+        #    its own engine. The camp IS a candidate: alone in the panel it owns
+        #    an unattributed turn exactly as it always has.
+        if getattr(settings, "USE_PROGRAM_ISOLATION", False):
+            on_sale = [
+                s for s in by_id.values()
+                if _if_active(s) is not None
+                and (s.get("type") or "").strip() != "adult_events"
+            ]
+            if len(on_sale) == 1:
+                return _with_closed(
+                    ProgrammeAttribution("open", on_sale[0], source="panel"))
+            if len(on_sale) > 1:
+                return _with_closed(
+                    ProgrammeAttribution("ambiguous", None, on_sale, source="panel"))
+        return _with_closed(ProgrammeAttribution())
+    except Exception:  # pragma: no cover — never break a turn over context
+        logger.exception("[parent_llm_engine] resolve_programme failed")
+        return ProgrammeAttribution()
+
+
+def programme_manager_phone(
+    conversation: Conversation | None,
+    user_message: str = "",
+    lead: Lead | None = None,
+) -> tuple[str, list[tuple[str, str]]]:
+    """The manager's number for this conversation — the operator's rule of
+    2026-10-04 — as ``(number, per_programme)``.
+
+    * One programme the chat is about → its own ``manager_contact`` (the
+      legacy chain when its own is blank, as ``get_manager_phone`` does).
+    * Two or more on sale and the chat has not chosen → if every one of them
+      has the SAME number, that number; otherwise ``number`` is "" and
+      ``per_programme`` lists ``(name, number)`` so the caller can ask which
+      programme — never the summer camp's number by default.
+    * A programme named that is not on sale owns nothing: the rule above is
+      applied to what IS on sale.
+    * No panel / isolation off → the legacy chain, unchanged.
+    Never raises."""
+    from app.services import admin_config_service
+    try:
+        if conversation is None:
+            return (admin_config_service.get_manager_phone() or "").strip(), []
+        attribution = resolve_programme(conversation, user_message, lead)
+        if attribution.state == "closed":
+            attribution = resolve_programme(conversation, "", lead)
+        if attribution.state == "open" and attribution.program_id:
+            return (
+                admin_config_service.get_manager_phone(attribution.program_id) or ""
+            ).strip(), []
+        if attribution.state == "ambiguous":
+            numbered = [
+                (str(c.get("name") or "").strip(),
+                 str(c.get("manager_contact") or "").strip())
+                for c in attribution.candidates
+            ]
+            digits = {re.sub(r"\D", "", num) for _, num in numbered}
+            if len(digits) == 1 and "" not in digits:
+                return numbered[0][1], []
+            return "", [(n, num) for n, num in numbered if n and num]
+        # Nothing attributed (isolation off): exactly one programme on sale is
+        # the one to hand over — the 2026-09-18 rule this replaces, kept as is.
+        on_sale = list(admin_config_service.get_active_sections() or [])
+        if len(on_sale) == 1:
+            sole_id = str(on_sale[0].get("id") or "").strip()
+            if sole_id:
+                return (admin_config_service.get_manager_phone(sole_id) or "").strip(), []
+    except Exception:  # pragma: no cover - defensive → legacy chain
+        logger.exception("[parent_llm_engine] programme_manager_phone failed")
+    try:
+        return (admin_config_service.get_manager_phone() or "").strip(), []
+    except Exception:  # pragma: no cover - defensive
+        return "", []
 
 
 def _active_program_section(
@@ -3419,12 +3772,15 @@ def _active_program_section(
        minutes earlier — yet „როგორ დავრეგისტრირდე?" still went to the camp,
        because the parent had never TYPED the program name and a text scan of
        their turns therefore found nothing.
-    3. The newest program named in an earlier USER turn.
+    3. The newest programme named in the chat — since 2026-10-05 the agent's
+       own replies count too, but only a reply that names exactly ONE
+       programme on sale (the welcome menu names every one and is skipped).
+       The operator's rule: the consultation's programme is the one the agent
+       was talking about or offered. See ``resolve_programme``, which this
+       reads.
 
-    The agent's own replies are never scanned: the welcome menu names every
-    active program, and a reply that had already drifted would pin the drift in
-    place. Reserved and dynamic programs are treated alike — the model needs the
-    name, not the id. Never raises → "" on any fault, which omits the field.
+    Reserved and dynamic programs are treated alike — the model needs the
+    name, not the id. Never raises → None on any fault, which omits the field.
 
     A mention of a program that is currently OFF yields "" rather than the older
     program the parent has moved on from. Naming a stale program confidently is
@@ -3434,163 +3790,9 @@ def _active_program_section(
     `match_dynamic_program` cannot see the camp at all and the scan would
     otherwise walk straight past a camp turn to an older mention.
     """
-    try:
-        from app.services import admin_config_service
-        from app.reasoning.dynamic_program_match import match_dynamic_program
 
-        sections = admin_config_service.load_sections() or []
-        if not sections:
-            return None
-        fuzzy = getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False)
-
-        # `match_dynamic_program` skips anything not `active`, so an OFF program
-        # would be invisible and the scan would silently fall back to an older
-        # mention. Present every section to the matcher, then decide on the real
-        # status here.
-        by_id: dict[str, dict] = {}
-        probe_sections: list[dict] = []
-        for section in sections:
-            program_id = (section.get("id") or "").strip()
-            if not program_id or program_id in by_id:
-                continue
-            by_id[program_id] = section
-            probe = dict(section)
-            probe["status"] = "active"
-            probe_sections.append(probe)
-        if not probe_sections:
-            return None
-
-        def _if_active(section: dict | None) -> dict | None:
-            # Mirrors `get_active_sections`: case/whitespace-tolerant, and a
-            # missing status is NOT treated as active.
-            section = section or {}
-            if (section.get("status") or "").strip().lower() != "active":
-                return None
-            return section if str(section.get("name") or "").strip() else None
-
-        from app.flows.parent_flow import _CAMP_WORD_STEMS
-
-        def _named_in(text: str) -> tuple[bool, dict | None]:
-            """(decided, section). `decided` is True once a turn settles the
-            question — including a camp turn, which settles it as "nothing"."""
-            if not text.strip():
-                return False, None
-            # The camp is invisible to the matcher (see the docstring), so check
-            # it against the same stems the camp-off gate uses. A camp turn ends
-            # the search: either the camp is on and its own handlers own the
-            # turn, or it is off and there is no honest program to name.
-            if any(stem in text.lower() for stem in _CAMP_WORD_STEMS):
-                # …unless the panel says the word means something else now. The
-                # stems above read „ბანაკი" as THE summer camp, which was true
-                # while it was the only camp in the config. It is not any more:
-                # the operator can run „პარიზის ბანაკი" or „ზამთრის ბანაკი", and
-                # then ending the search here attaches no programme at all — so
-                # a parent who named Paris and asked „რამდენი დღეა?" reached the
-                # model with none of Paris's fields, measured 2026-09-08.
-                #
-                # Ask the panel which ACTIVE programmes answer to the word. One
-                # answer is not ambiguous and is the programme this turn is
-                # about; the camp keeps the turn when it is that one. Two or
-                # more, or none, and the original reading stands.
-                # A programme NAMED outright wins even when a camp word shares
-                # the sentence — „პარიზის ბანაკი" is both at once, and reading
-                # it as a camp turn is what left the parent's follow-ups with no
-                # programme attached. Only when nothing is named specifically
-                # does the count below decide.
-                if match_dynamic_program(text, probe_sections, fuzzy=fuzzy) is None:
-                    from app.reasoning.dynamic_program_match import (
-                        programs_answering_to_ambiguous_word,
-                    )
-                    # The REAL sections, not `probe_sections`: those have every
-                    # status forced to active so an OFF programme stays visible
-                    # to the matcher, and counting candidates against them would
-                    # see a switched-off camp as a rival and call the word
-                    # ambiguous — measured, on the first attempt at this.
-                    owners = programs_answering_to_ambiguous_word(
-                        text, list(by_id.values()),
-                    )
-                    if len(owners) == 1:
-                        owner = _if_active(
-                            by_id.get((owners[0].get("id") or "").strip()),
-                        )
-                        if owner is not None:
-                            return True, owner
-                    return True, None
-            hit = match_dynamic_program(text, probe_sections, fuzzy=fuzzy)
-            if not hit:
-                return False, None
-            return True, _if_active(by_id.get((hit.get("program_id") or "").strip()))
-
-        # 1. The current message wins, so a switch is followed immediately.
-        decided, section = _named_in(str(user_message or ""))
-        if decided:
-            return section
-
-        # 2. What `get_program_info` actually fetched for this lead. Set by
-        #    `parent_tool_executor` on every successful fetch and persisted with
-        #    the lead, so it holds even when the parent never typed the name.
-        tagged = (getattr(lead, "program_id", "") or "").strip() if lead is not None else ""
-        if tagged:
-            section = _if_active(by_id.get(tagged))
-            if section is not None:
-                return section
-
-        # 3. The newest program named in an earlier USER turn. The WHOLE history,
-        #    not the model's `HISTORY_WINDOW` slice: live 2026-09-03, „საკვირაო
-        #    სკოლა" was named on user turn 2 and the turn that broke was 13 user
-        #    turns later — 27 entries back, where a windowed scan returned "".
-        for turn in reversed(list(getattr(conversation, "history", None) or [])):
-            if not isinstance(turn, dict):
-                continue
-            if (turn.get("role") or "") != "user":
-                continue
-            decided, section = _named_in(str(turn.get("content") or ""))
-            if decided:
-                return section
-
-        # 4. Nothing in the turn, the lead or the history names a programme.
-        #
-        #    Steps 1-3 answer "which programme did someone NAME?" and return
-        #    None when the answer is nobody. Every isolation guard downstream is
-        #    built the same way — it stands down only when ANOTHER programme is
-        #    named — so an unattributed turn has a default owner, and with a
-        #    camp-centric prompt (43 of 519 lines) that owner is the camp.
-        #
-        #    Measured live 2026-09-18/19, camp ended and Sunday School the only
-        #    thing on sale. Eight replies in seventeen hours, six different
-        #    parents, not one of whom typed a programme name:
-        #      „ტერიტორიულად სად ხართ?" „ფასი" „რომელ დღეს ტარდება"
-        #      „თქვენი მისამართი რომ მითხრათ" „რეგისტრაცია შევსებულიაა"
-        #    all came back about the camp. Two of them without a single camp
-        #    tool call — the prompt alone was enough.
-        #
-        #    Naming is not the only way a turn belongs to a programme. When the
-        #    panel offers exactly ONE, there is nothing to infer: that is what
-        #    the parent is asking about, because it is all there is to ask
-        #    about. Stating it is the same kind of fact as `booking_hours` —
-        #    not a route, not a prohibition.
-        #
-        #    Two or more on sale and this deliberately stays None: with a real
-        #    choice to make, guessing is the defect. The turn reaches the model
-        #    unattributed and `active_programs` (already in the context) lets it
-        #    ask which one.
-        #
-        #    `adult_events` is not a candidate — it is a different segment with
-        #    its own engine, and counting it would make a Sunday-School-only
-        #    panel look like a choice. The camp IS a candidate: alone in the
-        #    panel it owns an unattributed turn exactly as it always has, which
-        #    is every camp-only fixture in the suite.
-        if getattr(settings, "USE_PROGRAM_ISOLATION", False):
-            on_sale = [
-                s for s in by_id.values()
-                if _if_active(s) is not None
-                and (s.get("type") or "").strip() != "adult_events"
-            ]
-            if len(on_sale) == 1:
-                return on_sale[0]
-    except Exception:  # pragma: no cover — never break a turn over context
-        return None
-    return None
+    attribution = resolve_programme(conversation, user_message, lead)
+    return attribution.section if attribution.state == "open" else None
 
 
 def _build_context_message(
@@ -3677,8 +3879,29 @@ def _build_context_message(
     # objection that names no program („ძალიან ძვირია") is about THIS program,
     # and a detail question about it („ჯგუფში რამდენი ბავშვია?") is answerable
     # only while the program's data is actually in front of the model.
-    active_section = _active_program_section(conversation, user_message, lead)
+    # Read once here — `_active_program_section` is this same reader's "open"
+    # answer — so the camp-status fact below can also see a turn about a
+    # programme that is NOT on sale.
+    _attribution = resolve_programme(conversation, user_message, lead)
+    active_section = _attribution.section if _attribution.state == "open" else None
     active_program = str((active_section or {}).get("name") or "").strip()
+    # Two or more programmes on sale and nothing in the chat chose one. A first
+    # message that mentions the child („ჩემი შვილისთვის ფასი რა არის?") goes
+    # straight to the model with no menu, and the model was left to guess which
+    # programme's price to give (verification 2026-10-06). A fact, like
+    # `manager_phone_by_programme`: which programmes, and that none is chosen.
+    if _attribution.state == "ambiguous":
+        _unchosen = [
+            str(c.get("name") or "").strip() for c in _attribution.candidates
+            if str(c.get("name") or "").strip()
+        ]
+        if len(_unchosen) > 1:
+            parts.append(
+                "programme_not_chosen=" + "; ".join(_unchosen)
+                + " (each is on sale and this chat has not said which one the "
+                "parent means — ask which, before giving one programme's facts, "
+                "price or number)"
+            )
     if active_program:
         parts.append(f"active_program={active_program}")
         program_facts = _active_program_facts(active_section)
@@ -3765,7 +3988,14 @@ def _build_context_message(
         and (s.get("type") or "").strip() != "adult_events"
         for s in _on_sale
     )
-    if _active_program_id == "summer_camp" or (
+    # A parent asking about the ENDED camp („ბანაკი მაინტერესებს") is the camp
+    # turn this was kept for: the reader calls it "closed", not "open", so the
+    # turn has no active programme, and the honest closure fact is what the
+    # model must answer from.
+    _closed_turn_id = (
+        _attribution.program_id if _attribution.state == "closed" else ""
+    )
+    if "summer_camp" in (_active_program_id, _closed_turn_id) or (
         _active_program_id == "" and not _other_child_on_sale
     ):
         try:
@@ -3807,16 +4037,22 @@ def _build_context_message(
     # over 558 67 47 33 while the camp was closed and Sunday School was the only
     # thing on sale. When the panel has exactly one programme, an unattributed
     # turn is that programme's, so its own contact is the one to hand over.
-    _phone_program_id = _active_program_id
-    if not _phone_program_id and len(_on_sale) == 1:
-        _phone_program_id = str(_on_sale[0].get("id") or "").strip()
+    # Since 2026-10-05 the number comes from `programme_manager_phone` — the
+    # chat (the agent's replies included), the one programme on sale, and with
+    # two or more on sale either their shared number or each one by name.
     try:
-        from app.services import admin_config_service as _admin_cfg
-        _manager_phone = str(
-            _admin_cfg.get_manager_phone(_phone_program_id) or "",
-        ).strip()
+        _manager_phone, _phones_by_programme = programme_manager_phone(
+            conversation, user_message, lead,
+        )
     except Exception:  # pragma: no cover - defensive
-        _manager_phone = ""
+        _manager_phone, _phones_by_programme = "", []
+    if not _manager_phone and _phones_by_programme:
+        listed = "; ".join(f"{name}: {number}" for name, number in _phones_by_programme)
+        parts.append(
+            f"manager_phone_by_programme={listed} (each programme has its own "
+            "manager; this chat has not said which programme the parent means, "
+            "so ask which one before giving a number)"
+        )
     if _manager_phone:
         # The shape of the handover, not a list of words. Live 2026-09-12 the
         # replies did hand the number over, but each one opened by accounting
@@ -3899,8 +4135,17 @@ def _user_declined(conversation: Conversation, latest: str) -> bool:
     return any(kw in text for kw in _DECLINE_KEYWORDS)
 
 
-def _age_status(lead: Lead) -> str:
-    """Return one of 'unknown', 'eligible', 'ineligible'."""
+def _age_status(
+    lead: Lead, conversation: Conversation | None = None, user_message: str = "",
+) -> str:
+    """Return one of 'unknown', 'eligible', 'ineligible', 'no_band'.
+
+    With the conversation (since 2026-10-06) the age is judged against the band
+    of the programme THIS chat is about — Sunday School takes 7-year-olds, and
+    the summer camp's 9–17 told the model not to offer them a consultation
+    (verification 2026-10-06). With two programmes and none chosen, or only an
+    ended one named, there is no band to judge by: 'no_band'. Without the
+    conversation: the summer camp's band, as before."""
     raw = (lead.child_age or "").strip()
     if not raw:
         return "unknown"
@@ -3921,6 +4166,18 @@ def _age_status(lead: Lead) -> str:
     # operator age-range edit reaches this engine eligibility helper too.
     from app.services import admin_config_service
     lo, hi = admin_config_service.get_camp_age_bounds()
+    if conversation is not None:
+        try:
+            # The current message too: „პარიზის ბანაკი, შვილი 8 წლისაა" names
+            # the programme in the very turn the age arrives.
+            attribution = resolve_programme(conversation, user_message or "", lead)
+            pid = attribution.program_id if attribution.state == "open" else ""
+            if pid and pid != "summer_camp":
+                lo, hi = admin_config_service.get_program_age_bounds(pid)
+            elif not pid and attribution.state != "none":
+                return "no_band"
+        except Exception:  # pragma: no cover — defensive: keep the camp band
+            pass
     if lo <= age <= hi:
         return "eligible"
     return "ineligible"
@@ -3943,7 +4200,7 @@ def _build_sales_context(
     - When user says "მადლობა", inject the correct context-aware closing
       hint so the LLM never falls back to standalone "სიამოვნებით.".
     """
-    age = _age_status(lead)
+    age = _age_status(lead, conversation, user_message)
     asked_price = _user_asked_price(conversation.history, user_message)
     declined = _user_declined(conversation, user_message)
     booked = bool(lead.calendly_booked)
@@ -4042,10 +4299,29 @@ def _build_sales_context(
                 "- ბავშვის ასაკი უცნობია — ბუნებრივად ჰკითხე ადრე."
             )
         if age == "ineligible":
+            # Operator, 2026-09-11: an age never refuses a consultation — the
+            # band is a fact to tell the parent (the old hint told the model
+            # not to offer the booking).
             lines.append(
-                "- ბავშვის ასაკი დიაპაზონს არ ერგება — *არ* შესთავაზო "
-                "ბანაკზე დაჯავშნა; შესთავაზე მენეჯერთან გადამოწმება."
+                "- ბავშვის ასაკი ამ პროგრამის ასაკობრივ ჩარჩოს არ ერგება — "
+                "ნაზად უთხარი ჩარჩო; თუ მშობელს კონსულტაცია სურს, ჩაწერა "
+                "შესაძლებელია."
             )
+        # The value angles and the goal question below are the summer camp's
+        # own („აზრიანი ზაფხული", „…ბანაკიდან" say so). They travelled with
+        # every PARENT turn — Sunday School's and Paris's included
+        # (verification 2026-10-06). Another programme's value comes from its
+        # own description.
+        try:
+            _attr = resolve_programme(conversation, user_message, lead)
+            _camp_turn = _attr.state == "none" or (
+                _attr.state in ("open", "closed") and _attr.program_id == "summer_camp"
+            )
+        except Exception:  # pragma: no cover — defensive: keep the old line
+            _camp_turn = True
+        # 'no_band' (two programmes, none chosen yet) gets no age line: the
+        # turn context already says the programme is not chosen, and „ასაკი
+        # დიაპაზონშია" was not true of any band (regression hunt 2026-10-06).
         if age == "eligible":
             # Live Smoke Followup (2026-06-10) — Part 3: when the child is
             # eligible but the parent's goal/challenge is not yet captured,
@@ -4067,12 +4343,19 @@ def _build_sales_context(
                         "ბუნებრივი მოტივაციური კითხვა; შეშფოთება ნუ "
                         "აიძულებ; ცხადი ჩაწერის მოთხოვნა არ დაბლოკო."
                     )
-                else:
+                elif _camp_turn:
                     lines.append(
                         "- ასაკი დიაპაზონშია, მშობლის მიზანი ჯერ უცნობია — "
                         "დასვი ერთი მკაფიო კითხვა: „რა არის მთავარი, რის "
                         "მიღებაც გსურთ ბანაკიდან — ახალი მეგობრები, ეკრანთან "
                         "დროის შემცირება, თვითგამოხატვა, თავდაჯერება თუ სხვა?“ "
+                        "შეშფოთება არ აიძულო. თუ მომხმარებელი ცხადად ითხოვს "
+                        "ჩაწერას — ჯერ ჩაწერა, მიზანი ნუ დაბლოკავს."
+                    )
+                else:
+                    lines.append(
+                        "- ასაკი დიაპაზონშია, მშობლის მიზანი ჯერ უცნობია — "
+                        "დასვი ერთი მკაფიო კითხვა: რას ელოდება ამ პროგრამისგან. "
                         "შეშფოთება არ აიძულო. თუ მომხმარებელი ცხადად ითხოვს "
                         "ჩაწერას — ჯერ ჩაწერა, მიზანი ნუ დაბლოკავს."
                     )
@@ -4092,10 +4375,16 @@ def _build_sales_context(
                 "- მომხმარებელს ფასი არ უკითხავს — *არ* დაიწყო ფასით; "
                 "ჯერ ღირებულება და მოტივაცია."
             )
-        lines.append(
-            "- ღირებულების კუთხეები: გარემო, ცოცხალი ურთიერთობა, "
-            "აზროვნება, ეკრანისგან დისტანცია, სწორი წრე, აზრიანი ზაფხული."
-        )
+        if _camp_turn:
+            lines.append(
+                "- ღირებულების კუთხეები: გარემო, ცოცხალი ურთიერთობა, "
+                "აზროვნება, ეკრანისგან დისტანცია, სწორი წრე, აზრიანი ზაფხული."
+            )
+        else:
+            lines.append(
+                "- ღირებულება აღწერე ამ პროგრამის საკუთარი აღწერიდან "
+                "(program_facts / get_program_info)."
+            )
         lines.append(
             "- მოკლე, თბილი ქართული. 1–3 წინადადება. ერთი კითხვა მაქსიმუმ."
         )

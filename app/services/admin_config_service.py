@@ -410,6 +410,14 @@ def find_section_from_post_hashtags(
 
     First match wins; sections appear in the order they're listed in
     sections.yaml, so the operator controls priority by ordering.
+
+    An ENDED programme is not matched (2026-10-05). It keeps its hashtags in
+    the panel — the panel refuses an empty list — and a comment under one of
+    its old posts used to get that programme's DM: with the summer camp ended,
+    „#camp" still sent its price block. Its tag now reads as no programme
+    at all, and the comment gets the general menu of what is on sale. Every
+    other status routes exactly as before (a "coming_soon" programme still gets
+    its own "details soon" DM).
     """
     if not post_hashtags:
         return None
@@ -418,6 +426,8 @@ def find_section_from_post_hashtags(
     if not normalized_post:
         return None
     for section in load_sections():
+        if str(section.get("status") or "").strip().casefold() == "ended":
+            continue
         section_tags = {
             normalize_hashtag(t) for t in (section.get("hashtags") or [])
         }
@@ -436,6 +446,9 @@ def find_section_from_comment_text(comment_text: str) -> dict[str, Any] | None:
 
 
 # ── Section-level post_id → section mapping (2026-07-04, ADDITIVE) ───────────
+# Since 2026-10-05 comment routing no longer consults this map: a post's
+# hashtags are the only thing that says which programme it is about (operator:
+# post ids are not used; the panel has no field for them).
 # Deterministic fallback so a comment under a Camp / Sunday-School / Adult post
 # routes to the right section even when the Meta caption fetch fails or the
 # caption carries no literal „#" hashtag. This NEVER touches, reads, or

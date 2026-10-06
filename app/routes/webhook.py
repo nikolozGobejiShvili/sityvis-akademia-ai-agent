@@ -648,23 +648,30 @@ async def handle_comment(
                     _mark_comment_processed_local(comment_id)
                     return
 
-        # Comment → Specific Event Mapping Patch (2026-06-08): the
-        # deterministic broad-interest keyword check short-circuits
-        # the LLM round-trip for the closed set of obvious price /
-        # location / link / registration / generic-interest phrases.
-        # Falls back to the LLM classifier for everything else, so
-        # unrelated comments still get filtered as NOT_INTERESTED.
-        if comment_service.is_interest_intent(comment_text):
-            intent = "INTERESTED"
-            logger.info("[comment] Intent detected: INTERESTED (deterministic)")
-        else:
-            intent = await comment_service.detect_comment_intent(comment_text)
-            logger.info("[comment] Intent detected: %s", intent)
-
-        if intent == "NOT_INTERESTED":
-            logger.info("[comment] Ignored - not interested: %s", comment_text[:50])
-            print(f"[COMMENT] Ignored - not interested: {comment_text[:50]}")
+        # The Page's own comments (its public replies, the operator answering
+        # as the Page) are not a parent to write to.
+        own_ids = {
+            str(getattr(settings, "META_PAGE_ID", "") or "").strip(),
+            str(getattr(settings, "INSTAGRAM_ACCOUNT_ID", "") or "").strip(),
+        } - {""}
+        if str(sender_id or "").strip() in own_ids:
+            logger.info("[comment] skipped: the Page's own comment %s", comment_id)
             return
+
+        # Every comment gets the DM (operator, 2026-10-05): a post with a
+        # programme's hashtag gets that programme's information, a post
+        # without one gets the general greeting/menu. The deciding question
+        # used to be an OpenAI „is this person interested?" call before any
+        # of that; with the OpenAI account out of credit it failed on every
+        # comment and every failure meant NOT_INTERESTED — 23 of 26 comments
+        # from 2026-10-01 to 10-05 got no DM at all (Railway logs:
+        # „Intent detection failed after 3 attempts", 429 credit_balance_
+        # exhausted). The keyword reader still labels the CRM row.
+        intent = (
+            "INTERESTED" if comment_service.is_interest_intent(comment_text)
+            else "COMMENT"
+        )
+        logger.info("[comment] Intent: %s (every comment is answered)", intent)
 
         segment = await comment_service.determine_segment_from_post(post_id, platform)
         has_dm_history = sender_id in conversation_service.conversations
