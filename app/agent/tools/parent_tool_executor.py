@@ -2745,10 +2745,14 @@ class ParentToolExecutor:
         may have a 12-year-old AND a separate interest in adult
         events; the two fields stay independent.
         """
+        from app.services import admin_config_service
+        if admin_config_service.adult_events_switched_off():
+            # The tool is not offered while adult events are off; a call that
+            # arrives anyway moves nobody into a programme that is not on sale.
+            return {"success": False, "reason": "adult_events_not_on_sale"}
         # Canonical Admin Config age band (5A-2 migration) — was a direct
         # camp_2026.yaml read; an operator age-range edit now reaches this
         # path. Default stays 9–17, so today's behaviour is identical.
-        from app.services import admin_config_service
         age_min, age_max = admin_config_service.get_camp_age_bounds()
 
         transferred_age = ""

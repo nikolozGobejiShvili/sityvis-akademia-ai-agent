@@ -33,6 +33,7 @@ from app.agent.tools.parent_tools import (
     DYNAMIC_PROGRAM_TOOLS,
     LEARNING_TOOLS,
     PARENT_TOOLS,
+    TOOL_SWITCH_TO_ADULT_FLOW,
     TOPIC_TOOLS,
 )
 from app.config import settings
@@ -59,6 +60,15 @@ def build_active_tools(
     False so existing callers (e.g. the Phase-1 test's `build_active_tools(False)`
     / `build_active_tools(True)`) stay valid."""
     tools = list(PARENT_TOOLS)
+    if _adult_events_switched_off():
+        # Adult events switched off in the panel: the agent is not offered a
+        # way into a programme that is not on sale (audit 2026-10-07 — the
+        # tool moved the parent into the adult flow, which then answered
+        # „აქტიური ღონისძიება სიაში არ მაქვს").
+        tools = [
+            t for t in tools
+            if t.get("function", {}).get("name") != TOOL_SWITCH_TO_ADULT_FLOW
+        ]
     if use_dynamic:
         tools = tools + DYNAMIC_PROGRAM_TOOLS
     if use_learning:
@@ -66,6 +76,33 @@ def build_active_tools(
     if use_topics:
         tools = tools + TOPIC_TOOLS
     return tools
+
+
+def _adult_events_switched_off() -> bool:
+    try:
+        from app.services import admin_config_service
+        return admin_config_service.adult_events_switched_off()
+    except Exception:  # pragma: no cover - defensive: keep today's tool list
+        return False
+
+
+def _without_tool_lines(prompt: str, tool_name: str) -> str:
+    """A tool that is not offered is not described: every prompt line naming it
+    is dropped, and so is a rule heading whose whole block named it."""
+    lines = prompt.split("\n")
+    drop = {i for i, line in enumerate(lines) if tool_name in line}
+    for i, line in enumerate(lines):
+        text = line.strip()
+        if i in drop or not text.endswith(":") or text.startswith("-"):
+            continue
+        block = []
+        j = i + 1
+        while j < len(lines) and lines[j].strip():
+            block.append(j)
+            j += 1
+        if block and all(k in drop for k in block):
+            drop.add(i)
+    return "\n".join(line for i, line in enumerate(lines) if i not in drop)
 
 
 # Reserved program ids (Phase 0a hardening, 2026-07-20) — these three keep
@@ -3133,6 +3170,12 @@ def _build_system_prompt(
         age_max=age_max,
         manager_phone=manager_phone,
     )
+    if _adult_events_switched_off():
+        # The adult switch is not offered while adult events are off
+        # (`build_active_tools`), so its rules are not given either: they told
+        # the model to answer „გასაგებია, ზრდასრულთა ღონისძიებებზე
+        # დაგეხმარებით." — a promise about a programme that is not on sale.
+        base_prompt = _without_tool_lines(base_prompt, TOOL_SWITCH_TO_ADULT_FLOW)
     base_prompt = _apply_offtopic_intelligence(base_prompt)
     return (
         base_prompt
@@ -4207,6 +4250,10 @@ def _build_sales_context(
     adult_subscription_status = (
         getattr(conversation, "adult_subscription_status", "") or ""
     ).strip()
+    if adult_subscription_status and _adult_events_switched_off():
+        # An old subscription to a programme now switched off is not the
+        # parent's topic; their thanks gets the ordinary closing.
+        adult_subscription_status = ""
 
     lines: list[str] = ["Sales context (აუდიტორიაზე მორგებული გაყიდვა):"]
 

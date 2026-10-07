@@ -415,6 +415,30 @@ def _maybe_identity_reply(message_text: str) -> str | None:
     return f"{intro}\n\nგვითხარით, რა გაინტერესებთ:\n{bullets}"
 
 
+def _adult_events_switched_off() -> bool:
+    """The panel's adult-events switch (`admin_config_service`). Never raises."""
+    try:
+        from app.services import admin_config_service
+        return admin_config_service.adult_events_switched_off()
+    except Exception:  # pragma: no cover - defensive: keep today's routing
+        return False
+
+
+def _adult_opt_out_turn(conversation: Conversation, message_text: str) -> bool:
+    """An adult-event subscriber asking to be taken off the list — someone in
+    the adult flow, or recorded as subscribed. Never raises."""
+    try:
+        from app.services import adult_subscription_service
+        if not adult_subscription_service.is_unsubscribe_phrase(message_text):
+            return False
+    except Exception:  # pragma: no cover - defensive
+        return False
+    return conversation.segment == "ADULT" or (
+        (getattr(conversation, "adult_subscription_status", "") or "").strip()
+        == "subscribed"
+    )
+
+
 def _classify_segment(message_text: str) -> str:
     """Deterministic keyword classifier — Phase 3.6A.
 
@@ -749,7 +773,7 @@ def _planner_route_decision(plan, current_segment: str):
     ambiguous turn keeps the current segment unchanged."""
     topic = getattr(plan, "active_topic", "none")
     intent = getattr(plan, "user_current_intent", "unclear")
-    if topic == "adult_event":
+    if topic == "adult_event" and not _adult_events_switched_off():
         return "ADULT", True
     if topic in ("camp", "consultation"):
         return "PARENT", True
@@ -1083,6 +1107,29 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
     # already disclosed name+phone, since that conclusively places the
     # parent in the active PARENT flow.
     lead = conversation.lead
+    # Adult events switched off in the panel: no conversation is in their flow.
+    # A word the keyword list files under adult events („საღამო", „ბილეთი",
+    # „ღონისძიება") sent the parent there and kept them there, and the adult
+    # flow answered about a programme that is off (audit 2026-10-07). The
+    # conversation is routed as if that segment did not exist — the same way
+    # the panel decides for every other programme.
+    adult_off = _adult_events_switched_off()
+    if adult_off and _adult_opt_out_turn(conversation, message_text):
+        # Except an opt-out from the adult-event list: a subscriber who writes
+        # „აღარ გამომიგზავნოთ" (the words the subscription itself tells them to
+        # send) is taken off the list by the adult flow's own unsubscribe, which
+        # answers before anything else there. The next turn is re-routed.
+        logger.info(
+            "[routing] adult events are switched off — opt-out kept in ADULT "
+            "for this turn (sender=%s)", sentry_service.mask_sender(sender_id),
+        )
+        conversation.segment = "ADULT"
+    elif adult_off and conversation.segment == "ADULT":
+        logger.info(
+            "[routing] adult events are switched off — ADULT → re-routed (sender=%s)",
+            sentry_service.mask_sender(sender_id),
+        )
+        conversation.segment = "UNCLEAR"
     if conversation.segment not in {"PARENT", "ADULT"}:
         booked = bool(lead and lead.calendly_booked)
         in_flow_state = conversation.state not in {"", "START"}
@@ -1097,10 +1144,13 @@ def _process_message_impl(sender_id: str, message_text: str, platform: str, page
             # answers-this-word tier did not rescue it either. Removing
             # them needs routing to resolve a camp the way
             # `_program_id_for_turn` does. The panel is still asked first.
-            conversation.segment = (
+            classified = (
                 _match_active_program_segment(message_text)
                 or _classify_segment(message_text)
             )
+            if classified == "ADULT" and adult_off:
+                classified = "UNCLEAR"
+            conversation.segment = classified
 
     # PARENT Reschedule State + Segment Override Patch (2026-06-10).
     # A sticky ADULT segment (from earlier adult-event testing) must NOT

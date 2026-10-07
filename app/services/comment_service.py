@@ -1217,7 +1217,9 @@ async def determine_segment_from_post(post_id: str, platform: str) -> str:
 
     if found_parent:
         segment = "PARENT"
-    elif found_adult:
+    elif found_adult and not admin_config_service.adult_events_switched_off():
+        # The env list knows nothing about the panel; with adult events
+        # switched off a legacy tag (#event, #ღონისძიება) routes nowhere.
         segment = "ADULT"
     else:
         segment = "UNCLEAR"
@@ -1404,6 +1406,8 @@ async def send_dm_from_comment(
     """
     if segment is None:
         segment = await determine_segment_from_post(post_id, platform)
+    if segment == "ADULT" and admin_config_service.adult_events_switched_off():
+        segment = "UNCLEAR"
 
     conversation = conversation_service.conversations.get(sender_id)
     if conversation is None:

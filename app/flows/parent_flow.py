@@ -1049,6 +1049,17 @@ def _msg_has_adult_intent(message: str) -> bool:
     return False
 
 
+def _adult_events_switched_off() -> bool:
+    """Adult events switched off in the panel — the one rule
+    `admin_config_service.adult_events_switched_off` owns. While it holds, no
+    reply points the parent at adult events. Never raises."""
+    try:
+        from app.services import admin_config_service
+        return admin_config_service.adult_events_switched_off()
+    except Exception:  # pragma: no cover - defensive: keep today's replies
+        return False
+
+
 def _msg_is_camp_ended_question(message: str) -> bool:
     low = (message or "").lower()
     return "ბანაკ" in low and any(m in low for m in _CAMP_ENDED_Q_MARKERS)
@@ -1577,7 +1588,9 @@ def _maybe_handle_camp_status(
     if _is_sunday_school_intent(message):
         return _camp_status_short(status) + "\n\n" + _render_sunday_school_answer()
     # Combined camp + adult → camp line + adult pointer (adult is never blocked).
-    if _msg_has_adult_intent(message):
+    # With adult events switched off there is nothing to point at: the turn
+    # gets the camp's own status message below.
+    if _msg_has_adult_intent(message) and not _adult_events_switched_off():
         return _camp_status_short(status) + "\n\n" + _CAMP_OFF_ADULT_POINTER
     # Direct „ბანაკი დასრულდა?" question (hidden / ended only).
     if status in ("hidden", "ended") and _msg_is_camp_ended_question(message):
@@ -4378,6 +4391,9 @@ def _ensure_adult_intro_followup_for_parent_flow(
     """
     if not response:
         return response
+    if _adult_events_switched_off():
+        # Nothing to offer: the follow-up asks which adult event to show.
+        return response
     text = response.strip()
     if not text:
         return response
@@ -5942,6 +5958,10 @@ def _maybe_handle_adult_context_relative(
     შვილისთვის") stays in adult events instead of flipping to camp. Returns None
     for a genuine camp intent (hard camp keyword / in-band camp age) and for any
     message outside adult context."""
+    # Adult events switched off in the panel: an old adult turn in the history
+    # keeps nobody in adult events.
+    if _adult_events_switched_off():
+        return None
     low = (message or "").lower()
     # Genuine camp intent always wins.
     if any(k in low for k in _ADULT_CTX_CAMP_OVERRIDE):
@@ -8808,12 +8828,18 @@ def _maybe_handle_camp_intro(
     # read as an intro turn (those have their own handlers / reach the engine).
     if not any(kw in low for kw in _CAMP_INTENT_KEYWORDS):
         return None
+    # Both replies below point at adult events. With them switched off in the
+    # panel the mixed turn gets the camp intro alone, and the self-overage turn
+    # is not handled here at all.
+    adult_off = _adult_events_switched_off()
     if getattr(settings, "USE_SELF_OVERAGE_ADULT_REDIRECT", False) and \
             _is_self_overage_camp_request(message):
         # An adult (>17) asking about CAMP for THEMSELVES: camp is 9–17, so give
         # the age band + an adult-events pointer, not the child-focused intro
         # (eval R7). OFF ⇒ this block is skipped, camp intro fires as before.
-        return _CAMP_OVERAGE_ADULT_REDIRECT
+        # Adult events off: no pointer to give, and the child intro (which asks
+        # for their child's age) is the R7 mistake — the engine answers.
+        return None if adult_off else _CAMP_OVERAGE_ADULT_REDIRECT
     _vague_camp = getattr(settings, "USE_VAGUE_CAMP_INTENT", False) and \
         any(w in low for w in _CAMP_WH_WORDS)
     if not _vague_camp and not any(m in low for m in _CAMP_INTRO_INTENT_MARKERS):
@@ -8839,7 +8865,7 @@ def _maybe_handle_camp_intro(
     except Exception:  # pragma: no cover — defensive
         pass
     if getattr(settings, "USE_MIXED_INTENT_CAMP_ADULT", False) and \
-            _is_mixed_camp_adult_request(message):
+            not adult_off and _is_mixed_camp_adult_request(message):
         # Camp-intro turn that ALSO asks about an adult event for the sender:
         # answer BOTH halves — the camp intro + an adult-events pointer (eval R8).
         # OFF ⇒ the camp intro only, byte-identical.
@@ -10020,6 +10046,13 @@ def _maybe_handle_event_inquiry(
     calendar date still resolves normally."""
     text = (message or "").lower()
     if not text:
+        return None
+    # Adult events switched off in the panel: there is no event list to look
+    # in, so „დასკვნითი ღონისძიება იქნება?" about Sunday School or „კონცერტზეც
+    # წაიყვანთ?" about Paris is that programme's question, and the engine
+    # answers it from that programme's own section — not „ამ ეტაპზე აქტიური
+    # ღონისძიება სიაში არ მაქვს" (probe 2026-10-07).
+    if _adult_events_switched_off():
         return None
     # Consultation booking date/time reply (live bug 2026-06-27): a day / date /
     # time / daypart answer to „რომელი დღე და დრო..." is a BOOKING reply, not an
