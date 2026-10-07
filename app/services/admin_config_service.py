@@ -303,6 +303,26 @@ def is_section_active(section_id: str) -> bool:
     return raw in ("", "active")
 
 
+def adult_events_switched_off() -> bool:
+    """True when the operator has switched adult events off in the panel.
+
+    The same rule `get_active_adult_events` already applies to the events list
+    (USE_SECTION_STATUS_GATE on, and the adult_events section explicitly not
+    active), so the switch means one thing everywhere. That gate emptied the
+    list but nothing else: a conversation was still routed into the adult flow
+    by a word like „საღამო" or „ბილეთი", the agent's adult-switch tool was
+    still offered, and the parent got „ამ ეტაპზე აქტიური ღონისძიება სიაში არ
+    მაქვს" or „…ზრდასრულთა ღონისძიებებს — რომელი გაინტერესებთ?" about a
+    programme that is off (audit 2026-10-07). Never raises."""
+    try:
+        from app.config import settings as _settings
+        if not getattr(_settings, "USE_SECTION_STATUS_GATE", False):
+            return False
+        return not is_section_active("adult_events")
+    except Exception:  # pragma: no cover - defensive: keep today's behaviour
+        return False
+
+
 def get_camp_status() -> str:
     """Return the operator-configured ``summer_camp.status``, normalised to
     lower-case and validated against :data:`CAMP_STATUSES`.
@@ -425,8 +445,13 @@ def find_section_from_post_hashtags(
     normalized_post.discard("")
     if not normalized_post:
         return None
+    adult_off = adult_events_switched_off()
     for section in load_sections():
         if str(section.get("status") or "").strip().casefold() == "ended":
+            continue
+        # Adult events switched off (any off status, not only "ended") are
+        # skipped the same way, so a later programme on the post still matches.
+        if adult_off and str(section.get("type") or "").strip().lower() == "adult_events":
             continue
         section_tags = {
             normalize_hashtag(t) for t in (section.get("hashtags") or [])
