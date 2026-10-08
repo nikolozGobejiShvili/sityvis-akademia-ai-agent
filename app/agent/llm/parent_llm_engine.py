@@ -3446,7 +3446,13 @@ def _active_program_facts(section: dict | None) -> str:
 # `description_full` alone is ~1.8 KB on the live Sunday School, and the whole
 # block ~2.6 KB against a 55.7 KB system prompt. The ceiling is only a guard
 # against an operator pasting a document into a field.
-_PROGRAM_FACTS_MAX_CHARS = 6000
+#
+# 12000 since 2026-10-08 (operator's choice). The Paris brief of 2026-10-08 —
+# short description 1 934 characters, full description 7 717 — makes a block of
+# 10 558, and at 6000 the model read only the first 3 139 characters of the
+# full description: flights and luggage, hotel, meals, what is not included,
+# passport and notary consent, phone rules and the final meeting were cut off.
+_PROGRAM_FACTS_MAX_CHARS = 12000
 
 
 class ProgrammeAttribution:
