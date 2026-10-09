@@ -10872,9 +10872,15 @@ def _maybe_handle_time_change(
 # only for the new date/time — clear reschedule intent wins over
 # qualification. Generic + state-based; no user-specific logic.
 # ---------------------------------------------------------------------------
+# „სხვა დღეს" / „სხვა დროზე" left this list on 2026-10-09: they name no
+# consultation, and a programme's own schedule question uses them. Live
+# 2026-10-06 19:48 a Sunday-School parent asked „შაბათ კვირის გარდა სხვა დღეს
+# არ არის?" — whether classes run on another day — and was told „ვერ ვპოულობ
+# თქვენს აქტიურ კონსულტაციას…" in 230 ms, without the model seeing the turn.
+# A reschedule says so with its own verb; that is what remains here.
 _RESCHEDULE_INTENT_STEMS: tuple[str, ...] = (
     "გადატანა", "გადავიტანოთ", "გადამიტ", "გადაიტ", "გადმიტ",
-    "გადანიშვ", "გადავნიშნ", "სხვა დროზე", "სხვა დღეს",
+    "გადანიშვ", "გადავნიშნ",
     "დროის შეცვლა", "დრო შევცვალოთ", "დროის გადატანა", "reschedule",
 )
 
