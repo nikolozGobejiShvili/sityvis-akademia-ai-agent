@@ -27,6 +27,12 @@ _AMBIGUOUS_TAG_STEMS: tuple[str, ...] = (
     # read as Paris — „საგანმანათლებლო პროგრამები გაქვთ?" was tagged Paris, and
     # a Sunday-School reply describing itself so filed that chat under Paris.
     "საგანმანათლებლ",
+    # who takes part, like „ბავშვ" and „მოზარდ" above (2026-10-09). The Paris
+    # brief itself says „25 მონაწილესთან ერთად მოგზაურობს 5 ზრდასრული", and
+    # „რამდენი ზრდასრული მიყვება ბავშვებს?" in a Paris chat was read as the
+    # switched-off „ზრდასრულთა ღონისძიებები": the turn lost Paris's facts and the
+    # agent said it had no such detail. The full name still names that section.
+    "ზრდასრულ",
 )
 _MIN_LEN = 4  # ignore tokens/tags shorter than this (kills 1-3 char noise)
 
