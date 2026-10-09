@@ -30,13 +30,12 @@ def _seed(monkeypatch, sections):
 
 
 # -- builder ---------------------------------------------------------------
-def test_builder_lists_active_program_names(monkeypatch):
+def test_builder_opens_with_the_operator_sentence_for_two(monkeypatch):
+    # Operator decision 2026-10-09: two or more on sale → one sentence, no list.
     _seed(monkeypatch, _TWO)
     out = parent_flow._build_active_programs_welcome()
-    assert out.startswith("გამარჯობა.")
-    assert "— ბავშვების საზაფხულო ბანაკი" in out
-    assert "— დისნეილენდის ტური" in out
-    assert out.index("ბანაკი") < out.index("დისნეილენდის")  # section order
+    assert out == parent_flow._MULTI_PROGRAMME_WELCOME
+    assert "—" not in out
 
 
 def test_builder_none_when_no_active_sections(monkeypatch):
@@ -56,7 +55,7 @@ def test_flag_on_returns_dynamic_menu(monkeypatch):
     _on(monkeypatch)
     _seed(monkeypatch, _TWO)
     out = parent_flow._maybe_static_welcome(_fresh(), "გამარჯობა")
-    assert "დისნეილენდის ტური" in out
+    assert out == parent_flow._MULTI_PROGRAMME_WELCOME
     assert "ზრდასრულთა კულტურული საღამოები" not in out  # not the hardcoded line
 
 
@@ -95,7 +94,8 @@ def test_single_active_program_greets_without_a_menu(monkeypatch):
 
 
 def test_second_active_program_brings_the_menu_back(monkeypatch):
-    """The moment a second program goes active in the panel, the list returns.
+    """The moment a second program goes active in the panel, the multi-programme
+    opener returns.
 
     The one-program greeting must not become a permanent state that an operator
     has to undo in code.
@@ -103,10 +103,9 @@ def test_second_active_program_brings_the_menu_back(monkeypatch):
     _on(monkeypatch)
     _seed(monkeypatch, _TWO)
     out = parent_flow._maybe_static_welcome(_fresh(), "გამარჯობა")
-    assert "გვითხარით, რა გაინტერესებთ" in out
+    # Since 2026-10-09 the opener for two or more is the operator's sentence.
+    assert out == parent_flow._MULTI_PROGRAMME_WELCOME
     assert "რით შემიძლია დაგეხმაროთ" not in out
-    for entry in _TWO:
-        assert entry["name"] in out
 
 
 def test_flag_on_failsafe_to_static_when_empty(monkeypatch):
@@ -139,4 +138,4 @@ def test_conversation_service_unclear_gate_flag_on_dynamic(monkeypatch):
     _seed(monkeypatch, _TWO)
     fb = UNCLEAR_ROUTING.format(company_name=config_module.settings.COMPANY_NAME).strip()
     out = cs._maybe_dynamic_welcome(fb)
-    assert "დისნეილენდის ტური" in out and out != fb
+    assert out == parent_flow._MULTI_PROGRAMME_WELCOME and out != fb

@@ -430,7 +430,8 @@ def test_an_unnamed_opener_with_two_programmes_on_sale_is_asked_which(world):
     programme menu — the parent is asked, nothing is guessed."""
     world.panel("SS_PARIS")
     reply = world.say("ფასი რა არის?", ("say", "გასაგებია."))
-    assert "საკვირაო სკოლა" in reply and "პარიზის ბანაკი" in reply, reply
+    # The menu is the operator's question, without a list (2026-10-09).
+    assert reply == parent_flow._MULTI_PROGRAMME_WELCOME, reply
 
 
 def test_the_menu_is_sent_once_and_the_reply_to_it_is_kept(world):
@@ -440,7 +441,7 @@ def test_the_menu_is_sent_once_and_the_reply_to_it_is_kept(world):
     to the flow both programmes belong to."""
     world.panel("SS_PARIS")
     first = world.say("ფასი რა არის?")
-    assert "საკვირაო სკოლა" in first and "პარიზის ბანაკი" in first, first
+    assert first == parent_flow._MULTI_PROGRAMME_WELCOME, first
     second = world.say(f"ნინო {_PHONE}", ("say", "რომელი პროგრამა გაინტერესებთ?"))
     assert second != first, "the same menu was sent again"
     assert world.lead.phone == _PHONE
@@ -922,7 +923,8 @@ def test_the_menu_is_sent_once_after_a_greeting_opener(world, monkeypatch):
     monkeypatch.setattr(parent_flow, "_CLIENT_EMOJI_ENABLED", True)
     world.panel("SS_PARIS")
     first = world.say("გამარჯობა")
-    assert "პარიზის ბანაკი" in first, first
+    # Stored as sent: the greeting policy leaves the opener's own 🩵 alone.
+    assert first == parent_flow._MULTI_PROGRAMME_WELCOME, first
     second = world.say(f"ნინო {_PHONE}", ("say", "რომელი პროგრამა გაინტერესებთ?"))
     assert second != first, "the same menu was sent again"
     assert world.lead.phone == _PHONE

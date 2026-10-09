@@ -425,6 +425,9 @@ def _reasoning_defers_decline(analysis) -> bool:
 #      the emoji tests opt back in).
 _CLIENT_EMOJI_ENABLED: bool = True
 _HEART: str = "💙"  # Client wording fix (2026-06-29): blue heart, never red ❤️.
+# A reply that already carries a heart gets no second one. The operator's
+# multi-programme opener carries its own light-blue 🩵 (2026-10-09).
+_HEARTS: tuple[str, ...] = (_HEART, "🩵")
 _GREETING_WORDS: tuple[str, ...] = (
     "გამარჯობა", "გამარჯობათ", "სალამი", "მოგესალმებით", "გაგიმარჯ",
 )
@@ -546,7 +549,7 @@ def _apply_client_emoji_policy(
     first greeting). No emoji anywhere else. Deterministic, flag-gated."""
     if not _CLIENT_EMOJI_ENABLED:
         return response
-    if not response or _HEART in response:
+    if not response or any(h in response for h in _HEARTS):
         return response
     # Client follow-up hotfix (2026-06-29, hardened) — NEVER put a heart on an
     # unsupported-detail / organizer manager defer, even when the user greeted in
@@ -595,7 +598,7 @@ def apply_greeting_farewell_heart(
     """
     if not _CLIENT_EMOJI_ENABLED:
         return response
-    if not response or _HEART in response:
+    if not response or any(h in response for h in _HEARTS):
         return response
     # Close: a bare thank-you / farewell → warm one-heart close.
     if _user_is_pure_thanks(message) or _user_is_farewell(message):
@@ -8648,10 +8651,13 @@ def _first_turn_adult_events_intent(message: str) -> bool:
     return any(m in low for m in _FIRST_TURN_ADULT_EVENT_MARKERS)
 
 
+_MULTI_PROGRAMME_WELCOME: str = "მოგესალმებით🩵 რომელი პროგრამით ხართ დაინტერესებული?"
+
+
 def _build_active_programs_welcome() -> str | None:
     """R2: build the first-turn greeting from the programs ACTIVE in the admin
-    panel — the brand opener + one „— {name}" bullet per active section, in
-    section order. Returns None when there are no active sections OR on any
+    panel — a plain question for one, the operator's opener for two or more.
+    Returns None when there are no active sections OR on any
     failure, so the caller falls back to the static PARENT_WELCOME (never an
     empty menu). Consumes `get_active_sections()` (already status==active only),
     so ended/hidden/coming_soon programs are excluded automatically."""
@@ -8670,8 +8676,9 @@ def _build_active_programs_welcome() -> str | None:
         # panel the list comes back on its own, with no code change.
         if len(names) == 1:
             return "გამარჯობა.\n\nრით შემიძლია დაგეხმაროთ?"
-        bullets = "\n".join(f"— {n}" for n in names)
-        return f"გამარჯობა.\n\nგვითხარით, რა გაინტერესებთ:\n{bullets}"
+        # Two or more on sale: the operator's own opener, without a list
+        # (operator decision 2026-10-09).
+        return _MULTI_PROGRAMME_WELCOME
     except Exception as exc:  # pragma: no cover - defensive, never break the welcome
         logger.warning("[parent_flow] dynamic welcome build failed (%s)", exc)
         return None
