@@ -955,7 +955,13 @@ HISTORY_WINDOW = 10
 # 900 leaves headroom for those answers while staying well under the model's
 # limit; the tone rule "1-3 sentences unless a tool result needs more" still
 # governs LENGTH — this only stops a wanted answer being truncated.
-DEFAULT_MAX_TOKENS = 900
+#
+# 2026-10-09 — 900 -> 3000. „შეგიძლიათ პირობები მომწეროთ?" in a Sunday-School
+# chat: the reply gave the programme's full description and stopped at
+# „…გაკვეთილის თ", reply_len=1344 — 900 tokens of Georgian. The operator wants
+# the full text; a reply longer than one Messenger message now goes out in
+# parts (messenger_service.send_message).
+DEFAULT_MAX_TOKENS = 3000
 DEFAULT_TEMPERATURE = 0.7
 
 

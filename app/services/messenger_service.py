@@ -264,11 +264,49 @@ def send_private_reply(comment_id: str, text: str) -> bool:
     return False
 
 
+# Characters one message may carry, with a margin under Meta's own limits
+# (Messenger 2000, Instagram 1000, WhatsApp 4096). Over the limit Meta rejects
+# the message and the whole reply is lost; a longer reply goes out in parts.
+_TEXT_LIMITS: dict[str, int] = {"messenger": 1900, "instagram": 950, "whatsapp": 4000}
+_SPLIT_POINTS: tuple[str, ...] = ("\n\n", "\n", ". ", "? ", "! ", " ")
+
+
+def split_for_channel(text: str, limit: int) -> list[str]:
+    """`text` as consecutive parts of at most `limit` characters, each cut at
+    a paragraph, else a line, else a sentence, else a space — inside a word
+    only when one word is longer than the limit. Nothing is dropped but the
+    whitespace at the cuts. Short text is one part."""
+    rest = (text or "").strip()
+    parts: list[str] = []
+    while len(rest) > limit:
+        window = rest[:limit]
+        cut = 0
+        for sep in _SPLIT_POINTS:
+            i = window.rfind(sep)
+            if i > limit // 3:
+                cut = i + len(sep)
+                break
+        cut = cut or limit
+        parts.append(rest[:cut].strip())
+        rest = rest[cut:].strip()
+    if rest:
+        parts.append(rest)
+    return parts
+
+
 def send_message(sender_id: str, platform: str, text: str) -> bool:
     # Last stop before the channel — every outbound DM (engine reply,
     # deterministic answer, follow-up) passes here, so this is the one place
     # that can guarantee the customer never sees raw markup.
     text = to_plain_text(text)
+    parts = split_for_channel(text, _TEXT_LIMITS.get(platform, 1900)) or [text]
+    for part in parts:
+        if not _send_one(sender_id, platform, part):
+            return False
+    return True
+
+
+def _send_one(sender_id: str, platform: str, text: str) -> bool:
     base_url = _graph_base_url()
     if platform in {"instagram", "messenger"}:
         url = f"{base_url}/me/messages"
