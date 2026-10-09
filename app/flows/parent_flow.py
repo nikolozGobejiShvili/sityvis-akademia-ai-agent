@@ -3873,12 +3873,18 @@ _CAMP_AGE_QUESTION: str = "თქვენი შვილი რამდენ
 # admin-panel phone change can never desynchronise this from what the model
 # actually writes. When a reply carries it, no camp age question is grafted on.
 _UNKNOWN_DETAIL_ENDING_PREFIX: str = "ამ დეტალებს მენეჯერი გაგაცნობთ :"
+# Since 2026-10-09 the model's own redirect, for every programme, is the
+# operator's sentence „აღნიშნულ საკითხთან დაკავშირებით დეტალური ინფორმაციის
+# მისაღებად დაგვიკავშირდით ნომერზე: <number>" (system_parent_v2.md); the camp's
+# deterministic defers keep the ending above. Either one is the defer.
+_UNKNOWN_DETAIL_REDIRECT_PREFIX: str = "დეტალური ინფორმაციის მისაღებად დაგვიკავშირდით"
 
 
 def _is_unknown_detail_manager_defer(response: str) -> bool:
     """True when `response` carries the unsupported-detail manager-defer
     sentence, whatever phone number follows it. Never raises."""
-    return _UNKNOWN_DETAIL_ENDING_PREFIX in (response or "")
+    text = response or ""
+    return _UNKNOWN_DETAIL_ENDING_PREFIX in text or _UNKNOWN_DETAIL_REDIRECT_PREFIX in text
 
 # Extra child-age-question forms the shared AGE_QUESTION_RE misses —
 # „ასაკი რამდენია?" and „(როგორია) თქვენი შვილის ასაკი" (client-review): the
