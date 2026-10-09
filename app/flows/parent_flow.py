@@ -8651,7 +8651,7 @@ def _first_turn_adult_events_intent(message: str) -> bool:
     return any(m in low for m in _FIRST_TURN_ADULT_EVENT_MARKERS)
 
 
-_MULTI_PROGRAMME_WELCOME: str = "მოგესალმებით🩵 რომელი პროგრამით ხართ დაინტერესებული?"
+_MULTI_PROGRAMME_WELCOME: str = "მოგესალმებით🩵\n\nრომელი პროგრამით ხართ დაინტერესებული?"
 
 
 def _build_active_programs_welcome() -> str | None:

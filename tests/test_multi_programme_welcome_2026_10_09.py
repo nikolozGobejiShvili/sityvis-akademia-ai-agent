@@ -14,7 +14,8 @@ import app.config as config_module
 from app.flows import parent_flow
 from app.models.conversation import Conversation
 
-_SENTENCE = "მოგესალმებით🩵 რომელი პროგრამით ხართ დაინტერესებული?"
+# The greeting on its own line, then the question (operator, 2026-10-09).
+_SENTENCE = "მოგესალმებით🩵\n\nრომელი პროგრამით ხართ დაინტერესებული?"
 _TWO = [{"name": "საკვირაო სკოლა", "status": "active"},
         {"name": "პარიზის ბანაკი", "status": "active"}]
 
