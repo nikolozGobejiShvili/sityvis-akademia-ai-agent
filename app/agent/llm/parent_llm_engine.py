@@ -3535,7 +3535,7 @@ def resolve_programme(
     try:
         from app.services import admin_config_service
         from app.reasoning.dynamic_program_match import (
-            match_dynamic_program,
+            named_programs,
             programs_answering_to_ambiguous_word,
         )
 
@@ -3589,11 +3589,11 @@ def resolve_programme(
 
         def _named_specifically(text: str) -> list[dict]:
             """Every section (any status) the text names by a specific word,
-            its full name or a specific hashtag — in panel order."""
+            its full name, another name or a specific hashtag — in panel order,
+            less any named only inside a more exact naming of another."""
             return [
                 by_id[(p.get("id") or "").strip()]
-                for p in probe_sections
-                if match_dynamic_program(text, [p], fuzzy=fuzzy) is not None
+                for p in named_programs(text, probe_sections, fuzzy=fuzzy)
             ]
 
         from app.flows.parent_flow import _CAMP_WORD_STEMS

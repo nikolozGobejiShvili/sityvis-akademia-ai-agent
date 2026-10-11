@@ -48,6 +48,11 @@
     <input type="text" name="hashtags" value="{{ (section.hashtags or []) | join(', ') }}">
   </label>
 
+  <label>სხვა სახელები (მძიმით გამოყოფილი)
+    <input type="text" name="aliases" value="{{ (section.aliases or []) | join(', ') }}">
+    <small>როგორ შეიძლება უწოდოს მშობელმა ამ პროგრამას სათაურის გარდა, მაგ. „ონლაინ საკვირაო სკოლა". ჩაწერეთ მთლიანი ფრაზა — აგენტი ამ პროგრამას აირჩევს, როცა მესიჯში ეს სიტყვები ზედიზედ, იმავე რიგით წერია (დაბოლოება შეიძლება შეიცვალოს: „…სკოლის").</small>
+  </label>
+
   <div class="grid">
     <label>Min age
       <input type="number" name="age_min" value="{{ section.age_min if section.age_min is not none else '' }}">
