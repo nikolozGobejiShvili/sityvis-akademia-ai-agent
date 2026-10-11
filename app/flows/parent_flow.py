@@ -1807,7 +1807,9 @@ def _tag_per_product_booking(conversation: Conversation, message: str) -> None:
     if lead is None:
         return
     try:
-        from app.reasoning.dynamic_program_match import match_dynamic_program
+        from app.reasoning.dynamic_program_match import (
+            match_dynamic_program, named_programs,
+        )
         from app.services import admin_config_service
         active = admin_config_service.get_active_sections()
         fuzzy = getattr(settings, "USE_FUZZY_PROGRAM_MATCH", False)
@@ -1816,10 +1818,7 @@ def _tag_per_product_booking(conversation: Conversation, message: str) -> None:
         # პარიზის ბანაკიც მაინტერესებს") chooses neither: the first one in panel
         # order used to be tagged and own every later turn (verification
         # 2026-10-06). The older tag is no longer what the parent is asking.
-        if match and sum(
-            1 for s in (active or [])
-            if match_dynamic_program(message or "", [s], fuzzy=fuzzy) is not None
-        ) > 1:
+        if match and len(named_programs(message or "", active or [], fuzzy=fuzzy)) > 1:
             lead.program_id = ""
             return
     except Exception:  # pragma: no cover - defensive

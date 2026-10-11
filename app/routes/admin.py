@@ -173,6 +173,7 @@ def create_program(
     type: str = Form(""),
     status_field: str = Form("coming_soon", alias="status"),
     hashtags: str = Form(""),
+    aliases: str = Form(""),
     age_min: str = Form(""),
     age_max: str = Form(""),
     location: str = Form(""),
@@ -196,7 +197,7 @@ def create_program(
 ):
     section = _form_to_section_dict(
         id=id, name=name, type=type, status=status_field,
-        hashtags=hashtags, age_min=age_min, age_max=age_max,
+        hashtags=hashtags, aliases=aliases, age_min=age_min, age_max=age_max,
         location=location, duration_text=duration_text,
         price_text=price_text, payment_terms=payment_terms,
         price_monthly=price_monthly, price_onetime=price_onetime,
@@ -279,6 +280,7 @@ def save_program(
     type: str = Form(""),
     status_field: str = Form("coming_soon", alias="status"),
     hashtags: str = Form(""),
+    aliases: str = Form(""),
     age_min: str = Form(""),
     age_max: str = Form(""),
     location: str = Form(""),
@@ -302,7 +304,7 @@ def save_program(
 ):
     section = _form_to_section_dict(
         id=section_id, name=name, type=type, status=status_field,
-        hashtags=hashtags, age_min=age_min, age_max=age_max,
+        hashtags=hashtags, aliases=aliases, age_min=age_min, age_max=age_max,
         location=location, duration_text=duration_text,
         price_text=price_text, payment_terms=payment_terms,
         price_monthly=price_monthly, price_onetime=price_onetime,
@@ -803,6 +805,16 @@ def _form_to_section_dict(**form: Any) -> dict[str, Any]:
         if item.strip()
     ]
 
+    # Other names parents use for the programme (2026-10-12) — one per line or
+    # comma-separated, e.g. „ონლაინ საკვირაო სკოლა". Read by the programme
+    # matcher like the name; every word of one must be in the message.
+    aliases_raw = (form.get("aliases") or "").strip()
+    aliases = [
+        item.strip()
+        for item in aliases_raw.replace("\n", ",").split(",")
+        if item.strip()
+    ]
+
     def _int_or_none(value: str) -> int | None:
         value = (value or "").strip()
         if not value:
@@ -852,6 +864,7 @@ def _form_to_section_dict(**form: Any) -> dict[str, Any]:
         "type": (form.get("type") or "").strip(),
         "status": (form.get("status") or "coming_soon").strip(),
         "hashtags": hashtags,
+        "aliases": aliases,
         "age_min": _int_or_none(form.get("age_min")),
         "age_max": _int_or_none(form.get("age_max")),
         "location": (form.get("location") or "").strip(),

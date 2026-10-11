@@ -33,7 +33,19 @@ _AMBIGUOUS_TAG_STEMS: tuple[str, ...] = (
     # switched-off „ზრდასრულთა ღონისძიებები": the turn lost Paris's facts and the
     # agent said it had no such detail. The full name still names that section.
     "ზრდასრულ",
+    # ordinary words in „სიტყვის აკადემია მსოფლიოს გარშემო" (2026-10-12). The
+    # Paris description says „მსოფლიო დონის მიუზიკლი"; quoted in a Paris chat,
+    # that reply alone handed the chat to the new programme. Both words together
+    # still name it.
+    "მსოფლიო", "გარშემო",
 )
+# The company's own name. Every programme is the company's and the agent says it
+# in all of them („„სიტყვის აკადემიის“ 6-დღიანი ბანაკი", „სიტყვის აკადემიის
+# გუნდი…"), so it names no programme, and a programme called after it is named by
+# the rest of its name. Measured 2026-10-12 with „სიტყვის აკადემია მსოფლიოს
+# გარშემო" on sale: a Paris or Sunday-School chat whose last reply mentioned the
+# company was handed that programme's facts, price and number.
+_COMPANY_NAME_STEMS: tuple[str, ...] = ("სიტყვის", "აკადემი")
 _MIN_LEN = 4  # ignore tokens/tags shorter than this (kills 1-3 char noise)
 
 
@@ -78,21 +90,26 @@ def _fuzzy_token_match(tok: str, term: str) -> bool:
     return _bounded_levenshtein(term, prefix, allowed) <= allowed
 
 
-def _token_matches(msg_tokens: list[str], term: str, *, fuzzy: bool = False) -> bool:
-    """True when a message token equals `term`, or (for terms >= 6 chars) `term`
-    is a declension-tolerant prefix of a token (`რობოტიკის` matches `რობოტიკა`).
-    Short terms (< 6) require EXACT equality, so `camp` never matches `campaign`.
+def _matching_positions(
+    msg_tokens: list[str], term: str, *, fuzzy: bool = False,
+) -> set[int]:
+    """Positions of the message tokens `term` matches: equal, or (for terms >= 6
+    chars) `term` a declension-tolerant prefix of the token (`რობოტიკის` matches
+    `რობოტიკა`). Short terms (< 6) require EXACT equality, so `camp` never
+    matches `campaign`.
 
     When `fuzzy=True` (caller passes `settings.USE_FUZZY_PROGRAM_MATCH`), terms >= 6
     also accept a small edit distance so a typo/transposition/dropped letter still
     identifies the program (`დინსეილენდის` matches `დისნეილენდი`). fuzzy=False ⇒
-    byte-identical to the exact + declension-prefix behaviour."""
+    the exact + declension-prefix behaviour."""
     term = term.strip().lstrip("#").lower()
+    found: set[int] = set()
     if len(term) < _MIN_LEN:
-        return False
-    for tok in msg_tokens:
+        return found
+    for i, tok in enumerate(msg_tokens):
         if tok == term:
-            return True
+            found.add(i)
+            continue
         if len(term) >= 6:
             shared = 0
             for a, b in zip(tok, term):
@@ -100,15 +117,161 @@ def _token_matches(msg_tokens: list[str], term: str, *, fuzzy: bool = False) -> 
                     break
                 shared += 1
             if shared >= 5 and shared >= len(term) - 2:
-                return True
-            if fuzzy and _fuzzy_token_match(tok, term):
-                return True
-    return False
+                found.add(i)
+            elif fuzzy and _fuzzy_token_match(tok, term):
+                found.add(i)
+    return found
+
+
+def _token_matches(msg_tokens: list[str], term: str, *, fuzzy: bool = False) -> bool:
+    """True when some message token matches `term` — see `_matching_positions`."""
+    return bool(_matching_positions(msg_tokens, term, fuzzy=fuzzy))
 
 
 def _is_ambiguous(tag: str) -> bool:
     tag = tag.strip().lstrip("#").lower()
     return any(tag.startswith(a) or a.startswith(tag) for a in _AMBIGUOUS_TAG_STEMS)
+
+
+def _is_company_word(token: str) -> bool:
+    token = token.strip().lstrip("#").lower()
+    return any(token.startswith(c) for c in _COMPANY_NAME_STEMS)
+
+
+def _name_words(text: str) -> list[str]:
+    """The words of a programme's name (or of one of its other names) that can
+    say which programme it is — long enough, and not the company's name."""
+    return [t for t in _tokens(text) if len(t) >= _MIN_LEN and not _is_company_word(t)]
+
+
+def _all_words_positions(
+    msg_tokens: list[str], words: list[str], *, fuzzy: bool,
+) -> set[int] | None:
+    """Positions of the message tokens matching EVERY word, or None when one is
+    missing."""
+    positions: set[int] = set()
+    for word in words:
+        hit = _matching_positions(msg_tokens, word, fuzzy=fuzzy)
+        if not hit:
+            return None
+        positions |= hit
+    return positions
+
+
+_VOWELS = "აეიოუ"
+
+
+def _phrase_word_matches(token: str, word: str, *, fuzzy: bool) -> bool:
+    """One word of another name against one message token: the name rule, or a
+    word ending in a vowel with its ending changed — „სკოლა" in „სკოლის",
+    „სკოლაც", „სკოლაში"."""
+    if _matching_positions([token], word, fuzzy=fuzzy):
+        return True
+    return (
+        len(word) >= 5 and word[-1] in _VOWELS
+        and token.startswith(word[:-1]) and len(token) <= len(word) + 4
+    )
+
+
+def _phrase_positions(
+    msg_tokens: list[str], words: list[str], *, fuzzy: bool,
+) -> set[int] | None:
+    """Positions of `words` found next to each other, in order, or None."""
+    k = len(words)
+    for i in range(len(msg_tokens) - k + 1):
+        if all(_phrase_word_matches(msg_tokens[i + j], words[j], fuzzy=fuzzy)
+               for j in range(k)):
+            return set(range(i, i + k))
+    return None
+
+
+def _naming(msg_tokens: list[str], section: dict, *, fuzzy: bool) -> frozenset[int] | None:
+    """Which message tokens name `section`, or None when it is not named.
+
+    A section is named by a word of its name that is not a shared word, by its
+    whole name, by one of the other names the operator gave it (`aliases`, every
+    word present), or by a specific hashtag. The tokens are kept so that two
+    namings in one message can be compared — see `named_programs`."""
+    name_words = _name_words(section.get("name") or "")
+    positions: set[int] = set()
+    named = False
+    for word in name_words:
+        if _is_ambiguous(word):
+            continue
+        hit = _matching_positions(msg_tokens, word, fuzzy=fuzzy)
+        if hit:
+            named = True
+            positions |= hit
+    # A programme whose name is made ENTIRELY of shared words had no way to
+    # be named at all. „საზაფხულო ბანაკი" is both — „ბანაკ" belongs to every
+    # camp and „საზაფხულო" to the season — so a parent who wrote the name in
+    # full was still asked „რომელი გაინტერესებთ: საზაფხულო ბანაკი, …?", with
+    # the answer they had just given listed as an option (measured
+    # 2026-09-11, every camp active).
+    #
+    # Saying the WHOLE name is the specificity the single tokens lack, so it
+    # counts even when every token is shared. Two tokens minimum: a
+    # one-word ambiguous name („ბანაკი") must keep asking, and it still does
+    # — a bare „ბანაკი" matches one of this name's two tokens, not both.
+    # Nothing else can collide: „საზაფხულო ბანაკი" never satisfies
+    # „პარიზის ბანაკი", whose „პარიზის" is absent.
+    if len(name_words) >= 2:
+        whole = _all_words_positions(msg_tokens, name_words, fuzzy=fuzzy)
+        if whole is not None:
+            named = True
+            positions |= whole
+    # Other names the operator gave the programme in the panel (2026-10-12):
+    # what parents call it besides its title — „ონლაინ საკვირაო სკოლა" for
+    # „სიტყვის აკადემია მსოფლიოს გარშემო". The phrase must be there as written,
+    # word after word (endings may change: „…სკოლის პირობები"), so its words
+    # scattered through a sentence — „ონლაინ რეგისტრაცია საკვირაო სკოლაზე" —
+    # do not name it. A one-word other name counts only when the word is not a
+    # shared one.
+    for alias in section.get("aliases") or []:
+        words = _name_words(str(alias))
+        if not words or (len(words) == 1 and _is_ambiguous(words[0])):
+            continue
+        phrase = _phrase_positions(msg_tokens, words, fuzzy=fuzzy)
+        if phrase is not None:
+            named = True
+            positions |= phrase
+    for tag in section.get("hashtags") or []:
+        tag = str(tag)
+        if (len(tag.strip().lstrip("#")) < _MIN_LEN or _is_ambiguous(tag)
+                or _is_company_word(tag)):
+            continue
+        hit = _matching_positions(msg_tokens, tag, fuzzy=fuzzy)
+        if hit:
+            named = True
+            positions |= hit
+    return frozenset(positions) if named else None
+
+
+def named_programs(
+    message_text: str, sections: list[dict], *, fuzzy: bool = False,
+) -> list[dict]:
+    """Every ACTIVE section the message names, in the given order — less any
+    whose naming is part of a more exact naming of another.
+
+    „ონლაინ საკვირაო სკოლა" names Sunday School by „საკვირაო სკოლა" and the
+    online programme by that whole phrase, one of its other names. The words
+    that name Sunday School lie inside the phrase that names the online one, so
+    the parent meant the online one. Two programmes named by separate words
+    („საკვირაო სკოლაც და პარიზის ბანაკიც") are both kept: the parent named both.
+    Pure; never raises on missing fields."""
+    toks = _tokens(message_text)
+    if not toks:
+        return []
+    found: list[tuple[dict, frozenset[int]]] = []
+    for s in sections:
+        if not (s.get("id") or "").strip():
+            continue
+        if (s.get("status") or "active").strip().lower() != "active":
+            continue
+        span = _naming(toks, s, fuzzy=fuzzy)
+        if span is not None:
+            found.append((s, span))
+    return [s for s, span in found if not any(span < other for _, other in found)]
 
 
 def programs_answering_to_ambiguous_word(
@@ -145,12 +308,12 @@ def programs_answering_to_ambiguous_word(
         if (s.get("status") or "active").strip().lower() != "active":
             continue
         terms = [
-            t for t in _tokens(s.get("name") or "")
-            if len(t) >= _MIN_LEN and _is_ambiguous(t)
+            t for t in _name_words(s.get("name") or "") if _is_ambiguous(t)
         ] + [
             str(t).strip().lstrip("#").lower()
             for t in (s.get("hashtags") or [])
             if len(str(t).strip().lstrip("#")) >= _MIN_LEN and _is_ambiguous(str(t))
+            and not _is_company_word(str(t))
         ]
         if any(_token_matches(toks, term) for term in terms):
             hits.append(s)
@@ -161,51 +324,15 @@ def match_dynamic_program(
     message_text: str, sections: list[dict], *, fuzzy: bool = False,
 ) -> dict | None:
     """Return {'program_id','type'} for the first ACTIVE section the message NAMES
-    with sufficient specificity, else None. Specificity = a match on a NON-AMBIGUOUS
-    NAME token OR a match on a non-ambiguous hashtag. Pure; iterates `sections` in
-    given order.
+    with sufficient specificity, else None — the first of `named_programs`.
+    Specificity = a NON-AMBIGUOUS name word, the whole name, one of its other
+    names, or a non-ambiguous hashtag. Pure; iterates `sections` in given order.
 
     `fuzzy` (caller passes `settings.USE_FUZZY_PROGRAM_MATCH`) enables typo/dropped-
     letter tolerance on name/tag tokens for EVERY active program. fuzzy=False ⇒
-    byte-identical to the exact + declension-prefix matcher."""
-    toks = _tokens(message_text)
-    if not toks:
+    the exact + declension-prefix matcher."""
+    named = named_programs(message_text, sections, fuzzy=fuzzy)
+    if not named:
         return None
-    for s in sections:
-        pid = (s.get("id") or "").strip()
-        if not pid:
-            continue
-        if (s.get("status") or "active").strip().lower() != "active":
-            continue
-        name_tokens = [
-            nt for nt in _tokens(s.get("name") or "") if len(nt) >= _MIN_LEN
-        ]
-        name_hit = any(
-            _token_matches(toks, nt, fuzzy=fuzzy)
-            for nt in name_tokens if not _is_ambiguous(nt)
-        )
-        # A programme whose name is made ENTIRELY of shared words had no way to
-        # be named at all. „საზაფხულო ბანაკი" is both — „ბანაკ" belongs to every
-        # camp and „საზაფხულო" to the season — so a parent who wrote the name in
-        # full was still asked „რომელი გაინტერესებთ: საზაფხულო ბანაკი, …?", with
-        # the answer they had just given listed as an option (measured
-        # 2026-09-11, every camp active).
-        #
-        # Saying the WHOLE name is the specificity the single tokens lack, so it
-        # counts even when every token is shared. Two tokens minimum: a
-        # one-word ambiguous name („ბანაკი") must keep asking, and it still does
-        # — a bare „ბანაკი" matches one of this name's two tokens, not both.
-        # Nothing else can collide: „საზაფხულო ბანაკი" never satisfies
-        # „პარიზის ბანაკი", whose „პარიზის" is absent.
-        full_name_hit = (
-            len(name_tokens) >= 2
-            and all(_token_matches(toks, nt, fuzzy=fuzzy) for nt in name_tokens)
-        )
-        specific_tags = [
-            str(t) for t in (s.get("hashtags") or [])
-            if len(str(t).strip().lstrip("#")) >= _MIN_LEN and not _is_ambiguous(str(t))
-        ]
-        tag_hit = any(_token_matches(toks, t, fuzzy=fuzzy) for t in specific_tags)
-        if name_hit or tag_hit or full_name_hit:
-            return {"program_id": pid, "type": s.get("type")}
-    return None
+    s = named[0]
+    return {"program_id": (s.get("id") or "").strip(), "type": s.get("type")}
