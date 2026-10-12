@@ -117,6 +117,28 @@ def _without_tool_lines(prompt: str, tool_name: str) -> str:
 _RESERVED_PROGRAM_IDS = frozenset(p.value for p in ProgramId)
 
 
+_PROGRAMME_LINE_MAX_CHARS = 160
+
+
+def _programme_line(section: dict) -> str:
+    """„name (id: x) — who it is for" for the list of programmes on sale: the
+    first sentence of the panel's own short description, so it follows the
+    operator's text; none ⇒ the name alone. The model gets one programme's
+    facts per turn and only this list for the rest — and a name alone does not
+    say that „სიტყვის აკადემია მსოფლიოს გარშემო" is the online course for
+    children abroad (2026-10-12)."""
+    head = f"{section.get('name')} (id: {section.get('id')})"
+    text = str(section.get("description_short") or "").strip()
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    if not first:
+        return head
+    sentence = re.split(r"(?<=[.!?])\s", first, maxsplit=1)[0].strip()
+    if len(sentence) > _PROGRAMME_LINE_MAX_CHARS:
+        cut = sentence[:_PROGRAMME_LINE_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" ,;:—-")
+        sentence = cut + "…"
+    return f"{head} — {sentence}"
+
+
 def _dynamic_programs_prompt_suffix() -> str:
     """Tell the LLM the generic tools exist and list active non-reserved programs.
     Empty string when the flag is off or there are none (so flag-off prompt is unchanged)."""
@@ -132,7 +154,7 @@ def _dynamic_programs_prompt_suffix() -> str:
         return ""
     if not others:
         return ""
-    names = ", ".join(f"{s.get('name')} (id: {s.get('id')})" for s in others if s.get("id"))
+    names = "; ".join(_programme_line(s) for s in others if s.get("id"))
     # „გარდა ბანაკისა" presented the live programs as an addendum to the camp —
     # which the operator closed. The agent inherited that framing and answered
     # „ვეხმარები საბავშვო ბანაკთან დაკავშირებით" while Disneyland and Sunday
@@ -166,6 +188,24 @@ def _dynamic_programs_prompt_suffix() -> str:
             "(ცოცხალი ურთიერთობა, აზროვნება, თვითგამოხატვა, ეკრანისგან დისტანცია) — "
             "ამ პროგრამის ღირებულება და სარგებელი აღწერე მხოლოდ მისი get_program_info-ს "
             "აღწერიდან, არა ბანაკის ფრაზებით."
+        )
+        # The other side of isolation (operator, 2026-10-12): a parent whose
+        # situation another programme on the list is FOR is told about that
+        # programme. Live, a Sunday-School parent who wrote „ონლაინ გაქვთ?
+        # უცხოეთში ვცხოვრობთ" was answered from Sunday School alone, twice, while
+        # the online course for children abroad was on sale.
+        suffix += (
+            " თუ მშობლის მდგომარეობა სიაში სხვა პროგრამას უფრო შეესაბამება "
+            "(მაგალითად, წერს, რომ უცხოეთში ცხოვრობს ან ონლაინ სურს, და სიაში არის "
+            "პროგრამა უცხოეთში მცხოვრები ბავშვებისთვის), დაასახელე ის პროგრამა, "
+            "გამოიძახე მისი get_program_info და შესთავაზე — მისივე ფაქტებით. "
+            "მაგალითი: სიაში წერია „X (id: x) — ონლაინ პროგრამა უცხოეთში მცხოვრები "
+            "ბავშვებისთვის\". საკვირაო სკოლის საუბარში მშობელი წერს: „ონლაინ გაქვთ? "
+            "უცხოეთში ვცხოვრობთ\". კარგი პასუხი: ერთი წინადადებით — საკვირაო სკოლა "
+            "პირისპირ ტარდება; შემდეგ „უცხოეთში მცხოვრები ბავშვებისთვის გვაქვს ონლაინ "
+            "პროგრამა „X\"\" და X-ის მთავარი პირობები მისი get_program_info-დან. "
+            "მხოლოდ საკვირაო სკოლაზე პასუხი და მენეჯერთან გაგზავნა ამ მშობელს "
+            "იმას არ აძლევს, რასაც ეძებს."
         )
     if getattr(settings, "USE_PROGRAM_AUDIENCE", False):
         # Program audience (2026-07-26 live test): get_program_info returns
@@ -3947,7 +3987,7 @@ def _build_context_message(
     # `manager_phone_by_programme`: which programmes, and that none is chosen.
     if _attribution.state == "ambiguous":
         _unchosen = [
-            str(c.get("name") or "").strip() for c in _attribution.candidates
+            _programme_line(c) for c in _attribution.candidates
             if str(c.get("name") or "").strip()
         ]
         if len(_unchosen) > 1:
@@ -3955,10 +3995,36 @@ def _build_context_message(
                 "programme_not_chosen=" + "; ".join(_unchosen)
                 + " (each is on sale and this chat has not said which one the "
                 "parent means — ask which, before giving one programme's facts, "
-                "price or number)"
+                "price or number; but when the parent's own words already say "
+                "which one is for them — e.g. they live abroad and one is for "
+                "children abroad — offer that one)"
             )
     if active_program:
         parts.append(f"active_program={active_program}")
+        # The other programmes on sale, each with who it is for — next to the
+        # facts of the turn, where the model reads them (operator 2026-10-12: a
+        # parent who lives abroad is offered the online course). Live, the same
+        # hint in the system prompt alone left a Sunday-School parent's „ონლაინ
+        # გაქვთ? უცხოეთში ვცხოვრობთ" answered from Sunday School, 4 times of 4.
+        try:
+            from app.services import admin_config_service as _acs
+            _active_id = str((active_section or {}).get("id") or "").strip()
+            _others = [
+                _programme_line(s) for s in (_acs.get_active_sections() or [])
+                if str(s.get("id") or "").strip() not in ("", _active_id)
+                and str(s.get("id") or "").strip() not in reserved_program_ids()
+                and (s.get("type") or "").strip() != "adult_events"
+            ]
+        except Exception:  # pragma: no cover — defensive
+            _others = []
+        if _others:
+            parts.append(
+                "other_programmes_on_sale=" + "; ".join(_others)
+                + " (if the parent's own situation — e.g. they live abroad or want "
+                "online — fits one of these better than active_program, name it "
+                "and offer it with its own facts from get_program_info; never mix "
+                "two programmes' facts)"
+            )
         program_facts = _active_program_facts(active_section)
         if program_facts:
             parts.append(f"program_facts=({program_facts})")
