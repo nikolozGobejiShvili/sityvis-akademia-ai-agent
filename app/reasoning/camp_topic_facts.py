@@ -544,12 +544,33 @@ def resolve_exact_detail(message: str) -> tuple[str, str] | None:
     return None
 
 
+_WORD_RE = re.compile(r"[0-9a-zა-ჰ]+")
+
+
+def _words_line(text: str) -> str:
+    """`text` as „ word word … " — lower-case words, single spaces, padded."""
+    return " " + " ".join(_WORD_RE.findall((text or "").lower())) + " "
+
+
 def political_reply(message: str) -> str | None:
-    """Neutral redirect for a political / party-identity bait, or None."""
-    low = (message or "").lower()
-    if _count(low, _load_data().get("camp_political_markers")) == 0:
+    """Neutral redirect for a political / party-identity bait, or None.
+
+    A marker counts only where it BEGINS a word, and a word from
+    `camp_political_words` only as the whole word: inside a word „ნაცი" is
+    „კოორდინაცია", „ვაქცინაცია" (2026-10-12)."""
+    data = _load_data()
+    line = _words_line(message)
+    starts = any(
+        f" {_words_line(m).strip()}" in line
+        for m in (data.get("camp_political_markers") or []) if str(m).strip()
+    )
+    whole = any(
+        f" {_words_line(w).strip()} " in line
+        for w in (data.get("camp_political_words") or []) if str(w).strip()
+    )
+    if not (starts or whole):
         return None
-    return str(_load_data().get("camp_political_reply") or "").strip() or None
+    return str(data.get("camp_political_reply") or "").strip() or None
 
 
 def unclear_phrase_reply(message: str) -> str | None:
