@@ -541,6 +541,9 @@ def _process_comment_events(payload: dict[str, Any]) -> None:
             )
     # -- END TEMPORARY DEBUG LOGS -------------------------------------
     for entry in payload.get("entry", []):
+        # The Page / IG-account id — the same id a DM from this person carries,
+        # so the comment's private message can join that conversation.
+        page_id = str(entry.get("id") or "") if isinstance(entry, dict) else ""
         for change in entry.get("changes", []):
             value = change.get("value", {})
             field_name = change.get("field")
@@ -560,6 +563,7 @@ def _process_comment_events(payload: dict[str, Any]) -> None:
                             user_name,
                             comment_text,
                             "instagram",
+                            page_id=page_id,
                         )
                     )
 
@@ -580,6 +584,7 @@ def _process_comment_events(payload: dict[str, Any]) -> None:
                             user_name,
                             comment_text,
                             "facebook",
+                            page_id=page_id,
                         )
                     )
 
@@ -599,6 +604,7 @@ async def handle_comment(
     user_name: str,
     comment_text: str,
     platform: str,
+    page_id: str = "",
 ) -> None:
     try:
         logger.info("[comment] Processing comment %s on post %s from %s",
@@ -742,6 +748,7 @@ async def handle_comment(
                 sender_id, platform, post_id, segment,
                 comment_id=comment_id,
                 comment_text=comment_text,
+                page_id=page_id,
             )
         except Exception:
             logger.warning(

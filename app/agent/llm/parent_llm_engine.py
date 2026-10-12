@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from typing import Any
 
 from app.agent.llm.prompt_loader import load_prompt
@@ -2496,9 +2497,20 @@ def _suppress_redundant_phone_question(
 # FIRST greeting of a conversation; a greeting on a LATER turn is a scripted
 # "reset" (live bug: the agent said „გამარჯობა" mid-conversation while handling
 # a manager request) and is stripped. Only a LEADING opener is removed.
+# „გაგიმარჯოს" answers a greeting: live 2026-10-12 11:35 the reply to a
+# thank-you opened with „გამარჯობა! გაგიმარჯოს 💙", and removing the first word
+# alone sent „გაგიმარჯოს 💙" as the opening.
 _LEADING_GREETING_RE = re.compile(
-    r"^\s*(?:გამარჯობა(?:თ)?|სალამი|მოგესალმებით)\s*[\s,.!:;—–-]+",
+    r"^\s*(?:გამარჯობა(?:თ)?|სალამი|მოგესალმებით|გაგიმარჯო[სთ])(?!\w)",
 )
+# The parent's own message opens with a greeting — then a greeting back is the
+# polite answer, not a scripted reset.
+_USER_GREETING_RE = re.compile(
+    r"^\s*(?:გამარჯობა(?:თ)?|სალამი?|მოგესალმებით|დილა\s*მშვიდობისა"
+    r"|საღამო\s*მშვიდობისა|hello|hi|hey)(?!\w)",
+    re.IGNORECASE,
+)
+_GREETING_PUNCTUATION = ",.!:;—–-"
 
 
 def _conversation_has_assistant_turn(conversation: Conversation) -> bool:
@@ -2509,24 +2521,71 @@ def _conversation_has_assistant_turn(conversation: Conversation) -> bool:
     return False
 
 
+def _is_emoji_mark(ch: str) -> bool:
+    return ch in "‍️" or unicodedata.category(ch) in ("So", "Sk")
+
+
+def _drop_greeting_marks(text: str) -> str:
+    """What a removed greeting leaves before the reply proper: spaces,
+    punctuation and the emoji on the greeting's own line — „გამარჯობა 🎉⏎⏎…"
+    must not open with „🎉". An emoji on a later line (📍, 💰) is content."""
+    i, past_line = 0, False
+    while i < len(text):
+        ch = text[i]
+        if ch.isspace():
+            past_line = past_line or ch == "\n"
+        elif past_line or not (ch in _GREETING_PUNCTUATION or _is_emoji_mark(ch)):
+            break
+        i += 1
+    return text[i:]
+
+
+def _drop_vocative_name(text: str, name: str) -> str:
+    """„გამარჯობა, ფატი! 👋 …" — the name is the greeting's address; with the
+    greeting gone it would open the reply alone. Only the lead's own first name
+    (or its vocative „მარიამ" for „მარიამი"), and only when a mark follows it."""
+    first = (name or "").split()[0].casefold() if (name or "").strip() else ""
+    if len(first) < 2:
+        return text
+    match = re.match(r"(\w+)(?=[ \t]*(?:[^\w\s]|\n|$))", text)
+    if not match:
+        return text
+    forms = {first, first[:-1]} if first.endswith("ი") else {first}
+    return text[match.end():] if match.group(1).casefold() in forms else text
+
+
 def _strip_mid_conversation_greeting(
-    text: str, conversation: Conversation,
+    text: str, conversation: Conversation, user_message: str = "",
 ) -> str:
     """Remove a sentence-initial greeting once the conversation is underway.
 
-    A greeting is legitimate ONLY on the bot's first reply (owned by the static
-    welcome). On every later turn a leading „გამარჯობა"/„სალამი"/„მოგესალმებით"
-    is a scripted reset and is stripped. Never touches mid-sentence text."""
+    A greeting is legitimate on the bot's first reply (owned by the static
+    welcome) and whenever the parent greets first. On any other later turn a
+    leading „გამარჯობა"/„სალამი"/„მოგესალმებით" is a scripted reset and is
+    stripped — together with what belonged to it (the parent's name, the emoji),
+    so the reply opens with its content. Never touches mid-sentence text."""
     if not text:
         return text
     if not _conversation_has_assistant_turn(conversation):
         return text  # first reply — a greeting is fine
-    stripped = _LEADING_GREETING_RE.sub("", text, count=1).lstrip()
-    if stripped and stripped != text:
+    if user_message and _USER_GREETING_RE.match(user_message):
+        return text  # they greeted us — greeting back is the polite answer
+    name = str(getattr(getattr(conversation, "lead", None), "name", "") or "")
+    rest, removed = text, False
+    for _ in range(2):  # „გამარჯობა! გაგიმარჯოს 💙" holds two
+        match = _LEADING_GREETING_RE.match(rest)
+        if not match:
+            break
+        removed = True
+        rest = _drop_greeting_marks(rest[match.end():])
+        addressed = _drop_vocative_name(rest, name)
+        if addressed != rest:
+            rest = _drop_greeting_marks(addressed)
+    if removed and rest.strip():
         logger.info(
             "[parent_llm_engine] stripped mid-conversation greeting opener",
         )
-        return stripped
+        return rest
     return text
 
 
@@ -2996,7 +3055,9 @@ def run_parent_llm_turn(
             # BUG-1 (2026-07-26 live test): never re-ask a phone the user already gave.
             cleaned = _suppress_redundant_phone_question(cleaned, lead, conversation)
             # Never greet again mid-conversation (scripted-reset guard).
-            final_answer = _strip_mid_conversation_greeting(cleaned, conversation)
+            final_answer = _strip_mid_conversation_greeting(
+                cleaned, conversation, user_message=user_message,
+            )
             # REFLECT (Phase 2) — verify the answer's facts against the grounded
             # ones; replace a clear hallucination with a safe fallback. No-op
             # when the pass didn't ground anything (flag off ⇒ {} ⇒ unchanged).

@@ -1857,11 +1857,16 @@ def test_patch3_engine_does_not_inject_raw_source_documents(
     # competence. The guard's purpose is unchanged: a raw source document is
     # tens of KB, so it is still caught with room to spare.
     #
-    # ⚠️ The curated prompt is now ~56 KB and this ceiling has been raised seven
+    # Raised 57 KB -> 57.5 KB (2026-10-12) by the „ასე ჟღერს ბუნებრივი პასუხი"
+    # examples (live wording slips, taught by example per the operator). They
+    # REPLACE the „გაგიმარჯოს" rule and the „კარგი კითხვაა" opener suggestion,
+    # so the prompt grew by ~0.4 KB net, not by the block's full size.
+    #
+    # ⚠️ The curated prompt is now ~56 KB and this ceiling has been raised eight
     # times. Before adding the next rule, prefer replacing an existing one —
     # `docs/` already flags the un-probed "lost in the middle" risk for a prompt
     # this long, and a rule the model never reads is worse than no rule.
-    assert len(full_prompt) < 57_000, (
+    assert len(full_prompt) < 57_500, (
         f"engine prompt too large: {len(full_prompt)} chars"
     )
 
