@@ -438,7 +438,16 @@ camp_age_group_count_topic_template: "{age} წლის ბავშვებ�
 # and offering a dead program. The wording now matches `_OFFTOPIC_POLITICAL_NEW`
 # in parent_llm_engine, which already rewrites the prompt's copy of this line.
 camp_political_reply: "პოლიტიკურ თემებზე პასუხს არ ვცემ. სიამოვნებით დაგეხმარებით ჩვენს პროგრამებთან დაკავშირებით."
-camp_political_markers: [ქოცი, ქოცებ, ნაცი, ნაცებ, ნაცნ ხარ, პარტიას უჭერ, რომელ პარტია, პოლიტიკ, ოპოზიცი, ხელისუფლებას უჭერ]
+#
+# 2026-10-12: a marker must BEGIN a word (`camp_political_markers`) or BE one
+# (`camp_political_words`). Read anywhere inside a word, „ნაცი" was found in
+# „კოორდინაცია": a Paris transfer company's partnership offer was answered
+# „პოლიტიკურ თემებზე პასუხს არ ვცემ". „ვაქცინაცია", „ნაციონალური გალერეა",
+# „ფასდაკლების პოლიტიკა" and „კონფიდენციალურობის პოლიტიკა" were refused the
+# same way. A political question these miss still reaches the model, whose
+# prompt gives it the same reply.
+camp_political_markers: [ქოცებ, ნაცებ, ნაცნ ხარ, პარტიას უჭერ, რომელ პარტია, პოლიტიკურ, პოლიტიკოს, პოლიტიკაზე, ოპოზიცი, ხელისუფლებას უჭერ]
+camp_political_words: [ქოცი, ნაცი]
 
 # ── Unclear-phrase clarification wording (client 2026-06-30) ─────────────────
 # Polished Georgian for an unclear phrase — asks the parent to explain, no
