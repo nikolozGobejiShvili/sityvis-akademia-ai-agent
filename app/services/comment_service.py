@@ -1380,6 +1380,35 @@ def _summer_camp_on_sale() -> bool:
         return False
 
 
+def _conversation_for_comment_dm(
+    sender_id: str, platform: str, page_id: str,
+):
+    """The conversation the comment's private message belongs to, and whether it
+    is the one the person's DMs use.
+
+    Meta delivers the reply to a private reply as an ordinary DM — Messenger for
+    a Facebook comment, Instagram for an Instagram one — keyed by page. Stored
+    anywhere else, the agent never sees that it already greeted and asked which
+    programme: live 2026-10-09..12 three parents got „გამარჯობა!" right after
+    the comment message „მოგესალმებით🩵 რომელი პროგრამით ხართ დაინტერესებული?".
+    Without a page id (older callers) the per-sender entry is kept as before."""
+    if page_id:
+        dm_platform = "messenger" if platform == "facebook" else platform
+        return (
+            conversation_service._get_or_create_conversation(
+                sender_id, dm_platform, page_id,
+            ),
+            True,
+        )
+    conversation = conversation_service.conversations.get(sender_id)
+    if conversation is None:
+        from app.models.conversation import Conversation
+
+        conversation = Conversation(sender_id=sender_id, platform=platform)
+        conversation_service.conversations[sender_id] = conversation
+    return conversation, False
+
+
 async def send_dm_from_comment(
     sender_id: str,
     platform: str,
@@ -1388,6 +1417,7 @@ async def send_dm_from_comment(
     *,
     comment_id: str | None = None,
     comment_text: str = "",
+    page_id: str = "",
 ) -> bool:
     """Send the first-contact DM in response to a public comment.
 
@@ -1409,15 +1439,12 @@ async def send_dm_from_comment(
     if segment == "ADULT" and admin_config_service.adult_events_switched_off():
         segment = "UNCLEAR"
 
-    conversation = conversation_service.conversations.get(sender_id)
-    if conversation is None:
-        from app.models.conversation import Conversation
-
-        conversation = Conversation(sender_id=sender_id, platform=platform)
-        conversation_service.conversations[sender_id] = conversation
-
-    conversation.segment = segment
-    conversation.state = "START"
+    conversation, shared = _conversation_for_comment_dm(sender_id, platform, page_id)
+    # A conversation already under way keeps its own state and segment; the
+    # comment message only joins its history.
+    if not (shared and conversation.history):
+        conversation.segment = segment
+        conversation.state = "START"
     conversation.last_activity = datetime.utcnow()
 
     # Admin Panel MVP — resolve the post-hashtag section first so an
@@ -1679,9 +1706,21 @@ def _has_active_conversation(sender_id: str) -> bool:
     own re-engagement — comment follow-up MUST stay silent so the
     user isn't pinged twice across two different surfaces.
     """
+    return _conversation_of_sender(sender_id) is not None
+
+
+def _conversation_of_sender(sender_id: str):
+    """The sender's conversation: the per-sender entry, or the DM conversation
+    (keyed by platform and page) that the comment message now joins."""
     if not sender_id:
-        return False
-    return sender_id in conversation_service.conversations
+        return None
+    found = conversation_service.conversations.get(sender_id)
+    if found is not None:
+        return found
+    for conversation in list(conversation_service.conversations.values()):
+        if getattr(conversation, "sender_id", "") == sender_id:
+            return conversation
+    return None
 
 
 def _mark_comment_expired(comment_id: str) -> None:
@@ -1745,7 +1784,7 @@ async def check_comment_followups() -> None:
         # Sender already in DM → DM follow-up owns the cadence; the
         # comment scheduler must NOT also ping them.
         if _has_active_conversation(sender_id):
-            conv = conversation_service.conversations.get(sender_id)
+            conv = _conversation_of_sender(sender_id)
             blocked = getattr(conv, "followup_blocked_reason", "") or ""
             extra = ""
             if blocked in _DM_FOLLOWUP_OWNED_REASONS:
