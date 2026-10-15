@@ -2589,6 +2589,42 @@ def _strip_mid_conversation_greeting(
     return text
 
 
+# „გაგიმარჯოს" is never sent (operator, 2026-10-15). Removing it only as an
+# opener left it free to close a reply: live 2026-10-13 a thank-you got
+# „…ნებისმიერ დროს დამიკავშირდით. გაგიმარჯოს! 👋". Wherever it stands it goes,
+# with the punctuation and emoji on its own line; as the opening of an answer
+# to the parent's own greeting it becomes „გამარჯობა", so the greeting back
+# survives. A reply that held nothing else keeps „გამარჯობა" rather than going
+# out empty.
+_REPLY_TO_GREETING_RE = re.compile(r"(?<!\w)გაგიმარჯო[სთ](?!\w)")
+_LEADING_REPLY_TO_GREETING_RE = re.compile(r"^(\s*)გაგიმარჯო[სთ](?!\w)")
+
+
+def _drop_reply_to_greeting(text: str, user_message: str = "") -> str:
+    if not text or not _REPLY_TO_GREETING_RE.search(text):
+        return text
+    out = text
+    if user_message and _USER_GREETING_RE.match(user_message):
+        out = _LEADING_REPLY_TO_GREETING_RE.sub(r"\1გამარჯობა", out, count=1)
+    kept, pos = [], 0
+    for match in _REPLY_TO_GREETING_RE.finditer(out):
+        kept.append(out[pos:match.start()])
+        end = match.end()
+        while end < len(out) and out[end] != "\n" and (
+            out[end] in " \t" or out[end] in _GREETING_PUNCTUATION
+            or _is_emoji_mark(out[end])
+        ):
+            end += 1
+        pos = end
+    kept.append(out[pos:])
+    cleaned = "\n".join(line.rstrip() for line in "".join(kept).split("\n"))
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if not cleaned:
+        cleaned = _REPLY_TO_GREETING_RE.sub("გამარჯობა", out).strip()
+    logger.info("[parent_llm_engine] removed the reply-to-greeting word")
+    return cleaned
+
+
 def _capture_turn_facts(
     conversation: Conversation, lead: Lead, user_message: str,
 ) -> None:
@@ -3057,6 +3093,9 @@ def run_parent_llm_turn(
             # Never greet again mid-conversation (scripted-reset guard).
             final_answer = _strip_mid_conversation_greeting(
                 cleaned, conversation, user_message=user_message,
+            )
+            final_answer = _drop_reply_to_greeting(
+                final_answer, user_message=user_message,
             )
             # REFLECT (Phase 2) — verify the answer's facts against the grounded
             # ones; replace a clear hallucination with a safe fallback. No-op
