@@ -1862,11 +1862,18 @@ def test_patch3_engine_does_not_inject_raw_source_documents(
     # REPLACE the „გაგიმარჯოს" rule and the „კარგი კითხვაა" opener suggestion,
     # so the prompt grew by ~0.4 KB net, not by the block's full size.
     #
-    # ⚠️ The curated prompt is now ~56 KB and this ceiling has been raised eight
+    # Raised 57.5 KB -> 58.5 KB (2026-10-15) by the reply-style examples, which
+    # ride in the USER-role facts block — the system prompt itself is unchanged.
+    # Live, the system prompt never reached the model on the setup-token path
+    # (24 input tokens for the whole of it, measured 2026-10-15); the facts block
+    # does, so the few examples that must work live travel there. A raw source
+    # document is still tens of KB and still caught.
+    #
+    # ⚠️ The curated prompt is now ~56 KB and this ceiling has been raised nine
     # times. Before adding the next rule, prefer replacing an existing one —
     # `docs/` already flags the un-probed "lost in the middle" risk for a prompt
     # this long, and a rule the model never reads is worse than no rule.
-    assert len(full_prompt) < 57_500, (
+    assert len(full_prompt) < 58_500, (
         f"engine prompt too large: {len(full_prompt)} chars"
     )
 
