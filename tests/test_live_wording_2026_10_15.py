@@ -14,10 +14,14 @@ LLM's HTTP transport is scripted.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app.agent.llm import parent_llm_engine as ple
+from app.agent.llm.prompt_loader import load_prompt
 from app.flows import parent_flow
+from app.services import anthropic_service
 from tests.test_programme_attribution_and_booking_2026_10_05 import (  # noqa: F401 — fixtures
     _ASK_CONTACT,
     _PHONE,
@@ -127,3 +131,49 @@ def test_a_number_alone_still_gets_the_quick_reply(world):
 def test_a_short_introduction_with_the_number_is_still_a_contact():
     assert not parent_flow._says_more_than_the_contact(f"ჩემი ნომერია {_PHONE}, სახელი ნინო")
     assert parent_flow._says_more_than_the_contact(_NUMBER_AND_QUESTION)
+
+
+# ═══ a question the facts do not answer is shown going to the manager ═════
+
+def test_an_unanswered_can_question_is_shown_going_to_the_manager():
+    assert "მენეჯერი დაგიზუსტებთ" in load_prompt("parent_reply_style")
+
+
+# ═══ the reply-style examples travel where the model reads them ═══════════
+#
+# Live, the system prompt is dropped on the setup-token path (24 input tokens
+# for the whole prompt, measured 2026-10-15); the user-role facts block is read.
+
+def test_the_reply_style_examples_travel_beside_the_facts(world, monkeypatch):
+    sent = []
+    original = world.post
+
+    def capture(**kwargs):
+        sent.append(kwargs["messages"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(anthropic_service, "_post", capture)
+    world.panel("SS")
+    world.say("ფასი რა არის?", ("say", _SS_OFFER))
+    examples = load_prompt("parent_reply_style").strip()
+    blocks = [m for messages in sent for m in messages
+              if "[SYSTEM DATA" in str(m.get("content") or "")]
+    assert blocks, "the engine sent no facts block"
+    assert all(m["role"] == "user" and m["content"].endswith(examples) for m in blocks)
+    # Added, not instead: the facts the model read before are all still there.
+    assert all("today_iso_tbilisi=" in m["content"] and "[/SYSTEM DATA]" in m["content"]
+               for m in blocks)
+    system = [m for messages in sent for m in messages if m.get("role") == "system"]
+    assert not any(examples in str(m.get("content") or "") for m in system)
+
+
+def test_the_reply_style_examples_carry_no_facts():
+    assert not re.search(r"\d", load_prompt("parent_reply_style"))
+
+
+def test_a_missing_style_file_never_fails_a_turn(monkeypatch):
+    def _missing(name):
+        raise FileNotFoundError(name)
+
+    monkeypatch.setattr(ple, "load_prompt", _missing)
+    assert ple._reply_style_examples() == ""

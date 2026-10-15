@@ -2625,6 +2625,24 @@ def _drop_reply_to_greeting(text: str, user_message: str = "") -> str:
     return cleaned
 
 
+def _reply_style_examples() -> str:
+    """A few lines that show how a reply to a parent sounds, sent beside the
+    turn's facts.
+
+    The grammar section of the system prompt never reached the model on the
+    live setup-token path: sent as one string behind the billing line, the
+    whole system prompt counted 24 input tokens (measured 2026-10-15), and the
+    client Page showed „გვესმის ჩვენი", „შიში … ადგილი არ აქვს",
+    „გაგიჩნდება" and „გინდათ". The user-role facts block is read — the reason
+    the facts moved there on 2026-08-01 — so the examples travel with it.
+    Empty when the file is missing, so a turn never fails for it."""
+    try:
+        return load_prompt("parent_reply_style").strip()
+    except Exception:  # noqa: BLE001 — the examples are never worth a failed turn
+        logger.warning("[parent_llm_engine] reply-style examples unavailable")
+        return ""
+
+
 def _capture_turn_facts(
     conversation: Conversation, lead: Lead, user_message: str,
 ) -> None:
@@ -2994,6 +3012,9 @@ def run_parent_llm_turn(
     # Immediately before the customer's turn: same role the model demonstrably
     # reads, own message so it is never mistaken for what the customer said.
     if lead_facts_block:
+        reply_style = _reply_style_examples()
+        if reply_style:
+            lead_facts_block += "\n\n" + reply_style
         messages.append({"role": "user", "content": lead_facts_block})
     messages.append({"role": "user", "content": user_message})
 
