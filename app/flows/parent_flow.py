@@ -917,6 +917,14 @@ def _msg_has_camp_intent(message: str) -> bool:
 # Explicit camp words — a question carrying one of these IS about the camp, so the
 # camp-off gate never suppresses it (it still gets the clean „camp ended" message).
 _CAMP_WORD_STEMS: tuple[str, ...] = ("ბანაკ", "საზაფხულო", "ლაგერ")
+# The words that name a camp. „საზაფხულო" names a season: it is the camp only
+# beside „ბანაკი" (which carries its own stem) or when nothing else is on the
+# table. Live 2026-10-15, camp ended, a parent deep in a Paris chat wrote that
+# the family would plan it „საზაფხულო არდადეგებისთვის" — summer holidays — and
+# got „საზაფხულო ბანაკი უკვე გაიმართა" plus a request for name and number,
+# because the season word kept the camp gate from standing down for the
+# programme the conversation was actually on.
+_CAMP_NAME_STEMS: tuple[str, ...] = ("ბანაკ", "ლაგერ")
 
 
 def _camp_is_not_active() -> bool:
@@ -1015,9 +1023,19 @@ def _camp_off_suppresses_info(
     operational one. So with the flag OFF the suppression still holds for a turn
     that is generic (no camp topic of its own), in a conversation that is not the
     camp's, while another programme is active. Camp active, camp alone in the
-    panel, a camp-topic question, or a camp conversation ⇒ False ⇒ byte-identical."""
+    panel, a camp-topic question, or a camp conversation ⇒ False ⇒ byte-identical.
+
+    The season word alone („საზაფხულო") is the camp's only while the
+    conversation is not on another programme — the camp-status gate above reads
+    it the same way. With the gate standing down for a Paris chat's „…საზაფხულო
+    არდადეგებისთვის…" (live 2026-10-15), these still read the season word as the
+    camp and answered with the closed-registration line."""
     low = (message or "").lower()
-    if any(k in low for k in _CAMP_WORD_STEMS):
+    if any(k in low for k in _CAMP_NAME_STEMS):
+        return False
+    if any(k in low for k in _CAMP_WORD_STEMS) and not (
+        conversation is not None and _conversation_names_other_program(conversation)
+    ):
         return False
     try:
         from app.services import admin_config_service
@@ -1120,6 +1138,11 @@ def _conversation_names_other_program(conversation: Conversation) -> bool:
     that only Paris answers to — ended the walk as the summer camp's. A camp
     word with no single owner still ends it exactly as before.
 
+    A camp word is a word that names a camp (`_CAMP_NAME_STEMS`). The season
+    word does not: the newest turn of a Paris chat said the family would plan it
+    „საზაფხულო არდადეგებისთვის", and it ended the walk as the camp's before the
+    walk reached the turn that named Paris (live 2026-10-15).
+
     Never raises → False, which leaves the camp chain exactly as it was.
     """
     try:
@@ -1130,7 +1153,7 @@ def _conversation_names_other_program(conversation: Conversation) -> bool:
             owner = _program_id_for_turn(text)
             if owner:
                 return owner != "summer_camp"
-            if any(k in text.lower() for k in _CAMP_STATUS_KEYWORDS):
+            if any(k in text.lower() for k in _CAMP_NAME_STEMS):
                 return False
     except Exception:  # pragma: no cover — defensive
         return False
@@ -1510,7 +1533,7 @@ def _maybe_handle_camp_status(
     if (
         getattr(settings, "USE_PROGRAM_ISOLATION", False)
         and _is_active_per_product_booking(conversation)
-        and not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS)
+        and not any(k in (message or "").lower() for k in _CAMP_NAME_STEMS)
     ):
         return None
 
@@ -1529,7 +1552,7 @@ def _maybe_handle_camp_status(
     # on another active programme. A message that says camp is untouched and
     # still gets the honest approved status; so is a conversation with no other
     # programme in it, which is every camp-only fixture in the suite.
-    if not any(k in (message or "").lower() for k in _CAMP_STATUS_KEYWORDS):
+    if not any(k in (message or "").lower() for k in _CAMP_NAME_STEMS):
         if _msg_names_other_program(message) or _conversation_names_other_program(conversation):
             logger.info(
                 "[parent_flow] camp-status deferred — conversation names another "
@@ -11245,6 +11268,21 @@ def _message_has_overlong_number(message: str) -> bool:
     return False
 
 
+# A contact is a name and a number, with a few words around them at most
+# („ჩემი ნომერია …, სახელი ნინო"). Beyond that the message is saying something
+# else as well. The words are counted the way `_parse_name_phone` caps a name
+# (`_NAME_TOKEN_CAP`), with room for the words that introduce a contact.
+_CONTACT_SENTENCE_WORDS = 2
+
+
+def _says_more_than_the_contact(text: str) -> bool:
+    words = [
+        token for token in re.split(r"[\s,.;:!?()\"„“”—–-]+", text or "")
+        if token and not any(ch.isdigit() for ch in token)
+    ]
+    return len(words) > _NAME_TOKEN_CAP + _CONTACT_SENTENCE_WORDS
+
+
 def _maybe_handle_contact_collection(
     conversation: Conversation, message: str,
 ) -> str | None:
@@ -11433,6 +11471,18 @@ def _maybe_handle_contact_collection(
         and _answering_a_promised_callback(conversation)
     ):
         return _sunday_school_dispatch(conversation, lead, text)
+
+    # The contact is kept above; a message that says more than the contact —
+    # a question without a „?", a request, a paragraph — is answered by the
+    # model. Live 2026-10-15 a parent sent a number together with a question
+    # about the programme, written without a „?", and got „ნომერი მივიღე.
+    # მომწერეთ თქვენი სახელი…": the question was dropped.
+    if _says_more_than_the_contact(text):
+        logger.info(
+            "[parent_flow] contact-collection: contact kept, the rest of the "
+            "message goes to the model",
+        )
+        return None
 
     # Reply: name+phone in one message → thank by name + ask time; phone
     # with a known name → ack number + ask time; phone with no name → ack
