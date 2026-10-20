@@ -2596,8 +2596,13 @@ def _strip_mid_conversation_greeting(
 # to the parent's own greeting it becomes „გამარჯობა", so the greeting back
 # survives. A reply that held nothing else keeps „გამარჯობა" rather than going
 # out empty.
-_REPLY_TO_GREETING_RE = re.compile(r"(?<!\w)გაგიმარჯო[სთ](?!\w)")
-_LEADING_REPLY_TO_GREETING_RE = re.compile(r"^(\s*)გაგიმარჯო[სთ](?!\w)")
+# „გაუმარჯოს" is the same toast in the third person and went out the same way:
+# live 2026-10-20 a thank-you got „…ნებისმიერ დროს მომწერეთ. გაუმარჯოს!", and
+# 2026-09-20 a registration „გაუმარჯოს! 🎉". It goes only as an exclamation —
+# followed by what it hails („გაუმარჯოს ქართულ ენას") it is a sentence and stays.
+_TOAST = r"(?:გაგიმარჯო[სთ]|გაუმარჯო[სთ](?![ \t]*\w))(?!\w)"
+_REPLY_TO_GREETING_RE = re.compile(rf"(?<!\w){_TOAST}")
+_LEADING_REPLY_TO_GREETING_RE = re.compile(rf"^(\s*){_TOAST}")
 
 
 def _drop_reply_to_greeting(text: str, user_message: str = "") -> str:
