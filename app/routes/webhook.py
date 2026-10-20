@@ -811,6 +811,13 @@ def _extract_meta_messages(payload: dict[str, Any], entry: dict[str, Any]) -> li
 
     for event in entry.get("messaging", []):
         message_obj = event.get("message", {}) or {}
+        # A message the business itself sent (the agent's reply, or the manager
+        # writing in the inbox) comes back marked is_echo, sender = the business
+        # account. Instagram's `messages` field always includes these; Messenger
+        # only with `message_echoes`, which this app does not subscribe.
+        if message_obj.get("is_echo"):
+            logger.info("[webhook] echo of an outgoing message skipped platform=%s", platform)
+            continue
         message_text = message_obj.get("text")
         # Messenger message id — used for DM idempotency (Bug D, 2026-07-08).
         # Missing/empty mid keeps the message but disables dedup for it.
