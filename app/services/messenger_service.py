@@ -268,25 +268,42 @@ def send_private_reply(comment_id: str, text: str) -> bool:
 # (Messenger 2000, Instagram 1000, WhatsApp 4096). Over the limit Meta rejects
 # the message and the whole reply is lost; a longer reply goes out in parts.
 _TEXT_LIMITS: dict[str, int] = {"messenger": 1900, "instagram": 950, "whatsapp": 4000}
+# Instagram also counts bytes: „Message text must be UTF-8 and be 1,000 bytes
+# or less." A Georgian letter is three bytes, so 950 characters can be ~2,800.
+_BYTE_LIMITS: dict[str, int] = {"instagram": 990}
 _SPLIT_POINTS: tuple[str, ...] = ("\n\n", "\n", ". ", "? ", "! ", " ")
 
 
-def split_for_channel(text: str, limit: int) -> list[str]:
-    """`text` as consecutive parts of at most `limit` characters, each cut at
-    a paragraph, else a line, else a sentence, else a space — inside a word
-    only when one word is longer than the limit. Nothing is dropped but the
-    whitespace at the cuts. Short text is one part."""
+def _fitting_prefix(text: str, limit: int, max_bytes: int | None) -> int:
+    """Length of the longest prefix of `text` within `limit` characters and,
+    when given, `max_bytes` UTF-8 bytes."""
+    if max_bytes is None:
+        return min(limit, len(text))
+    size = 0
+    for i, ch in enumerate(text[:limit]):
+        size += len(ch.encode("utf-8"))
+        if size > max_bytes:
+            return i
+    return min(limit, len(text))
+
+
+def split_for_channel(text: str, limit: int, max_bytes: int | None = None) -> list[str]:
+    """`text` as consecutive parts of at most `limit` characters (and at most
+    `max_bytes` UTF-8 bytes when given), each cut at a paragraph, else a line,
+    else a sentence, else a space — inside a word only when one word is longer
+    than the limit. Nothing is dropped but the whitespace at the cuts. Short
+    text is one part."""
     rest = (text or "").strip()
     parts: list[str] = []
-    while len(rest) > limit:
-        window = rest[:limit]
+    while (fit := _fitting_prefix(rest, limit, max_bytes)) < len(rest):
+        window = rest[:fit]
         cut = 0
         for sep in _SPLIT_POINTS:
             i = window.rfind(sep)
-            if i > limit // 3:
+            if i > fit // 3:
                 cut = i + len(sep)
                 break
-        cut = cut or limit
+        cut = cut or max(fit, 1)
         parts.append(rest[:cut].strip())
         rest = rest[cut:].strip()
     if rest:
@@ -299,7 +316,8 @@ def send_message(sender_id: str, platform: str, text: str) -> bool:
     # deterministic answer, follow-up) passes here, so this is the one place
     # that can guarantee the customer never sees raw markup.
     text = to_plain_text(text)
-    parts = split_for_channel(text, _TEXT_LIMITS.get(platform, 1900)) or [text]
+    parts = split_for_channel(text, _TEXT_LIMITS.get(platform, 1900),
+                              _BYTE_LIMITS.get(platform)) or [text]
     for part in parts:
         if not _send_one(sender_id, platform, part):
             return False
