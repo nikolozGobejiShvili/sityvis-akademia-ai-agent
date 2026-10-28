@@ -705,10 +705,23 @@ async def handle_comment(
         # COMMENT FLOW PATCH 1 — public reply is OPTIONAL and must
         # never block the DM. Default off (settings.ENABLE_PUBLIC_COMMENT_REPLY).
         # Failure/exception → log, continue to DM.
-        if getattr(settings, "ENABLE_PUBLIC_COMMENT_REPLY", False):
+        #
+        # Only a comment that asks something gets the public reply (operator,
+        # 2026-10-28): the public „დეტალები პირად შეტყობინებაში გამოგიგზავნეთ"
+        # went under comments where parents only shared a warm word or a story
+        # and asked for nothing. „Asks something" is the operator's own keyword
+        # list (`comment_service.is_interest_intent`), the same reader that
+        # labels the CRM row. The DM still goes to every comment.
+        public_reply_on = getattr(settings, "ENABLE_PUBLIC_COMMENT_REPLY", False)
+        if public_reply_on and intent != "INTERESTED":
+            logger.info(
+                "[COMMENT] Public reply skipped: no keyword in the comment "
+                "(comment_id=%s)", comment_id,
+            )
+        elif public_reply_on:
             try:
                 public_ok = await comment_service.reply_to_comment(
-                    comment_id, user_name, has_dm_history,
+                    comment_id, user_name, has_dm_history, platform=platform,
                 )
                 if not public_ok:
                     logger.warning(

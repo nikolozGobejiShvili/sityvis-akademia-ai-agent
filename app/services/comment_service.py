@@ -900,6 +900,7 @@ async def reply_to_comment(
     comment_id: str,
     user_name: str,
     can_send_dm: bool,
+    platform: str = "",
 ) -> bool:
     # COMMENT FLOW PATCH 3 — the public reply text is now uniform for
     # both PARENT and ADULT segments and for senders with or without
@@ -912,7 +913,13 @@ async def reply_to_comment(
     _ = can_send_dm  # explicit acknowledgement that the flag is unused
     message = COMMENT_REPLY_DM_SENT.format(name=user_name).strip()
 
-    url = f"{_graph_base_url()}/{comment_id}/replies"
+    # The reply edge differs per platform: an Instagram comment is answered
+    # at /{ig-comment-id}/replies, a Facebook comment at /{comment-id}/comments.
+    # Facebook's /replies is not an edge — live 2026-10-20..28 every Facebook
+    # public reply (71 of 71) came back 400 „Unsupported post request" while
+    # the private reply to the same comment ids went out.
+    edge = "comments" if platform == "facebook" else "replies"
+    url = f"{_graph_base_url()}/{comment_id}/{edge}"
     headers = {"Authorization": f"Bearer {settings.META_ACCESS_TOKEN}"}
     body = {"message": message}
 
