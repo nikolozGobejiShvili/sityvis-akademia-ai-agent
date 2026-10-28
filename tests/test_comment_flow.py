@@ -371,28 +371,28 @@ def test_public_reply_exception_does_not_block_dm(monkeypatch):
     assert len(sent) == 1, "DM must still fire after public-reply exception"
 
 
-def test_a_comment_without_an_interest_word_still_gets_the_dm(monkeypatch):
-    """Every comment gets the DM (operator, 2026-10-05: „DM goes anyway — a
-    post without a hashtag gets a general greeting, a programme's hashtag gets
-    that programme's information").
+def test_a_comment_without_a_keyword_gets_no_dm(monkeypatch):
+    """Only a keyword comment is answered (operator, 2026-10-28): live, a
+    „წარმატებები ❤️" got „რომელი პროგრამით ხართ დაინტერესებული?" in a private
+    message. That retires the 2026-10-05 rule that every comment gets the DM,
+    which this test pinned before.
 
-    Until 2026-10-05 a comment with no interest keyword went to an OpenAI
-    „is this person interested?" call, and NOT_INTERESTED meant no DM and no
-    public reply — this test pinned that. With the OpenAI account out of
-    credit the call failed on every comment and every failure read as
-    NOT_INTERESTED: 23 of 26 comments from 2026-10-01 to 10-05 got no DM
-    (Railway: „Intent detection failed after 3 attempts", 429). The call is
-    gone; even a model that would still say NOT_INTERESTED is not consulted."""
+    The 2026-10-05 history still holds: the OpenAI „is this person
+    interested?" call is gone (out of credit it failed on every comment, and
+    23 of 26 comments from 2026-10-01 to 10-05 got no DM). The decision is
+    the deterministic keyword reader — even a model that would say
+    INTERESTED is not consulted."""
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=["banaki"],
         ADULT_HASHTAGS=[],
         ENABLE_PUBLIC_COMMENT_REPLY=True,
     )
-    _client, sent = _run_handle_comment(
-        monkeypatch, intent="NOT_INTERESTED", comment_text="გილოცავ!",
+    client, sent = _run_handle_comment(
+        monkeypatch, intent="INTERESTED", comment_text="გილოცავ!",
     )
-    assert len(sent) == 1
+    assert sent == []
+    assert client.posts == []
 
 
 def test_dm_runs_even_without_dm_history(monkeypatch):
@@ -846,11 +846,11 @@ def test_the_pages_own_comment_gets_no_dm(monkeypatch, own):
     assert saved == []
 
 
-def test_a_facebook_comment_without_an_interest_word_gets_a_private_reply(monkeypatch):
-    """Every comment gets the DM (operator, 2026-10-05) — on Facebook through
-    the private-reply channel. Until 2026-10-05 a NOT_INTERESTED verdict from
-    the OpenAI intent call suppressed it; see
-    `test_a_comment_without_an_interest_word_still_gets_the_dm`."""
+def test_a_facebook_keyword_comment_gets_a_private_reply(monkeypatch):
+    """A keyword comment on Facebook is answered through the private-reply
+    channel, whatever a model would have said about it; a comment without a
+    keyword gets nothing (operator, 2026-10-28) — see
+    `test_a_comment_without_a_keyword_gets_no_dm`."""
     _swap_settings(
         monkeypatch,
         PARENT_HASHTAGS=["banaki"],
@@ -859,7 +859,7 @@ def test_a_facebook_comment_without_an_interest_word_gets_a_private_reply(monkey
     )
     _client, sent = _run_handle_comment_for_platform(
         monkeypatch, platform="facebook", intent="NOT_INTERESTED",
-        comment_text="გილოცავ!",
+        comment_text="ფასი?",
     )
     assert len(sent) == 1
     assert sent[0]["channel"] == "private_reply"
@@ -1307,14 +1307,14 @@ def test_local_lru_blocks_duplicate_when_redis_enabled(
 
     asyncio.run(webhook.handle_comment(
         comment_id="cmt-lru-2", post_id="p1", sender_id="s1",
-        user_name="QA", comment_text="ბანაკი", platform="facebook",
+        user_name="QA", comment_text="ბანაკი, ფასი?", platform="facebook",
     ))
     first_count = len(sent)
     assert first_count >= 1
 
     asyncio.run(webhook.handle_comment(
         comment_id="cmt-lru-2", post_id="p1", sender_id="s1",
-        user_name="QA", comment_text="ბანაკი", platform="facebook",
+        user_name="QA", comment_text="ბანაკი, ფასი?", platform="facebook",
     ))
     assert len(sent) == first_count
 

@@ -388,6 +388,12 @@ _INTEREST_KEYWORDS: tuple[str, ...] = (
     # --- English / mixed — short interest words
     "info", "details", "price", "link", "where", "when",
     "interested", "register", "ticket", "address", "location",
+    # --- question markers (operator, 2026-10-28). With the list above alone,
+    # 12 of the 21 real questions among the comments of 2026-10-20..28 had no
+    # keyword („სად ხართ?", „რომელ დღეებშია?") and, now that the DM follows
+    # the keywords too, would get no answer at all; with these, 16 of 21, and
+    # still no warm comment.
+    "?", "სად ", "როდის", "რომელ", "რამდენ",
 )
 
 
