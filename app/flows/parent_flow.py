@@ -3104,9 +3104,12 @@ def _engine_unavailable_reply(conversation: Conversation, message: str) -> str |
         # Not handed over: never claim it was — give the manager's number, and
         # do not promise the call (`self_call`: no „…თავად დაგიკავშირდებათ").
         return _render_manager_number_answer(lead, self_call=True, conversation=conversation)
-    # Ask for the missing half only when this message brought the other half;
-    # otherwise the one sentence the operator approved.
-    if got_phone and not have_name:
+    # Ask only for the missing half once the other half is known; with
+    # neither, the one sentence the operator approved. The number known from an
+    # earlier turn counts like the name does below: live 2026-10-28 the parent
+    # had sent the number, the model then gave no answer, and this asked for
+    # „სახელი და საკონტაქტო ნომერი" — the number a second time.
+    if have_phone and not have_name:
         return _OUTAGE_ASK_NAME
     if have_name and not have_phone:
         # The name is known (this turn, or the Meta profile): ask only for the
@@ -13199,6 +13202,8 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
         if 0 < len(trailing) <= _NAME_TOKEN_CAP:
             near_phone_name = " ".join(trailing)
 
+    # A role in brackets is not part of the name: „ნინო (დედა)" is ნინო.
+    remainder = re.sub(r"\([^)]*\)", " ", remainder)
     tokens = re.split(r"[,.:\s]+", remainder)
     # B2 fix (2026-06-13) — correction cut: if a „არა" („no") marker appears
     # with a name token after it, drop everything up to and including the LAST
@@ -13220,6 +13225,23 @@ def _parse_name_phone(message: str) -> tuple[str, str]:
     # Length cap (Batch Fix 2026-06-12, ROOT 3 / Hypothesis P4). A real name
     # is at most a few tokens; a longer surviving run is a rambling sentence
     # that happened to carry a phone — never store the paragraph as a name.
+    # Several people, one per line (live 2026-10-28: „<სახელი> <გვარი>(დედა)\n
+    # <სახელი> <გვარი> (ბებია)"): the first person is the contact. Read as one
+    # run it was a 5-token „name", dropped, and the agent asked for the name a
+    # second time. Not after a correction cut — „ლიზი\nარა ნინო" is ნინო.
+    if _cut < 0:
+        named_lines = [
+            line_tokens for line_tokens in (
+                [t for t in re.split(r"[,.:\s]+", line) if _name_token_is_valid(t)]
+                for line in remainder.splitlines()
+            ) if line_tokens
+        ]
+        if len(named_lines) > 1:
+            logger.info(
+                "[parent_flow] %d named lines — the first is the contact",
+                len(named_lines),
+            )
+            name_tokens = named_lines[0]
     if len(name_tokens) > _NAME_TOKEN_CAP:
         logger.info(
             "[parent_flow] name candidate too long (%d tokens) — dropped",
