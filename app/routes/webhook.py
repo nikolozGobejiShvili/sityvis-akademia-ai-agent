@@ -664,20 +664,20 @@ async def handle_comment(
             logger.info("[comment] skipped: the Page's own comment %s", comment_id)
             return
 
-        # Every comment gets the DM (operator, 2026-10-05): a post with a
-        # programme's hashtag gets that programme's information, a post
-        # without one gets the general greeting/menu. The deciding question
-        # used to be an OpenAI „is this person interested?" call before any
-        # of that; with the OpenAI account out of credit it failed on every
-        # comment and every failure meant NOT_INTERESTED — 23 of 26 comments
-        # from 2026-10-01 to 10-05 got no DM at all (Railway logs:
-        # „Intent detection failed after 3 attempts", 429 credit_balance_
-        # exhausted). The keyword reader still labels the CRM row.
+        # The keyword reader decides whether the comment is answered at all
+        # (operator, 2026-10-28): a comment that asks something gets the public
+        # reply and the DM; a warm word or a story gets neither — live, a
+        # „წარმატებები ❤️" was sent „რომელი პროგრამით ხართ დაინტერესებული?".
+        # This retires the 2026-10-05 rule that every comment gets the DM. That
+        # rule replaced an OpenAI „is this person interested?" call which, with
+        # the account out of credit, failed on every comment (23 of 26 comments
+        # from 2026-10-01 to 10-05 got no DM); the reader is deterministic, so
+        # that failure cannot recur. It also labels the CRM row.
         intent = (
             "INTERESTED" if comment_service.is_interest_intent(comment_text)
             else "COMMENT"
         )
-        logger.info("[comment] Intent: %s (every comment is answered)", intent)
+        logger.info("[comment] Intent: %s (only keyword comments are answered)", intent)
 
         segment = await comment_service.determine_segment_from_post(post_id, platform)
         has_dm_history = sender_id in conversation_service.conversations
@@ -711,7 +711,7 @@ async def handle_comment(
         # went under comments where parents only shared a warm word or a story
         # and asked for nothing. „Asks something" is the operator's own keyword
         # list (`comment_service.is_interest_intent`), the same reader that
-        # labels the CRM row. The DM still goes to every comment.
+        # labels the CRM row and gates the DM below.
         public_reply_on = getattr(settings, "ENABLE_PUBLIC_COMMENT_REPLY", False)
         if public_reply_on and intent != "INTERESTED":
             logger.info(
@@ -750,34 +750,40 @@ async def handle_comment(
         # comment-origin DMs. Without this the FB path used to call
         # send_message(platform="facebook") and hit the
         # "Unsupported platform" branch.
-        logger.info(
-            "[COMMENT] Attempting DM/private reply comment_id=%s "
-            "segment=%s sender=%s platform=%s",
-            comment_id, segment, sender_id, platform,
-        )
         dm_ok = False
-        try:
-            dm_ok = await comment_service.send_dm_from_comment(
-                sender_id, platform, post_id, segment,
-                comment_id=comment_id,
-                comment_text=comment_text,
-                page_id=page_id,
-            )
-        except Exception:
-            logger.warning(
-                "[COMMENT] DM/private reply exception comment_id=%s sender=%s",
-                comment_id, sender_id, exc_info=True,
-            )
-        if dm_ok:
+        if intent != "INTERESTED":
             logger.info(
-                "[COMMENT] DM/private reply sent comment_id=%s", comment_id,
+                "[COMMENT] DM skipped: no keyword in the comment (comment_id=%s)",
+                comment_id,
             )
         else:
-            logger.warning(
-                "[COMMENT] DM/private reply failed comment_id=%s "
+            logger.info(
+                "[COMMENT] Attempting DM/private reply comment_id=%s "
                 "segment=%s sender=%s platform=%s",
                 comment_id, segment, sender_id, platform,
             )
+            try:
+                dm_ok = await comment_service.send_dm_from_comment(
+                    sender_id, platform, post_id, segment,
+                    comment_id=comment_id,
+                    comment_text=comment_text,
+                    page_id=page_id,
+                )
+            except Exception:
+                logger.warning(
+                    "[COMMENT] DM/private reply exception comment_id=%s sender=%s",
+                    comment_id, sender_id, exc_info=True,
+                )
+            if dm_ok:
+                logger.info(
+                    "[COMMENT] DM/private reply sent comment_id=%s", comment_id,
+                )
+            else:
+                logger.warning(
+                    "[COMMENT] DM/private reply failed comment_id=%s "
+                    "segment=%s sender=%s platform=%s",
+                    comment_id, segment, sender_id, platform,
+                )
 
         logger.info(
             "[comment] Handled: %s on %s - %s (dm_ok=%s)",

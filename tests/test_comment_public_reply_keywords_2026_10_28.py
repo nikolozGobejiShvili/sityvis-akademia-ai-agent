@@ -64,18 +64,26 @@ def _public_reply_on(monkeypatch):
     "ბაღის შემდეგ გზაში ჯერ ვეუბნები რომ ძალიან მომენატრა 🤷",
     "ანა შენ საუკეთესო ხარ ❤️❤️❤️",
     "წარმატებები🥰",
+    "ან წარმატებები ❤️❤️❤️❤️",
 ])
 @pytest.mark.parametrize("platform", ["instagram", "facebook"])
-def test_a_comment_that_asks_nothing_gets_no_public_reply_but_still_the_dm(
+def test_a_comment_that_asks_nothing_gets_no_public_reply_and_no_dm(
         monkeypatch, text, platform):
+    # Operator 2026-10-28: live, „ან წარმატებები ❤️❤️❤️❤️" was sent
+    # „რომელი პროგრამით ხართ დაინტერესებული?" in a private message.
     client, sent = _comment(monkeypatch, text, platform)
     assert client.posts == []
-    assert len(sent) == 1
+    assert sent == []
 
 
-@pytest.mark.parametrize("text", ["ფასი?", "მომწერეთ პირობები", "რომელი ასაკიდანაა?"])
-def test_a_comment_with_a_keyword_gets_the_public_reply_and_the_dm(monkeypatch, text):
-    client, sent = _comment(monkeypatch, text, "instagram")
+@pytest.mark.parametrize("text", [
+    "ფასი?", "მომწერეთ პირობები", "რომელი ასაკიდანაა?",
+    # the question markers added 2026-10-28 — none of these has another keyword
+    "სად ხართ?", "რომელ დღეებშია", "რამდენი ბავშვია ჯგუფში", "ესეთ ბავშვებსაც ასწავლით?",
+])
+@pytest.mark.parametrize("platform", ["instagram", "facebook"])
+def test_a_comment_with_a_keyword_gets_the_public_reply_and_the_dm(monkeypatch, text, platform):
+    client, sent = _comment(monkeypatch, text, platform)
     assert len(client.posts) == 1
     assert len(sent) == 1
 
@@ -95,3 +103,20 @@ def test_the_switch_off_still_means_no_public_reply_at_all(monkeypatch):
     client, sent = _comment(monkeypatch, "ფასი?", "facebook")
     assert client.posts == []
     assert len(sent) == 1
+
+
+def test_the_crm_row_is_still_written_for_a_comment_that_gets_no_answer(monkeypatch):
+    saved = _patch_sheets(monkeypatch)
+    real_patch = _patch_sheets
+    monkeypatch.setattr(
+        "tests.test_comment_public_reply_keywords_2026_10_28._patch_sheets",
+        lambda mp: saved,
+    )
+    try:
+        client, sent = _comment(monkeypatch, "წარმატებები🥰", "facebook")
+    finally:
+        monkeypatch.setattr(
+            "tests.test_comment_public_reply_keywords_2026_10_28._patch_sheets", real_patch,
+        )
+    assert sent == [] and client.posts == []
+    assert len(saved) == 1 and saved[0]["intent"] == "COMMENT"
