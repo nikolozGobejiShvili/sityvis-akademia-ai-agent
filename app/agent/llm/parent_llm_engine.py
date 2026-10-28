@@ -127,17 +127,24 @@ def _programme_line(section: dict) -> str:
     operator's text; none ⇒ the name alone. The model gets one programme's
     facts per turn and only this list for the rest — and a name alone does not
     say that „სიტყვის აკადემია მსოფლიოს გარშემო" is the online course for
-    children abroad (2026-10-12)."""
+    children abroad (2026-10-12).
+
+    Where it takes place rides along — the panel's own `location`. With no
+    programme chosen this list is all the model reads: live 2026-10-28 a
+    parent asking about a branch in Batumi was told „ბათუმში ფილიალი არ
+    გვაქვს" while Sunday School's location reads „თბილისი და ბათუმი"."""
     head = f"{section.get('name')} (id: {section.get('id')})"
+    location = str(section.get("location") or "").strip()
+    where = f" — location: {location}" if location else ""
     text = str(section.get("description_short") or "").strip()
     first = next((line.strip() for line in text.splitlines() if line.strip()), "")
     if not first:
-        return head
+        return head + where
     sentence = re.split(r"(?<=[.!?])\s", first, maxsplit=1)[0].strip()
     if len(sentence) > _PROGRAMME_LINE_MAX_CHARS:
         cut = sentence[:_PROGRAMME_LINE_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" ,;:—-")
         sentence = cut + "…"
-    return f"{head} — {sentence}"
+    return f"{head} — {sentence}{where}"
 
 
 def _dynamic_programs_prompt_suffix() -> str:
