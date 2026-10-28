@@ -204,7 +204,7 @@ def _dynamic_programs_prompt_suffix() -> str:
         # the online course for children abroad was on sale.
         suffix += (
             " თუ მშობლის მდგომარეობა სიაში სხვა პროგრამას უფრო შეესაბამება "
-            "(მაგალითად, წერს, რომ უცხოეთში ცხოვრობს ან ონლაინ სურს, და სიაში არის "
+            "(მაგალითად, წერს, რომ უცხოეთში ცხოვრობს, და სიაში არის "
             "პროგრამა უცხოეთში მცხოვრები ბავშვებისთვის), დაასახელე ის პროგრამა, "
             "გამოიძახე მისი get_program_info და შესთავაზე — მისივე ფაქტებით. "
             "მაგალითი: სიაში წერია „X (id: x) — ონლაინ პროგრამა უცხოეთში მცხოვრები "
@@ -213,7 +213,11 @@ def _dynamic_programs_prompt_suffix() -> str:
             "პირისპირ ტარდება; შემდეგ „უცხოეთში მცხოვრები ბავშვებისთვის გვაქვს ონლაინ "
             "პროგრამა „X\"\" და X-ის მთავარი პირობები მისი get_program_info-დან. "
             "მხოლოდ საკვირაო სკოლაზე პასუხი და მენეჯერთან გაგზავნა ამ მშობელს "
-            "იმას არ აძლევს, რასაც ეძებს."
+            "იმას არ აძლევს, რასაც ეძებს. საპირისპირო მაგალითი (2026-10-28): "
+            "მშობელი წერს „რუსთავში ვცხოვრობთ, ონლაინ არ შეიძლება?\" — ონლაინი "
+            "საცხოვრებელი ადგილი არ არის; კარგი პასუხი: ონლაინ პროგრამა უცხოეთში "
+            "მცხოვრები ბავშვებისთვისაა, და შესთავაზე ის, რაც მათთან ახლოს ტარდება. "
+            "თუ არ იცი, სად ცხოვრობს ბავშვი, ჯერ ეს ჰკითხე."
         )
     if getattr(settings, "USE_PROGRAM_AUDIENCE", False):
         # Program audience (2026-07-26 live test): get_program_info returns
@@ -4130,7 +4134,13 @@ def _build_context_message(
                 "parent means — ask which, before giving one programme's facts, "
                 "price or number; but when the parent's own words already say "
                 "which one is for them — e.g. they live abroad and one is for "
-                "children abroad — offer that one)"
+                "children abroad — offer that one. The reverse holds too: online "
+                "is not where the child lives — a parent who asks for online "
+                "while living in Georgia (e.g. „რუსთავში ვცხოვრობთ, ონლაინ არ "
+                "შეიძლება?\") is told in one sentence that the online course is "
+                "for children who live abroad and is offered what runs where they "
+                "are; when where the child lives is not known, ask that before "
+                "offering a programme for children abroad)"
             )
     if active_program:
         parts.append(f"active_program={active_program}")
@@ -4153,10 +4163,13 @@ def _build_context_message(
         if _others:
             parts.append(
                 "other_programmes_on_sale=" + "; ".join(_others)
-                + " (if the parent's own situation — e.g. they live abroad or want "
-                "online — fits one of these better than active_program, name it "
-                "and offer it with its own facts from get_program_info; never mix "
-                "two programmes' facts)"
+                + " (if the parent's own situation — e.g. they live abroad — fits "
+                "one of these better than active_program, name it and offer it "
+                "with its own facts from get_program_info; never mix two "
+                "programmes' facts. Wanting online is not living abroad: a parent "
+                "in Georgia who asks for online is told the online course is for "
+                "children who live abroad; when where the child lives is not "
+                "known, ask that before offering it)"
             )
         program_facts = _active_program_facts(active_section)
         if program_facts:
